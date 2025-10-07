@@ -44,7 +44,7 @@ jobs:
           sudo chmod +x /usr/local/bin/docker-credential-rfcurated
           # Initialize for quay.io (force in case runner cache has prior config)
           echo quay.io | /usr/local/bin/docker-credential-rfcurated init
-          jq . $HOME/.rapidfort/quay.io.token
-          docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
-
+           
+      - name: Pull Curated Image
+        run: docker pull quay.io/rfcurated/alpine:3.21-rfcurated
      
