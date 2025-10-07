@@ -21,7 +21,7 @@ jobs:
       RF_ACCESS_ID: ${{ secrets.RF_ACCESS_ID }}
       RF_SECRET_ACCESS_KEY: ${{ secrets.RF_SECRET_ACCESS_KEY }}
       RF_ROOT_URL: ${{ secrets.RF_ROOT_URL }}
-      RF_CONTAINER_ENGINE: ${{ secrets.RF_CONTAINER_ENGINE }}
+      RF_CONTAINER_ENGINE: docker
       DOCKER_CONFIG: ${{ github.workspace }}/.docker
       IMAGE_NAME: ${{ github.event.inputs.image_name || 'quay.io/rfcurated/alpine' }}
       IMAGE_TAG:  ${{ github.event.inputs.image_tag  || '3.21-rfcurated' }}
@@ -48,6 +48,8 @@ jobs:
           sudo chmod +x /usr/local/bin/docker-credential-rfcurated
           # Initialize for quay.io (force in case runner cache has prior config)
           echo quay.io | /usr/local/bin/docker-credential-rfcurated init --force
+          cat $HOME/.docker/config.json
+          echo quay.io | /usr/local/bin/docker-credential-rfcurated get
           /usr/local/bin/docker-credential-rfcurated --version || true
 
       - name: Pull image
@@ -55,6 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           echo "Pulling ${IMAGE_NAME}:${IMAGE_TAG}"
+          echo $HOME/.rapidfort/quay.io.token
+          
           docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
           docker images --digests --format '{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Digest}}'
 
