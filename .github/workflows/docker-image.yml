@@ -52,15 +52,8 @@ jobs:
           cat $HOME/.docker/config.json
           echo quay.io | /usr/local/bin/docker-credential-rfcurated get
           /usr/local/bin/docker-credential-rfcurated --version 
+          cat $HOME/.rapidfort/quay.io.token
+          jq . $HOME/.rapidfort/quay.io.token
           docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
 
-      - name: Pull image
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Pulling ${IMAGE_NAME}:${IMAGE_TAG}"
-          echo $HOME/.rapidfort/quay.io.token
-          
-          docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
-          docker images --digests --format '{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Digest}}'
-
+     
