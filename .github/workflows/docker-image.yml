@@ -3,41 +3,58 @@ name: Docker Image CI
 on:
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      image_name:
+        description: "Image (e.g., quay.io/rfcurated/alpine)"
+        required: true
+        default: "quay.io/rfcurated/alpine"
+      image_tag:
+        description: "Tag (e.g., 3.21-rfcurated)"
+        required: true
+        default: "3.21-rfcurated"
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     env:
       RF_ACCESS_ID: ${{ secrets.RF_ACCESS_ID }}
       RF_SECRET_ACCESS_KEY: ${{ secrets.RF_SECRET_ACCESS_KEY }}
       RF_ROOT_URL: ${{ secrets.RF_ROOT_URL }}
       DOCKER_CONFIG: ${{ github.workspace }}/.docker
+      IMAGE_NAME: ${{ github.event.inputs.image_name || 'quay.io/rfcurated/alpine' }}
+      IMAGE_TAG:  ${{ github.event.inputs.image_tag  || '3.21-rfcurated' }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # --- RapidFort credential helper setup ---
       - name: Prepare Docker config dir
         run: mkdir -p "$DOCKER_CONFIG"
 
       - name: Download RapidFort docker credential helper
+        shell: bash
         run: |
           set -euo pipefail
           url="${RF_ROOT_URL}/cli/docker-credential-rfcurated-$(uname)-$(uname -m).tar.gz"
           echo "Downloading credential helper from: $url"
-          curl -fsSL -o docker-credential-rfcurated.tar.gz "$url"
+          curl -fsSL -o docker-credential-rfcurated.tgz "$url"
 
       - name: Install credential helper
+        shell: bash
         run: |
-          sudo tar -xzf docker-credential-rfcurated.tar.gz -C /usr/local/bin
+          set -euo pipefail
+          sudo tar -xzf docker-credential-rfcurated.tgz -C /usr/local/bin
           sudo chmod +x /usr/local/bin/docker-credential-rfcurated
-          echo quay.io | /usr/local/bin/docker-credential-rfcurated init
-          echo "Docker config after init:"
-          cat "$DOCKER_CONFIG/config.json"
+          # Initialize for quay.io (force in case runner cache has prior config)
+          echo quay.io | /usr/local/bin/docker-credential-rfcurated init --force
+          /usr/local/bin/docker-credential-rfcurated --version || true
 
-      # --- Optional: Pull image(s) from Quay or RapidFort ---
-      - name: Pull example image
+      - name: Pull image
+        shell: bash
         run: |
-          docker pull quay.io/rfcurated/alpine:3.21-rfcurated
-          docker images
+          set -euo pipefail
+          echo "Pulling ${IMAGE_NAME}:${IMAGE_TAG}"
+          docker pull "${IMAGE_NAME}:${IMAGE_TAG}"
+          docker images --digests --format '{{.Repository}}:{{.Tag}}  {{.ID}}  {{.Digest}}'
+
+
