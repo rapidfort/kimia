@@ -24,6 +24,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write  # For OIDC
+      attestations: write  # For provenance
       
     steps:
       - name: Checkout code
@@ -42,7 +44,16 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Check registry access
+        run: |
+          echo "Testing registry authentication..."
+          if ! docker pull ghcr.io/rapidfort/smithy:latest 2>/dev/null; then
+            echo "⚠️  Package may not exist yet. This is normal for first publish."
+          else
+            echo "✅ Package exists and is accessible"
+          fi
 
       - name: Extract version metadata
         id: meta
