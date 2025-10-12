@@ -2,16 +2,18 @@
 
 <div align="center">
 
-<img src="./assets/smithy_logo.png" width="200" alt="Smithy Logo">
+<img src="./assets/smithy_logo.png" width="120" alt="Smithy Logo">
 
-**Daemonless. Rootless. Privilege-free. Fully OCI-compliant.**
+### Daemonless. Rootless. Privilege-free. Fully OCI-compliant.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.21%2B-326CE5?logo=kubernetes)](https://kubernetes.io/)
-[![Go Version](https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go)](https://golang.org/)
-[![Container Registry](https://img.shields.io/badge/Registry-quay.io-blue)](https://quay.io/repository/rapidfort/smithy)
+<p>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.21%2B-326CE5?logo=kubernetes" alt="Kubernetes"></a>
+  <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go" alt="Go Version"></a>
+  <a href="https://ghcr.io/rapidfort/smithy"><img src="https://img.shields.io/badge/Registry-ghcr.io-blue" alt="Container Registry"></a>
+</p>
 
-[Quick Start](#quick-start) • [Documentation](#documentation) • [Examples](#examples) • [Contributing](#contributing)
+**[Quick Start](#quick-start)** • **[Documentation](#command-line-reference)** • **[Examples](#examples)** • **[Contributing](#contributing)**
 
 </div>
 
@@ -120,7 +122,7 @@ Smithy is a **Kubernetes-native, OCI-compliant container builder** designed for 
 
 ### Architecture
 
-![Smithy Architecture](./assets/block.svg)
+![Smithy Architecture](./assets/smithy_architecture.svg)
 
 Smithy uses Linux user namespaces to provide true rootless operation:
 
@@ -347,7 +349,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=git://github.com/nginxinc/docker-nginx.git
           - --dockerfile=mainline/alpine/Dockerfile
@@ -597,7 +599,7 @@ spec:
     spec:
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         # No BUILDAH_FORMAT needed - OCI is default
         args:
           - --context=.
@@ -848,7 +850,7 @@ Create a custom Dockerfile that extends the base Smithy image:
 
 ```dockerfile
 # Dockerfile.smithy-bazel
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 # Switch to root to install packages
 USER root
@@ -937,7 +939,7 @@ spec:
 #### Adding Node.js and npm
 
 ```dockerfile
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 USER root
 
@@ -1063,7 +1065,7 @@ USER 1000:1000
 
 3. **Use Specific Version Tags**
    ```dockerfile
-   FROM quay.io/rapidfort/smithy:1.0.13  # Not :latest in production
+   FROM ghcr.io/rapidfort/smithy:1.0.13  # Not :latest in production
    ```
 
 4. **Minimize Layer Size**
@@ -2298,7 +2300,7 @@ A: Yes! Smithy can run as a standard container:
 ```bash
 docker run --security-opt seccomp=unconfined --user 1000:1000 \
   -v $(pwd):/workspace \
-  quay.io/rapidfort/smithy:latest \
+  ghcr.io/rapidfort/smithy:latest \
   --context=/workspace --destination=registry/image:tag
 ```
 
