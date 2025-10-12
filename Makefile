@@ -50,8 +50,9 @@ all: build
 # Print help
 .PHONY: help
 help:
-	@echo "Smithy Build System"
-	@echo "==================="
+	@echo "╔═══════════════════════════════════════════════════════════════════╗"
+	@echo "║              SMITHY BUILD SYSTEM                                  ║"
+	@echo "╚═══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Version Info:"
 	@echo "  Git Tag: $(GIT_TAG)"
@@ -65,19 +66,19 @@ help:
 		echo "  Next Build: $(VERSION_BASE)-dev1"; \
 	fi
 	@echo ""
-	@echo "Quick Start:"
+	@echo "━━━ Quick Start ━━━"
 	@echo "  make build              - Build smithy image with dev version"
 	@echo "  make push               - Push to local registry"
 	@echo "  make run                - Run smithy container locally"
 	@echo ""
-	@echo "Development Commands:"
+	@echo "━━━ Development Commands ━━━"
 	@echo "  make build              - Build smithy image"
 	@echo "  make push               - Push to dev registry"
 	@echo "  make test               - Run Docker tests"
 	@echo "  make test-k8s           - Run Kubernetes tests"
 	@echo "  make test-all           - Run all tests (Docker + Kubernetes)"
 	@echo ""
-	@echo "Test Commands:"
+	@echo "━━━ Test Commands ━━━"
 	@echo "  make test               - Run Docker tests"
 	@echo "  make test-k8s           - Run Kubernetes tests"
 	@echo "  make test-all           - Run both Docker and Kubernetes tests"
@@ -85,7 +86,7 @@ help:
 	@echo "  make test-verbose       - Run tests in verbose mode"
 	@echo "  make test-debug-auth    - Debug authentication setup"
 	@echo ""
-	@echo "Release Commands:"
+	@echo "━━━ Release Commands ━━━"
 	@echo "  make release            - Build and publish release to ghcr.io"
 	@echo "  make release-info       - Show what will be released"
 	@echo "  make check-release-env  - Check GitHub credentials"
@@ -102,7 +103,7 @@ help:
 	@echo "    make release-status RELEASE_TYPE=staging    - Check staging status"
 	@echo "    make release-status RELEASE_TYPE=publish VERSION=x.y.z-staging"
 	@echo ""
-	@echo "Utilities:"
+	@echo "━━━ Utilities ━━━"
 	@echo "  make version            - Show current versions"
 	@echo "  make show-images        - Show local docker images"
 	@echo "  make clean              - Clean build artifacts"
@@ -117,10 +118,11 @@ help:
 # Version info
 .PHONY: version
 version:
-	@echo "Git Tag: $(GIT_TAG)"
+	@echo "━━━ Version Information ━━━"
+	@echo "Git Tag:      $(GIT_TAG)"
 	@echo "Base Version: $(VERSION_BASE)"
-	@echo "Commit: $(COMMIT)"
-	@echo "Branch: $(BRANCH)"
+	@echo "Commit:       $(COMMIT)"
+	@echo "Branch:       $(BRANCH)"
 	@if [ -f $(VERSION_FILE) ]; then \
 		echo "Last Dev Build: $(VERSION_BASE)-dev$$(cat $(VERSION_FILE))"; \
 	else \
@@ -399,10 +401,10 @@ check-release-env:
 # Release info
 .PHONY: release-info
 release-info:
-	@echo "[RELEASE INFO]"
-	@echo "Version: $(VERSION_BASE)"
+	@echo "━━━ RELEASE INFO ━━━"
+	@echo "Version:      $(VERSION_BASE)"
 	@echo "Release Type: $(RELEASE_TYPE)"
-	@echo "Current Architecture: $(ARCH)"
+	@echo "Architecture: $(ARCH)"
 	@echo ""
 	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
 		echo "STAGING Release will create:"; \
@@ -439,7 +441,7 @@ _release-build-push-manifest: check-release-env
 	
 	@# Login to ghcr.io
 	@echo "[LOGIN] Logging into ghcr.io..."
-	@echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io
+	@echo "$(GITHUB_TOKEN)" | docker login -u $$(echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io
 	
 	@# Tag and push based on release type
 	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
@@ -529,7 +531,7 @@ release-finalize: check-release-env
 		echo "[FINALIZE] Finalizing staging release $(VERSION_BASE)-staging..."; \
 		echo "[FINALIZE] Recreating manifest to ensure both architectures are included..."; \
 		echo "[LOGIN] Logging into ghcr.io..."; \
-		echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io; \
+		echo "$(GITHUB_TOKEN)" | docker login -u $$(echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io; \
 		docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
 		AMD64_EXISTS=false; \
 		ARM64_EXISTS=false; \
@@ -574,7 +576,7 @@ _release-publish-from-staging: check-release-env
 	@BASE_VERSION=$${VERSION%-staging} && \
 	echo "[PUBLISH] Publishing from staging $(VERSION) to production $$BASE_VERSION..." && \
 	echo "[LOGIN] Logging into ghcr.io..." && \
-	echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io && \
+	echo "$(GITHUB_TOKEN)" | docker login -u $$(echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io && \
 	\
 	for arch in amd64 arm64; do \
 		echo "[COPY] Copying $(IMAGE_NAME):$(VERSION)-$$arch → $(IMAGE_NAME):$$BASE_VERSION-$$arch"; \
@@ -631,7 +633,7 @@ release-status: check-release-env
 		exit 1; \
 	fi && \
 	echo ""; \
-	echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io > /dev/null 2>&1; \
+	echo "$(GITHUB_TOKEN)" | docker login -u $$(echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io > /dev/null 2>&1; \
 	echo "Checking manifest for $$TARGET_VERSION:"; \
 	echo -n "  $(IMAGE_NAME): "; \
 	if docker manifest inspect $(GHCR_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION >/dev/null 2>&1; then \
@@ -709,4 +711,3 @@ full: build push test-all
 	@echo "[SUCCESS] Full cycle complete!"
 
 .DEFAULT_GOAL := help
-
