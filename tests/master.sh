@@ -624,7 +624,9 @@ FROM alpine:latest
 RUN echo "Export test"
 EOF
 
+    # Create output directory with proper permissions for smithy user (1000:1000)
     mkdir -p $RF_SMITHY_TMPDIR/output
+    chmod 777 $RF_SMITHY_TMPDIR/output  # Make it writable by any user
 
     if [ "$VERBOSE" = true ]; then
         docker run $DOCKER_FLAGS \
