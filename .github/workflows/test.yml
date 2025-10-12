@@ -1,0 +1,101 @@
+name: Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: smithy:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test image
+        run: |
+          echo "🧪 Running smoke tests..."
+          docker run --rm smithy:test --version
+          docker run --rm smithy:test --help
+
+      - name: Inspect image
+        run: |
+          echo "📦 Image details:"
+          docker image inspect smithy:test --format '{{.Size}}' | awk '{print "Size: " $1/1024/1024 "MB"}'
+          docker image inspect smithy:test --format '{{.Architecture}}'
+
+  # Optional: Add K8s integration tests with kind
+  kubernetes-test:
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create k8s cluster with kind
+        uses: helm/kind-action@v1.8.0
+        with:
+          cluster_name: smithy-test
+
+      - name: Build and load image to kind
+        run: |
+          docker build -t smithy:test .
+          kind load docker-image smithy:test --name smithy-test
+
+      - name: Run Kubernetes tests
+        run: |
+          echo "🧪 Running basic k8s deployment test..."
+          
+          # Create test namespace
+          kubectl create namespace smithy-test
+          
+          # Create basic test job
+          kubectl apply -f - <<EOF
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: smithy-version-test
+            namespace: smithy-test
+          spec:
+            template:
+              spec:
+                containers:
+                - name: smithy
+                  image: smithy:test
+                  imagePullPolicy: Never
+                  command: ["smithy", "--version"]
+                restartPolicy: Never
+            backoffLimit: 1
+          EOF
+          
+          # Wait for job completion
+          kubectl wait --for=condition=complete job/smithy-version-test -n smithy-test --timeout=60s
+          
+          # Check logs
+          kubectl logs job/smithy-version-test -n smithy-test
+          
+          echo "✅ Kubernetes test passed!"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kubectl delete namespace smithy-test --ignore-not-found=true
+

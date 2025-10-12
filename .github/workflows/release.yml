@@ -6,9 +6,13 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag (e.g., v1.0.0)'
+      release_type:
+        description: 'Release type'
         required: true
+        type: choice
+        options:
+          - staging
+          - production
 
 env:
   REGISTRY: ghcr.io
@@ -18,7 +22,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       packages: write
       
     steps:
@@ -40,20 +44,46 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
+      - name: Extract version metadata
         id: meta
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
+          # Get version from tag or use manual input
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            RELEASE_TYPE="production"
           else
-            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
+            RELEASE_TYPE="${{ github.event.inputs.release_type || 'staging' }}"
           fi
-          VERSION_NUMBER=${VERSION#v}
           
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "version_number=${VERSION_NUMBER}" >> $GITHUB_OUTPUT
-          echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
-          echo "build_date=$(date +%s)" >> $GITHUB_OUTPUT
+          COMMIT=$(git rev-parse --short HEAD)
+          BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          BUILD_DATE=$(date +%s)
+          
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "RELEASE_TYPE=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
+          echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "BRANCH=${BRANCH}" >> $GITHUB_OUTPUT
+          echo "BUILD_DATE=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          
+          echo "📦 Building version: ${VERSION}"
+          echo "🏷️  Release type: ${RELEASE_TYPE}"
+
+      - name: Generate Docker tags
+        id: tags
+        run: |
+          VERSION="${{ steps.meta.outputs.VERSION }}"
+          RELEASE_TYPE="${{ steps.meta.outputs.RELEASE_TYPE }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          
+          if [[ "$RELEASE_TYPE" == "staging" ]]; then
+            TAGS="${IMAGE}:${VERSION}-staging"
+          else
+            TAGS="${IMAGE}:${VERSION},${IMAGE}:latest"
+          fi
+          
+          echo "TAGS=${TAGS}" >> $GITHUB_OUTPUT
+          echo "🏷️  Tags: ${TAGS}"
 
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v5
@@ -62,32 +92,63 @@ jobs:
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version_number }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.tags.outputs.TAGS }}
           build-args: |
-            VERSION=${{ steps.meta.outputs.version_number }}
-            BUILD_DATE=${{ steps.meta.outputs.build_date }}
-            COMMIT=${{ steps.meta.outputs.short_sha }}
-            BRANCH=${{ github.ref_name }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+            VERSION=${{ steps.meta.outputs.VERSION }}
+            BUILD_DATE=${{ steps.meta.outputs.BUILD_DATE }}
+            COMMIT=${{ steps.meta.outputs.COMMIT }}
+            BRANCH=${{ steps.meta.outputs.BRANCH }}
+            RELEASE=1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          generate_release_notes: true
-          body: |
-            ## Smithy ${{ steps.meta.outputs.version }}
-            
-            **Container Images:**
-            - `ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}`
-            - `ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version_number }}`
-            - `ghcr.io/${{ github.repository }}:latest`
-            
-            **Architectures:**
-            - linux/amd64
-            - linux/arm64
-            
+      - name: Generate build summary
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
+          ## 🚀 Release Summary
+          
+          - **Version**: ${{ steps.meta.outputs.VERSION }}
+          - **Type**: ${{ steps.meta.outputs.RELEASE_TYPE }}
+          - **Commit**: ${{ steps.meta.outputs.COMMIT }}
+          - **Architectures**: amd64, arm64
+          - **Registry**: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          - **Tags**: 
+            - ${{ steps.tags.outputs.TAGS }}
+          
+          ### Installation
+          \`\`\`bash
+          # Pull the image
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.VERSION }}
+          
+          # Or use in Kubernetes
+          kubectl set image deployment/smithy \\
+            smithy=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.VERSION }}
+          \`\`\`
+          EOF
+
+      - name: Test image (smoke test)
+        run: |
+          VERSION="${{ steps.meta.outputs.VERSION }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}$([[ "${{ steps.meta.outputs.RELEASE_TYPE }}" == "staging" ]] && echo "-staging" || echo "")"
+          
+          echo "🧪 Testing image: ${IMAGE}"
+          docker pull ${IMAGE}
+          docker run --rm ${IMAGE} --version
+
+  promote-to-production:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event.inputs.release_type == 'staging' && github.event_name == 'workflow_dispatch'
+    permissions:
+      packages: write
+      
+    steps:
+      - name: Promote staging to production
+        run: |
+          echo "✨ Staging build complete. To promote to production:"
+          echo ""
+          echo "   git tag v${{ needs.build-and-push.outputs.VERSION }}"
+          echo "   git push origin v${{ needs.build-and-push.outputs.VERSION }}"
+          echo ""
+          echo "Or run: make release-publish VERSION=${{ needs.build-and-push.outputs.VERSION }}-staging"
+
