@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Smithy Logo](./assets/smithy_logo.svg)
+<img src="./assets/smithy_logo.png" width="200" alt="Smithy Logo">
 
 **Daemonless. Rootless. Privilege-free. Fully OCI-compliant.**
 
@@ -120,7 +120,7 @@ Smithy is a **Kubernetes-native, OCI-compliant container builder** designed for 
 
 ### Architecture
 
-![Smithy Architecture](./assets/smithy_architecture.svg)
+![Smithy Architecture](./assets/block.svg)
 
 Smithy uses Linux user namespaces to provide true rootless operation:
 
