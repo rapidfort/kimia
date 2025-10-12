@@ -16,8 +16,8 @@ BUILD_DATE := $(shell date +%s)
 # Version file for dev builds
 VERSION_FILE := .version
 
-# ghcr.io registry settings
-GHCR_IO_REGISTRY := ghcr.io/rapidfort
+# GitHub Container Registry settings
+GHCR_REGISTRY := ghcr.io/rapidfort
 DOCKERBUILD_TEMP := ./build/rapidfort
 
 # Architecture detection for multi-arch support
@@ -35,7 +35,6 @@ SMITHY_UID := 1000
 TEST_SCRIPT := tests/master.sh
 
 # Build arguments
-#BUILD_ARGS := --build-arg VERSION=$(VERSION_BASE) 
 BUILD_ARGS := \
               --build-arg BUILD_DATE=$(BUILD_DATE) \
               --build-arg COMMIT=$(COMMIT) \
@@ -87,9 +86,9 @@ help:
 	@echo "  make test-debug-auth    - Debug authentication setup"
 	@echo ""
 	@echo "Release Commands:"
-	@echo "  make release            - Build and publish release to quay.io"
+	@echo "  make release            - Build and publish release to ghcr.io"
 	@echo "  make release-info       - Show what will be released"
-	@echo "  make check-release-env  - Check Quay credentials"
+	@echo "  make check-release-env  - Check GitHub credentials"
 	@echo ""
 	@echo "  Multi-arch Release Workflow:"
 	@echo "    1. Staging Release (run on BOTH amd64 and arm64 machines):"
@@ -112,8 +111,7 @@ help:
 	@echo ""
 	@echo "Environment Variables:"
 	@echo "  REGISTRY                - Docker registry (default: based on RF_APP_HOST)"
-	@echo "  RF_QUAY_USERNAME        - Quay.io username (for releases)"
-	@echo "  RF_QUAY_PASSWORD        - Quay.io password (for releases)"
+	@echo "  GITHUB_TOKEN            - GitHub Personal Access Token (for releases)"
 	@echo ""
 
 # Version info
@@ -260,7 +258,6 @@ test-clean:
 		kubectl delete namespace smithy-tests --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true; \
 	fi
 	@echo "[TEST-CLEAN] Cleanup complete"
-	
 
 # Run tests in verbose mode
 .PHONY: test-verbose
@@ -374,22 +371,28 @@ tag:
 	@echo "[TAG] Tag created. Push with: git push origin $(NEW_TAG)"
 
 # =============================================================================
-# RELEASE MANAGEMENT - Multi-arch support for quay.io
+# RELEASE MANAGEMENT - Multi-arch support for ghcr.io
 # =============================================================================
 
 # Release type (staging or publish)
 RELEASE_TYPE ?= staging
 
-# Check release environment (Quay credentials)
+# Check release environment (GitHub credentials)
 .PHONY: check-release-env
 check-release-env:
-	@if [ -z "$(RF_QUAY_USERNAME)" ] || [ -z "$(RF_QUAY_PASSWORD)" ]; then \
-		echo "[ERROR] Set RF_QUAY_USERNAME and RF_QUAY_PASSWORD"; \
-		echo "  export RF_QUAY_USERNAME=your_quay_username"; \
-		echo "  export RF_QUAY_PASSWORD=your_quay_password"; \
+	@if [ -z "$(GITHUB_TOKEN)" ]; then \
+		echo "[ERROR] GITHUB_TOKEN environment variable is required"; \
+		echo ""; \
+		echo "To create a Personal Access Token (PAT):"; \
+		echo "  1. Go to https://github.com/settings/tokens"; \
+		echo "  2. Click 'Generate new token' -> 'Generate new token (classic)'"; \
+		echo "  3. Select scopes: write:packages, read:packages, delete:packages"; \
+		echo "  4. Copy the token and export it:"; \
+		echo "     export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; \
+		echo ""; \
 		exit 1; \
 	fi
-	@echo "[OK] Quay credentials found"
+	@echo "[OK] GitHub token found"
 	@echo "[OK] Current Architecture: $(ARCH)"
 	@echo "[OK] Current Host: $$(hostname)"
 
@@ -403,11 +406,11 @@ release-info:
 	@echo ""
 	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
 		echo "STAGING Release will create:"; \
-		echo "  Architecture-specific quay.io tag:"; \
-		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH)"; \
+		echo "  Architecture-specific ghcr.io tag:"; \
+		echo "    - $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH)"; \
 		echo ""; \
 		echo "  Multi-arch manifest (after both architectures build):"; \
-		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging"; \
+		echo "    - $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging"; \
 		echo ""; \
 		echo "  Note: Run on both amd64 and arm64 machines for multi-arch support"; \
 	elif [ "$(RELEASE_TYPE)" = "publish" ]; then \
@@ -418,9 +421,9 @@ release-info:
 		BASE_VERSION=$${VERSION%-staging}; \
 		echo "PUBLISH Release will create from staging $(VERSION):"; \
 		echo "  Production Image:"; \
-		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION"; \
+		echo "    - $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION"; \
 		echo "  Latest tag:"; \
-		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):latest"; \
+		echo "    - $(GHCR_REGISTRY)/$(IMAGE_NAME):latest"; \
 	fi
 
 # Build and push for current architecture with manifest update
@@ -434,19 +437,19 @@ _release-build-push-manifest: check-release-env
 	@echo "[BUILD] Running RELEASE_BUILD=true make build..."
 	@RELEASE_BUILD=true $(MAKE) build
 	
-	@# Login to quay.io
-	@echo "[LOGIN] Logging into quay.io..."
-	@echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io
+	@# Login to ghcr.io
+	@echo "[LOGIN] Logging into ghcr.io..."
+	@echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io
 	
 	@# Tag and push based on release type
 	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
 		echo "[TAG] Tagging image for staging with -staging-$(ARCH) suffix..."; \
-		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
-		echo "[PUSH] Pushing staging $(ARCH) image to quay.io..."; \
-		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+		echo "[PUSH] Pushing staging $(ARCH) image to ghcr.io..."; \
+		docker push $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
 		echo "[PUSH] Successfully pushed staging $(ARCH) image!"; \
 		echo "[MANIFEST] Creating/updating staging manifest for $(ARCH)..."; \
-		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
+		docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
 		if [ "$(ARCH)" = "amd64" ]; then \
 			ALT_ARCH=arm64; \
 		else \
@@ -454,37 +457,37 @@ _release-build-push-manifest: check-release-env
 		fi; \
 		CURRENT_EXISTS=false; \
 		ALT_EXISTS=false; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) >/dev/null 2>&1; then \
 			CURRENT_EXISTS=true; \
 		fi; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH >/dev/null 2>&1; then \
 			ALT_EXISTS=true; \
 		fi; \
 		if [ "$$CURRENT_EXISTS" = "true" ] && [ "$$ALT_EXISTS" = "true" ]; then \
 			echo "[MANIFEST] Creating manifest with both architectures"; \
-			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH; \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
+			docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH; \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
 		elif [ "$$CURRENT_EXISTS" = "true" ]; then \
 			echo "[MANIFEST] Creating manifest with $(ARCH) only (waiting for other architecture)"; \
-			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
 		fi; \
-		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
+		docker manifest push $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
 	else \
 		echo "[TAG] Tagging image for production with -$(ARCH) suffix..."; \
-		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
-		echo "[PUSH] Pushing production $(ARCH) image to quay.io..."; \
-		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+		echo "[PUSH] Pushing production $(ARCH) image to ghcr.io..."; \
+		docker push $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
 		echo "[PUSH] Successfully pushed production $(ARCH) image!"; \
 		echo "[MANIFEST] Creating/updating production manifest for $(ARCH)..."; \
-		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) 2>/dev/null || true; \
+		docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) 2>/dev/null || true; \
 		if [ "$(ARCH)" = "amd64" ]; then \
 			ALT_ARCH=arm64; \
 		else \
@@ -492,60 +495,60 @@ _release-build-push-manifest: check-release-env
 		fi; \
 		CURRENT_EXISTS=false; \
 		ALT_EXISTS=false; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) >/dev/null 2>&1; then \
 			CURRENT_EXISTS=true; \
 		fi; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH >/dev/null 2>&1; then \
 			ALT_EXISTS=true; \
 		fi; \
 		if [ "$$CURRENT_EXISTS" = "true" ] && [ "$$ALT_EXISTS" = "true" ]; then \
 			echo "[MANIFEST] Creating manifest with both architectures"; \
-			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH; \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
+			docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH; \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
 		elif [ "$$CURRENT_EXISTS" = "true" ]; then \
 			echo "[MANIFEST] Creating manifest with $(ARCH) only (waiting for other architecture)"; \
-			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
 		fi; \
-		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE); \
+		docker manifest push $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE); \
 	fi
 	
 	@echo "[SUCCESS] Completed $(ARCH) build and manifest updates!"
 
-# Finalize manifests after both architectures complete (optional, ensures both archs are in manifest)
+# Finalize manifests after both architectures complete
 .PHONY: release-finalize
 release-finalize: check-release-env
 	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
 		echo "[FINALIZE] Finalizing staging release $(VERSION_BASE)-staging..."; \
 		echo "[FINALIZE] Recreating manifest to ensure both architectures are included..."; \
-		echo "[LOGIN] Logging into quay.io..."; \
-		echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io; \
-		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
+		echo "[LOGIN] Logging into ghcr.io..."; \
+		echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io; \
+		docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
 		AMD64_EXISTS=false; \
 		ARM64_EXISTS=false; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 >/dev/null 2>&1; then \
 			AMD64_EXISTS=true; \
 		fi; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 >/dev/null 2>&1; then \
 			ARM64_EXISTS=true; \
 		fi; \
 		if [ "$$AMD64_EXISTS" = "true" ] && [ "$$ARM64_EXISTS" = "true" ]; then \
 			echo "[MANIFEST] Creating manifest with both amd64 and arm64"; \
-			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64; \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 --arch amd64 --os linux; \
-			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
-				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 --arch arm64 --os linux; \
-			docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
+			docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64; \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 --arch amd64 --os linux; \
+			docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 --arch arm64 --os linux; \
+			docker manifest push $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
 			echo "[SUCCESS] Finalized staging manifest with both architectures!"; \
 		else \
 			echo "[WARN] Missing architectures (amd64: $$AMD64_EXISTS, arm64: $$ARM64_EXISTS)"; \
@@ -570,43 +573,43 @@ _release-publish-from-staging: check-release-env
 	
 	@BASE_VERSION=$${VERSION%-staging} && \
 	echo "[PUBLISH] Publishing from staging $(VERSION) to production $$BASE_VERSION..." && \
-	echo "[LOGIN] Logging into quay.io..." && \
-	echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io && \
+	echo "[LOGIN] Logging into ghcr.io..." && \
+	echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io && \
 	\
 	for arch in amd64 arm64; do \
 		echo "[COPY] Copying $(IMAGE_NAME):$(VERSION)-$$arch → $(IMAGE_NAME):$$BASE_VERSION-$$arch"; \
-		docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch && \
-		docker tag $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
-		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
-		docker tag $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-$$arch && \
-		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-$$arch || \
+		docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch && \
+		docker tag $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
+		docker push $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
+		docker tag $(GHCR_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(GHCR_REGISTRY)/$(IMAGE_NAME):latest-$$arch && \
+		docker push $(GHCR_REGISTRY)/$(IMAGE_NAME):latest-$$arch || \
 		echo "[WARN] Architecture $$arch not found (might be expected)"; \
 	done && \
 	\
 	echo "[MANIFEST] Creating production manifest..." && \
-	docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION 2>/dev/null || true; \
-	docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
-		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 \
-		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 2>/dev/null && \
-	docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
-		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 --arch amd64 --os linux && \
-	docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
-		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 --arch arm64 --os linux && \
-	docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION || \
+	docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION 2>/dev/null || true; \
+	docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 \
+		$(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 2>/dev/null && \
+	docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 --arch amd64 --os linux && \
+	docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 --arch arm64 --os linux && \
+	docker manifest push $(GHCR_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION || \
 	echo "[WARN] Failed to create manifest (check if both architectures exist)"; \
 	\
 	echo "[MANIFEST] Updating latest manifest..." && \
-	docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):latest 2>/dev/null || true; \
-	if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 >/dev/null 2>&1 && \
-	   docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64 >/dev/null 2>&1; then \
-		docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
-			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 \
-			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64; \
-		docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
-			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 --arch amd64 --os linux; \
-		docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
-			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64 --arch arm64 --os linux; \
-		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):latest; \
+	docker manifest rm $(GHCR_REGISTRY)/$(IMAGE_NAME):latest 2>/dev/null || true; \
+	if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):latest-amd64 >/dev/null 2>&1 && \
+	   docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):latest-arm64 >/dev/null 2>&1; then \
+		docker manifest create $(GHCR_REGISTRY)/$(IMAGE_NAME):latest \
+			$(GHCR_REGISTRY)/$(IMAGE_NAME):latest-amd64 \
+			$(GHCR_REGISTRY)/$(IMAGE_NAME):latest-arm64; \
+		docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):latest \
+			$(GHCR_REGISTRY)/$(IMAGE_NAME):latest-amd64 --arch amd64 --os linux; \
+		docker manifest annotate $(GHCR_REGISTRY)/$(IMAGE_NAME):latest \
+			$(GHCR_REGISTRY)/$(IMAGE_NAME):latest-arm64 --arch arm64 --os linux; \
+		docker manifest push $(GHCR_REGISTRY)/$(IMAGE_NAME):latest; \
 	fi; \
 	\
 	echo "[SUCCESS] Published production release $$BASE_VERSION!"
@@ -628,11 +631,11 @@ release-status: check-release-env
 		exit 1; \
 	fi && \
 	echo ""; \
-	echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io > /dev/null 2>&1; \
+	echo "$(GITHUB_TOKEN)" | docker login -u $(shell echo $(GITHUB_TOKEN) | cut -d'_' -f1) --password-stdin ghcr.io > /dev/null 2>&1; \
 	echo "Checking manifest for $$TARGET_VERSION:"; \
 	echo -n "  $(IMAGE_NAME): "; \
-	if docker manifest inspect $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION >/dev/null 2>&1; then \
-		archs=$$(docker manifest inspect $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION 2>/dev/null | \
+	if docker manifest inspect $(GHCR_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION >/dev/null 2>&1; then \
+		archs=$$(docker manifest inspect $(GHCR_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION 2>/dev/null | \
 			jq -r '.manifests[].platform.architecture' 2>/dev/null | sort | tr '\n' ' '); \
 		echo "✓ manifest exists [$$archs]"; \
 	else \
@@ -642,7 +645,7 @@ release-status: check-release-env
 	echo "Checking architecture-specific images:"; \
 	for arch in amd64 arm64; do \
 		echo -n "  $$arch: "; \
-		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION-$$arch >/dev/null 2>&1; then \
+		if docker pull $(GHCR_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION-$$arch >/dev/null 2>&1; then \
 			echo "✓"; \
 		else \
 			echo "✗"; \
