@@ -1,11 +1,6 @@
-# Smithy - Kubernetes-Native OCI Builder
-
-<div align="center">
-
-<img src="./assets/smithy_logo.png" width="120" alt="Smithy Logo">
-
+# Smithy - Kubernetes-Native OCI Image Builder
 ### Daemonless. Rootless. Privilege-free. Fully OCI-compliant.
-
+<div align="center">
 <p>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.21%2B-326CE5?logo=kubernetes" alt="Kubernetes"></a>
