@@ -1,7 +1,3 @@
-### Additional Workflow for Development Builds
-
-Create `.github/workflows/build.yml` for testing:
-```yaml
 name: Build and Test
 
 on:

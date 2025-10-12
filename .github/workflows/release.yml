@@ -91,7 +91,3 @@ jobs:
             - linux/amd64
             - linux/arm64
             
-            **Pull the image:**
-```bash
-            docker pull ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
-
