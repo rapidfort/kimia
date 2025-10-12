@@ -1,90 +1,709 @@
-# Smithy OSS Makefile
+# Smithy Makefile - Container Build System
+# Variables
+REGISTRY ?= $(if $(RF_APP_HOST),$(RF_APP_HOST):5000/rapidfort,rapidfort)
+NAMESPACE ?= default
+RELEASE ?= 0
+
 SHELL := /bin/bash
 
-# Version management
+# Git version management
 GIT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-VERSION := $(patsubst v%,%,$(GIT_TAG))
+VERSION_BASE := $(patsubst v%,%,$(GIT_TAG))
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date +%s)
 
-# Build variables
-BINARY_NAME := smithy
-BUILD_DIR := bin
-REGISTRY := ghcr.io/rapidfort
+# Version file for dev builds
+VERSION_FILE := .version
+
+# ghcr.io registry settings
+GHCR_IO_REGISTRY := ghcr.io/rapidfort
+DOCKERBUILD_TEMP := ./build/rapidfort
+
+# Architecture detection for multi-arch support
+ARCH := $(shell uname -m | sed 's/x86_64/amd64/g' | sed 's/aarch64/arm64/g')
+OS := linux
+
+# Image name
 IMAGE_NAME := smithy
 
-# Build flags
-LDFLAGS := -s -w \
-	-X main.Version=$(VERSION) \
-	-X main.BuildDate=$(BUILD_DATE) \
-	-X main.CommitSHA=$(COMMIT) \
-	-X main.Branch=$(BRANCH)
+# Smithy user configuration
+SMITHY_USER := smithy
+SMITHY_UID := 1000
 
+# Test script location
+TEST_SCRIPT := tests/master.sh
+
+# Build arguments
+#BUILD_ARGS := --build-arg VERSION=$(VERSION_BASE) 
+BUILD_ARGS := \
+              --build-arg BUILD_DATE=$(BUILD_DATE) \
+              --build-arg COMMIT=$(COMMIT) \
+              --build-arg BRANCH=$(BRANCH) \
+              --build-arg RF_APP_HOST=$(RF_APP_HOST) \
+              --build-arg RELEASE=$(RELEASE) \
+              --build-arg SMITHY_USER=$(SMITHY_USER) \
+              --build-arg SMITHY_UID=$(SMITHY_UID)
+
+# Default target
+.PHONY: all
+all: build
+
+# Print help
 .PHONY: help
 help:
-	@echo "Smithy OSS Build System"
-	@echo "======================="
+	@echo "Smithy Build System"
+	@echo "==================="
 	@echo ""
-	@echo "Commands:"
-	@echo "  make build       - Build smithy binary"
-	@echo "  make test        - Run tests"
-	@echo "  make clean       - Clean build artifacts"
-	@echo "  make docker      - Build Docker image"
-	@echo "  make version     - Show version info"
+	@echo "Version Info:"
+	@echo "  Git Tag: $(GIT_TAG)"
+	@echo "  Base Version: $(VERSION_BASE)"
+	@if [ -f $(VERSION_FILE) ]; then \
+		LAST=$$(cat $(VERSION_FILE)); \
+		NEXT=$$((LAST + 1)); \
+		echo "  Last Build: $(VERSION_BASE)-dev$$LAST"; \
+		echo "  Next Build: $(VERSION_BASE)-dev$$NEXT"; \
+	else \
+		echo "  Next Build: $(VERSION_BASE)-dev1"; \
+	fi
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make build              - Build smithy image with dev version"
+	@echo "  make push               - Push to local registry"
+	@echo "  make run                - Run smithy container locally"
+	@echo ""
+	@echo "Development Commands:"
+	@echo "  make build              - Build smithy image"
+	@echo "  make push               - Push to dev registry"
+	@echo "  make test               - Run Docker tests"
+	@echo "  make test-k8s           - Run Kubernetes tests"
+	@echo "  make test-all           - Run all tests (Docker + Kubernetes)"
+	@echo ""
+	@echo "Test Commands:"
+	@echo "  make test               - Run Docker tests"
+	@echo "  make test-k8s           - Run Kubernetes tests"
+	@echo "  make test-all           - Run both Docker and Kubernetes tests"
+	@echo "  make test-clean         - Clean up test resources"
+	@echo "  make test-verbose       - Run tests in verbose mode"
+	@echo "  make test-debug-auth    - Debug authentication setup"
+	@echo ""
+	@echo "Release Commands:"
+	@echo "  make release            - Build and publish release to quay.io"
+	@echo "  make release-info       - Show what will be released"
+	@echo "  make check-release-env  - Check Quay credentials"
+	@echo ""
+	@echo "  Multi-arch Release Workflow:"
+	@echo "    1. Staging Release (run on BOTH amd64 and arm64 machines):"
+	@echo "       make release RELEASE_TYPE=staging"
+	@echo "    2. Finalize staging (optional, ensures both archs in manifest):"
+	@echo "       make release-finalize RELEASE_TYPE=staging"
+	@echo "    3. Promote staging to production:"
+	@echo "       make release-publish VERSION=x.y.z-staging"
+	@echo ""
+	@echo "  Release Status Commands:"
+	@echo "    make release-status RELEASE_TYPE=staging    - Check staging status"
+	@echo "    make release-status RELEASE_TYPE=publish VERSION=x.y.z-staging"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  make version            - Show current versions"
+	@echo "  make show-images        - Show local docker images"
+	@echo "  make clean              - Clean build artifacts"
+	@echo "  make tag                - Create a new git tag"
+	@echo "  make inspect            - Inspect the latest built image"
+	@echo ""
+	@echo "Environment Variables:"
+	@echo "  REGISTRY                - Docker registry (default: based on RF_APP_HOST)"
+	@echo "  RF_QUAY_USERNAME        - Quay.io username (for releases)"
+	@echo "  RF_QUAY_PASSWORD        - Quay.io password (for releases)"
 	@echo ""
 
-.PHONY: build
-build:
-	@echo "[BUILD] Building smithy OSS v$(VERSION)..."
-	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=0 go build \
-		-ldflags="$(LDFLAGS)" \
-		-o $(BUILD_DIR)/$(BINARY_NAME) \
-		./cmd/smithy
-	@echo "[SUCCESS] Built: $(BUILD_DIR)/$(BINARY_NAME)"
-
-.PHONY: test
-test:
-	@echo "[TEST] Running tests..."
-	go test -v ./...
-
-.PHONY: clean
-clean:
-	@echo "[CLEAN] Cleaning build artifacts..."
-	rm -rf $(BUILD_DIR)
-	go clean
-
-.PHONY: docker
-docker:
-	@echo "[DOCKER] Building image $(REGISTRY)/$(IMAGE_NAME):$(VERSION)..."
-	docker build \
-		--build-arg VERSION=$(VERSION) \
-		--build-arg BUILD_DATE=$(BUILD_DATE) \
-		--build-arg COMMIT=$(COMMIT) \
-		--build-arg BRANCH=$(BRANCH) \
-		-t $(REGISTRY)/$(IMAGE_NAME):$(VERSION) \
-		-t $(REGISTRY)/$(IMAGE_NAME):latest \
-		.
-	@echo "[SUCCESS] Built: $(REGISTRY)/$(IMAGE_NAME):$(VERSION)"
-
-.PHONY: docker-push
-docker-push: docker
-	@echo "[PUSH] Pushing to $(REGISTRY)..."
-	docker push $(REGISTRY)/$(IMAGE_NAME):$(VERSION)
-	docker push $(REGISTRY)/$(IMAGE_NAME):latest
-
+# Version info
 .PHONY: version
 version:
-	@echo "Version: $(VERSION)"
-	@echo "Commit:  $(COMMIT)"
-	@echo "Branch:  $(BRANCH)"
-	@echo "Date:    $(BUILD_DATE)"
+	@echo "Git Tag: $(GIT_TAG)"
+	@echo "Base Version: $(VERSION_BASE)"
+	@echo "Commit: $(COMMIT)"
+	@echo "Branch: $(BRANCH)"
+	@if [ -f $(VERSION_FILE) ]; then \
+		echo "Last Dev Build: $(VERSION_BASE)-dev$$(cat $(VERSION_FILE))"; \
+	else \
+		echo "No dev builds yet"; \
+	fi
 
+# Main build target
+.PHONY: build
+build:
+	@if [ "$(RELEASE_BUILD)" = "true" ]; then \
+		VERSION=$(VERSION_BASE); \
+		RELEASE=1; \
+		echo "[BUILD] Building release image..."; \
+		echo "Version: $$VERSION"; \
+	else \
+		if [ -f $(VERSION_FILE) ]; then \
+			BUILD_NUM=$$(cat $(VERSION_FILE)); \
+			NEXT_BUILD=$$((BUILD_NUM + 1)); \
+		else \
+			NEXT_BUILD=1; \
+		fi; \
+		echo $$NEXT_BUILD > $(VERSION_FILE); \
+		VERSION=$(VERSION_BASE)-dev$$NEXT_BUILD; \
+		echo "[BUILD] Building development image..."; \
+		echo "Version: $$VERSION"; \
+	fi; \
+	BUILD_DATE=$$(date +%s) && \
+	echo "Building $(IMAGE_NAME) Image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION ..." && \
+	docker build -t $(REGISTRY)/$(IMAGE_NAME):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) -f Dockerfile . && \
+	docker tag $(REGISTRY)/$(IMAGE_NAME):$$VERSION $(REGISTRY)/$(IMAGE_NAME):latest && \
+	echo "[SUCCESS] Build complete! Version: $$VERSION" && \
+	echo "[SUCCESS] Tagged as: latest"
+
+# Push image to dev registry
+.PHONY: push
+push:
+	@if [ "$(RELEASE_BUILD)" = "true" ]; then \
+		VERSION=$(VERSION_BASE); \
+	else \
+		if [ -f $(VERSION_FILE) ]; then \
+			VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+		else \
+			echo "[ERROR] No build found. Run 'make build' first"; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "[PUSH] Pushing image version $$VERSION ..." && \
+	if ! docker image inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION > /dev/null 2>&1; then \
+		echo "[ERROR] Image $(REGISTRY)/$(IMAGE_NAME):$$VERSION not found. Run 'make build' first"; \
+		exit 1; \
+	fi && \
+	docker push $(REGISTRY)/$(IMAGE_NAME):$$VERSION && \
+	if [ "$(RELEASE_BUILD)" != "true" ]; then \
+		echo "[PUSH] Pushing latest tag..." && \
+		docker push $(REGISTRY)/$(IMAGE_NAME):latest; \
+	fi && \
+	echo "[SUCCESS] Push complete!"
+
+# Run smithy container locally for testing
 .PHONY: run
-run: build
-	@echo "[RUN] Running smithy..."
-	./$(BUILD_DIR)/$(BINARY_NAME) --help
+run:
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		echo "[ERROR] No build found. Run 'make build' first"; \
+		exit 1; \
+	fi; \
+	echo "[RUN] Running smithy container version $$VERSION..."; \
+	docker run --rm -it \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		--user $(SMITHY_UID):$(SMITHY_UID) \
+		-e GIT_REPO="https://github.com/nginxinc/docker-nginx.git" \
+		-e GIT_BRANCH="master" \
+		-e DOCKERFILE_PATH="mainline/alpine/Dockerfile" \
+		-e IMAGE_NAME="test-nginx" \
+		-e IMAGE_TAG="test-$$(date +%s)" \
+		-e PUSH_IMAGE="false" \
+		-e HOME=/home/$(SMITHY_USER) \
+		-e DOCKER_CONFIG=/home/$(SMITHY_USER)/.docker \
+		$(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Test the build with Docker tests
+.PHONY: test
+test: check-test-script
+	@echo "[TEST] Running Docker tests..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		echo "[WARNING] No build found. Using latest image"; \
+		VERSION=latest; \
+	fi; \
+	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
+	$(TEST_SCRIPT) -m docker -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Kubernetes tests
+.PHONY: test-k8s
+test-k8s: check-test-script
+	@echo "[TEST-K8S] Running Kubernetes test suite..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		echo "[WARNING] No build found. Using latest image"; \
+		VERSION=latest; \
+	fi; \
+	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
+	$(TEST_SCRIPT) -m kubernetes -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Run all tests (Docker + Kubernetes)
+.PHONY: test-all
+test-all: check-test-script
+	@echo "[TEST-ALL] Running all test suites..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		echo "[WARNING] No build found. Using latest image"; \
+		VERSION=latest; \
+	fi; \
+	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
+	$(TEST_SCRIPT) -m both -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Clean up test resources
+.PHONY: test-clean
+test-clean:
+	@echo "[TEST-CLEAN] Cleaning up test resources..."
+	@if [ -x $(TEST_SCRIPT) ]; then \
+		$(TEST_SCRIPT) -m both -c -r $(REGISTRY); \
+	else \
+		echo "[INFO] Test script not found, performing basic cleanup..."; \
+		rm -rf /tmp/smithy-docker-config 2>/dev/null || true; \
+		rm -f /tmp/Dockerfile.* 2>/dev/null || true; \
+		rm -f /tmp/test.log 2>/dev/null || true; \
+		rm -rf /tmp/output 2>/dev/null || true; \
+		rm -rf /tmp/smithy-auth 2>/dev/null || true; \
+		kubectl delete namespace smithy-tests --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true; \
+	fi
+	@echo "[TEST-CLEAN] Cleanup complete"
+	
+
+# Run tests in verbose mode
+.PHONY: test-verbose
+test-verbose: check-test-script
+	@echo "[TEST-VERBOSE] Running tests in verbose mode..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		VERSION=latest; \
+	fi; \
+	$(TEST_SCRIPT) -m both -v -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Debug authentication setup
+.PHONY: test-debug-auth
+test-debug-auth: check-test-script
+	@echo "[TEST-DEBUG-AUTH] Debugging authentication..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		VERSION=latest; \
+	fi; \
+	$(TEST_SCRIPT) --debug-auth -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+
+# Check if test script exists
+.PHONY: check-test-script
+check-test-script:
+	@if [ ! -f $(TEST_SCRIPT) ]; then \
+		echo "[ERROR] Test script not found: $(TEST_SCRIPT)"; \
+		echo "Please ensure tests/master.sh exists and is executable"; \
+		exit 1; \
+	fi
+	@if [ ! -x $(TEST_SCRIPT) ]; then \
+		echo "[INFO] Making test script executable..."; \
+		chmod +x $(TEST_SCRIPT); \
+	fi
+
+# Quick test after build
+.PHONY: test-quick
+test-quick: build
+	@echo "[TEST-QUICK] Running quick version test..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		VERSION=$(VERSION_BASE)-dev1; \
+	fi; \
+	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
+	docker run --rm \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		--user $(SMITHY_UID):$(SMITHY_UID) \
+		$(REGISTRY)/$(IMAGE_NAME):$$VERSION --version || \
+	docker run --rm \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		--user $(SMITHY_UID):$(SMITHY_UID) \
+		$(REGISTRY)/$(IMAGE_NAME):$$VERSION buildah version
+
+# Inspect the latest built image
+.PHONY: inspect
+inspect:
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+	else \
+		echo "[ERROR] No build found. Run 'make build' first"; \
+		exit 1; \
+	fi; \
+	echo "[INSPECT] Inspecting image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
+	echo ""; \
+	echo "=== Image Details ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config}}' | jq '.Labels, .Env' ; \
+	echo ""; \
+	echo "=== Entrypoint ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config.Entrypoint}}' | jq . ; \
+	echo ""; \
+	echo "=== CMD ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config.Cmd}}' | jq . ; \
+	echo ""; \
+	echo "=== Working Directory ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{.Config.WorkingDir}}' ; \
+	echo ""; \
+	echo "=== User ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{.Config.User}}'
+
+# Show images
+.PHONY: show-images
+show-images:
+	@echo "[IMAGES] Local Smithy images:"
+	@docker images | grep -E "$(REGISTRY)/$(IMAGE_NAME)" | head -10 || echo "No images found"
+
+# Clean
+.PHONY: clean
+clean:
+	@echo "[CLEAN] Cleaning..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		echo "  Removing version file (was at build $$(cat $(VERSION_FILE)))"; \
+		rm -f $(VERSION_FILE); \
+	fi
+	@rm -rf $(DOCKERBUILD_TEMP)
+	@rm -rf build buildtmp
+	@echo "[CLEAN] Done"
+
+# Create a new git tag
+.PHONY: tag
+tag:
+	@if [ -z "$(NEW_TAG)" ]; then \
+		echo "[ERROR] Please specify NEW_TAG (e.g., make tag NEW_TAG=v1.0.1)"; \
+		exit 1; \
+	fi
+	@echo "[TAG] Creating new git tag: $(NEW_TAG)"
+	@git tag -a $(NEW_TAG) -m "Release $(NEW_TAG)"
+	@echo "[TAG] Tag created. Push with: git push origin $(NEW_TAG)"
+
+# =============================================================================
+# RELEASE MANAGEMENT - Multi-arch support for quay.io
+# =============================================================================
+
+# Release type (staging or publish)
+RELEASE_TYPE ?= staging
+
+# Check release environment (Quay credentials)
+.PHONY: check-release-env
+check-release-env:
+	@if [ -z "$(RF_QUAY_USERNAME)" ] || [ -z "$(RF_QUAY_PASSWORD)" ]; then \
+		echo "[ERROR] Set RF_QUAY_USERNAME and RF_QUAY_PASSWORD"; \
+		echo "  export RF_QUAY_USERNAME=your_quay_username"; \
+		echo "  export RF_QUAY_PASSWORD=your_quay_password"; \
+		exit 1; \
+	fi
+	@echo "[OK] Quay credentials found"
+	@echo "[OK] Current Architecture: $(ARCH)"
+	@echo "[OK] Current Host: $$(hostname)"
+
+# Release info
+.PHONY: release-info
+release-info:
+	@echo "[RELEASE INFO]"
+	@echo "Version: $(VERSION_BASE)"
+	@echo "Release Type: $(RELEASE_TYPE)"
+	@echo "Current Architecture: $(ARCH)"
+	@echo ""
+	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
+		echo "STAGING Release will create:"; \
+		echo "  Architecture-specific quay.io tag:"; \
+		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH)"; \
+		echo ""; \
+		echo "  Multi-arch manifest (after both architectures build):"; \
+		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging"; \
+		echo ""; \
+		echo "  Note: Run on both amd64 and arm64 machines for multi-arch support"; \
+	elif [ "$(RELEASE_TYPE)" = "publish" ]; then \
+		if [ -z "$(VERSION)" ]; then \
+			echo "[ERROR] VERSION parameter required for publish (e.g., VERSION=1.0.0-staging)"; \
+			exit 1; \
+		fi; \
+		BASE_VERSION=$${VERSION%-staging}; \
+		echo "PUBLISH Release will create from staging $(VERSION):"; \
+		echo "  Production Image:"; \
+		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION"; \
+		echo "  Latest tag:"; \
+		echo "    - $(QUAY_REGISTRY)/$(IMAGE_NAME):latest"; \
+	fi
+
+# Build and push for current architecture with manifest update
+.PHONY: _release-build-push-manifest
+_release-build-push-manifest: check-release-env
+	@echo "[BUILD] Building for architecture: $(ARCH) on host: $$(hostname)..."
+	@echo "[BUILD] Machine info: $$(uname -m)"
+	@echo "[BUILD] Release type: $(RELEASE_TYPE)"
+	
+	@# Build with RELEASE_BUILD flag
+	@echo "[BUILD] Running RELEASE_BUILD=true make build..."
+	@RELEASE_BUILD=true $(MAKE) build
+	
+	@# Login to quay.io
+	@echo "[LOGIN] Logging into quay.io..."
+	@echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io
+	
+	@# Tag and push based on release type
+	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
+		echo "[TAG] Tagging image for staging with -staging-$(ARCH) suffix..."; \
+		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+		echo "[PUSH] Pushing staging $(ARCH) image to quay.io..."; \
+		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+		echo "[PUSH] Successfully pushed staging $(ARCH) image!"; \
+		echo "[MANIFEST] Creating/updating staging manifest for $(ARCH)..."; \
+		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
+		if [ "$(ARCH)" = "amd64" ]; then \
+			ALT_ARCH=arm64; \
+		else \
+			ALT_ARCH=amd64; \
+		fi; \
+		CURRENT_EXISTS=false; \
+		ALT_EXISTS=false; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) >/dev/null 2>&1; then \
+			CURRENT_EXISTS=true; \
+		fi; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH >/dev/null 2>&1; then \
+			ALT_EXISTS=true; \
+		fi; \
+		if [ "$$CURRENT_EXISTS" = "true" ] && [ "$$ALT_EXISTS" = "true" ]; then \
+			echo "[MANIFEST] Creating manifest with both architectures"; \
+			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH; \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
+		elif [ "$$CURRENT_EXISTS" = "true" ]; then \
+			echo "[MANIFEST] Creating manifest with $(ARCH) only (waiting for other architecture)"; \
+			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH); \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-$(ARCH) --arch $(ARCH) --os $(OS); \
+		fi; \
+		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
+	else \
+		echo "[TAG] Tagging image for production with -$(ARCH) suffix..."; \
+		docker tag $(REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+		echo "[PUSH] Pushing production $(ARCH) image to quay.io..."; \
+		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+		echo "[PUSH] Successfully pushed production $(ARCH) image!"; \
+		echo "[MANIFEST] Creating/updating production manifest for $(ARCH)..."; \
+		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) 2>/dev/null || true; \
+		if [ "$(ARCH)" = "amd64" ]; then \
+			ALT_ARCH=arm64; \
+		else \
+			ALT_ARCH=amd64; \
+		fi; \
+		CURRENT_EXISTS=false; \
+		ALT_EXISTS=false; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) >/dev/null 2>&1; then \
+			CURRENT_EXISTS=true; \
+		fi; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH >/dev/null 2>&1; then \
+			ALT_EXISTS=true; \
+		fi; \
+		if [ "$$CURRENT_EXISTS" = "true" ] && [ "$$ALT_EXISTS" = "true" ]; then \
+			echo "[MANIFEST] Creating manifest with both architectures"; \
+			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH; \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$$ALT_ARCH --arch $$ALT_ARCH --os $(OS); \
+		elif [ "$$CURRENT_EXISTS" = "true" ]; then \
+			echo "[MANIFEST] Creating manifest with $(ARCH) only (waiting for other architecture)"; \
+			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH); \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE) \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-$(ARCH) --arch $(ARCH) --os $(OS); \
+		fi; \
+		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE); \
+	fi
+	
+	@echo "[SUCCESS] Completed $(ARCH) build and manifest updates!"
+
+# Finalize manifests after both architectures complete (optional, ensures both archs are in manifest)
+.PHONY: release-finalize
+release-finalize: check-release-env
+	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
+		echo "[FINALIZE] Finalizing staging release $(VERSION_BASE)-staging..."; \
+		echo "[FINALIZE] Recreating manifest to ensure both architectures are included..."; \
+		echo "[LOGIN] Logging into quay.io..."; \
+		echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io; \
+		docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging 2>/dev/null || true; \
+		AMD64_EXISTS=false; \
+		ARM64_EXISTS=false; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 >/dev/null 2>&1; then \
+			AMD64_EXISTS=true; \
+		fi; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 >/dev/null 2>&1; then \
+			ARM64_EXISTS=true; \
+		fi; \
+		if [ "$$AMD64_EXISTS" = "true" ] && [ "$$ARM64_EXISTS" = "true" ]; then \
+			echo "[MANIFEST] Creating manifest with both amd64 and arm64"; \
+			docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64; \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-amd64 --arch amd64 --os linux; \
+			docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging \
+				$(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging-arm64 --arch arm64 --os linux; \
+			docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION_BASE)-staging; \
+			echo "[SUCCESS] Finalized staging manifest with both architectures!"; \
+		else \
+			echo "[WARN] Missing architectures (amd64: $$AMD64_EXISTS, arm64: $$ARM64_EXISTS)"; \
+			echo "Run 'make release RELEASE_TYPE=staging' on the missing architecture"; \
+		fi; \
+	else \
+		echo "[ERROR] release-finalize only applies to staging releases"; \
+		exit 1; \
+	fi
+
+# Publish from staging to production
+.PHONY: _release-publish-from-staging
+_release-publish-from-staging: check-release-env
+	@if [ -z "$(VERSION)" ]; then \
+		echo "[ERROR] VERSION parameter required (e.g., VERSION=1.0.0-staging)"; \
+		exit 1; \
+	fi
+	@if ! echo "$(VERSION)" | grep -q "staging"; then \
+		echo "[ERROR] VERSION must be a staging version (e.g., 1.0.0-staging)"; \
+		exit 1; \
+	fi
+	
+	@BASE_VERSION=$${VERSION%-staging} && \
+	echo "[PUBLISH] Publishing from staging $(VERSION) to production $$BASE_VERSION..." && \
+	echo "[LOGIN] Logging into quay.io..." && \
+	echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io && \
+	\
+	for arch in amd64 arm64; do \
+		echo "[COPY] Copying $(IMAGE_NAME):$(VERSION)-$$arch → $(IMAGE_NAME):$$BASE_VERSION-$$arch"; \
+		docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch && \
+		docker tag $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
+		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-$$arch && \
+		docker tag $(QUAY_REGISTRY)/$(IMAGE_NAME):$(VERSION)-$$arch $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-$$arch && \
+		docker push $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-$$arch || \
+		echo "[WARN] Architecture $$arch not found (might be expected)"; \
+	done && \
+	\
+	echo "[MANIFEST] Creating production manifest..." && \
+	docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION 2>/dev/null || true; \
+	docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 \
+		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 2>/dev/null && \
+	docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-amd64 --arch amd64 --os linux && \
+	docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION \
+		$(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION-arm64 --arch arm64 --os linux && \
+	docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):$$BASE_VERSION || \
+	echo "[WARN] Failed to create manifest (check if both architectures exist)"; \
+	\
+	echo "[MANIFEST] Updating latest manifest..." && \
+	docker manifest rm $(QUAY_REGISTRY)/$(IMAGE_NAME):latest 2>/dev/null || true; \
+	if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 >/dev/null 2>&1 && \
+	   docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64 >/dev/null 2>&1; then \
+		docker manifest create $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
+			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 \
+			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64; \
+		docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
+			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-amd64 --arch amd64 --os linux; \
+		docker manifest annotate $(QUAY_REGISTRY)/$(IMAGE_NAME):latest \
+			$(QUAY_REGISTRY)/$(IMAGE_NAME):latest-arm64 --arch arm64 --os linux; \
+		docker manifest push -p $(QUAY_REGISTRY)/$(IMAGE_NAME):latest; \
+	fi; \
+	\
+	echo "[SUCCESS] Published production release $$BASE_VERSION!"
+
+# Check release status
+.PHONY: release-status
+release-status: check-release-env
+	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
+		echo "[STATUS] Checking staging release $(VERSION_BASE)-staging..."; \
+		TARGET_VERSION="$(VERSION_BASE)-staging"; \
+	elif [ "$(RELEASE_TYPE)" = "publish" ] && [ -n "$(VERSION)" ]; then \
+		BASE_VERSION=$${VERSION%-staging} && \
+		echo "[STATUS] Checking production release $$BASE_VERSION..." && \
+		TARGET_VERSION="$$BASE_VERSION"; \
+	else \
+		echo "[ERROR] Invalid parameters. Use:"; \
+		echo "  make release-status RELEASE_TYPE=staging"; \
+		echo "  make release-status RELEASE_TYPE=publish VERSION=x.y.z-staging"; \
+		exit 1; \
+	fi && \
+	echo ""; \
+	echo "$(RF_QUAY_PASSWORD)" | docker login -u "$(RF_QUAY_USERNAME)" --password-stdin quay.io > /dev/null 2>&1; \
+	echo "Checking manifest for $$TARGET_VERSION:"; \
+	echo -n "  $(IMAGE_NAME): "; \
+	if docker manifest inspect $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION >/dev/null 2>&1; then \
+		archs=$$(docker manifest inspect $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION 2>/dev/null | \
+			jq -r '.manifests[].platform.architecture' 2>/dev/null | sort | tr '\n' ' '); \
+		echo "✓ manifest exists [$$archs]"; \
+	else \
+		echo "✗ manifest not found"; \
+	fi; \
+	echo ""; \
+	echo "Checking architecture-specific images:"; \
+	for arch in amd64 arm64; do \
+		echo -n "  $$arch: "; \
+		if docker pull $(QUAY_REGISTRY)/$(IMAGE_NAME):$$TARGET_VERSION-$$arch >/dev/null 2>&1; then \
+			echo "✓"; \
+		else \
+			echo "✗"; \
+		fi; \
+	done
+
+# Main release target
+.PHONY: release
+release: check-release-env
+	@if [ "$(RELEASE_TYPE)" = "staging" ]; then \
+		echo "[RELEASE] Starting STAGING release $(VERSION_BASE)-staging on $(ARCH)..."; \
+		echo "[BUILD] Building and pushing for $(ARCH) architecture..."; \
+		$(MAKE) _release-build-push-manifest RELEASE=1; \
+		echo ""; \
+		echo "[SUCCESS] $(ARCH) staging release complete!"; \
+		echo ""; \
+		echo "IMPORTANT: To complete multi-arch support, run this same command on the other architecture."; \
+		echo "After both architectures are built, optionally run:"; \
+		echo "  make release-finalize RELEASE_TYPE=staging"; \
+		echo ""; \
+		echo "Current status:"; \
+		$(MAKE) release-status RELEASE_TYPE=staging; \
+	elif [ "$(RELEASE_TYPE)" = "publish" ]; then \
+		echo "[RELEASE] Starting PUBLISH from staging..."; \
+		$(MAKE) _release-publish-from-staging; \
+	else \
+		echo "[ERROR] Invalid RELEASE_TYPE. Use 'staging' or 'publish'"; \
+		exit 1; \
+	fi
+
+# Helper targets
+.PHONY: release-staging
+release-staging:
+	@$(MAKE) release RELEASE_TYPE=staging 
+
+.PHONY: release-publish
+release-publish:
+	@if [ -z "$(VERSION)" ]; then \
+		echo "[ERROR] VERSION required (e.g., make release-publish VERSION=1.0.0-staging)"; \
+		exit 1; \
+	fi
+	@$(MAKE) release RELEASE_TYPE=publish VERSION=$(VERSION)
+
+# =============================================================================
+# SHORTCUTS & CONVENIENCE TARGETS
+# =============================================================================
+
+# Build and push in one command
+.PHONY: bp
+bp: build push
+	@echo "[SUCCESS] Build and push complete!"
+
+# Build, push, and test
+.PHONY: bpt
+bpt: build push test
+	@echo "[SUCCESS] Build, push, and test complete!"
+
+# Full cycle: build, push, test all
+.PHONY: full
+full: build push test-all
+	@echo "[SUCCESS] Full cycle complete!"
 
 .DEFAULT_GOAL := help
-
