@@ -44,7 +44,7 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_PAT || secrets.GITHUB_TOKEN }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - name: Check registry access
         run: |
@@ -60,7 +60,9 @@ jobs:
         run: |
           # Get version from tag or use manual input
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION=${GITHUB_REF#refs/tags/v}
+            # Strip 'v' prefix from tag (v1.0.3 -> 1.0.3)
+            VERSION=${GITHUB_REF#refs/tags/}
+            VERSION=${VERSION#v}
             RELEASE_TYPE="production"
           else
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
@@ -162,4 +164,3 @@ jobs:
           echo "   git push origin v${{ needs.build-and-push.outputs.VERSION }}"
           echo ""
           echo "Or run: make release-publish VERSION=${{ needs.build-and-push.outputs.VERSION }}-staging"
-
