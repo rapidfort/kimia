@@ -40,7 +40,6 @@ BUILD_ARGS := \
               --build-arg BUILD_DATE=$(BUILD_DATE) \
               --build-arg COMMIT=$(COMMIT) \
               --build-arg BRANCH=$(BRANCH) \
-              --build-arg RF_APP_HOST=$(RF_APP_HOST) \
               --build-arg RELEASE=$(RELEASE) \
               --build-arg SMITHY_USER=$(SMITHY_USER) \
               --build-arg SMITHY_UID=$(SMITHY_UID)
