@@ -560,7 +560,7 @@ To ensure full compatibility with Docker-specific Dockerfile commands, set the `
 ```yaml
 containers:
 - name: smithy
-  image: quay.io/rapidfort/smithy:latest
+  image: ghcr.io/rapidfort/smithy:latest
   env:
   - name: BUILDAH_FORMAT
     value: "docker"  # Use Docker format instead of OCI
@@ -611,7 +611,7 @@ spec:
     spec:
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         env:
         - name: BUILDAH_FORMAT
           value: "docker"
@@ -675,7 +675,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -715,7 +715,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=https://github.com/myorg/myapp.git
           - --git-branch=main
@@ -757,7 +757,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -794,7 +794,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         env:
         - name: BUILDAH_FORMAT
           value: "docker"  # Enable Docker format for HEALTHCHECK support
@@ -950,7 +950,7 @@ USER 1000:1000
 #### Adding Python and pip
 
 ```dockerfile
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 USER root
 
@@ -969,7 +969,7 @@ USER 1000:1000
 #### Adding Java and Maven
 
 ```dockerfile
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 USER root
 
@@ -987,7 +987,7 @@ USER 1000:1000
 #### Adding Go
 
 ```dockerfile
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 USER root
 
@@ -1012,7 +1012,7 @@ USER 1000:1000
 #### Multi-Tool Image (Node.js + Python + Go)
 
 ```dockerfile
-FROM quay.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/smithy:latest
 
 USER root
 
@@ -1259,7 +1259,7 @@ spec:
           revision: "{{workflow.parameters.git-revision}}"
     
     container:
-      image: quay.io/rapidfort/smithy:latest
+      image: ghcr.io/rapidfort/smithy:latest
       
       args:
         - "--context=/workspace"
@@ -1357,7 +1357,7 @@ spec:
             fsGroup: 1000
           containers:
           - name: smithy
-            image: quay.io/rapidfort/smithy:latest
+            image: ghcr.io/rapidfort/smithy:latest
             args:
               - --context=https://github.com/myorg/myapp.git
               - --git-branch=main
@@ -1461,7 +1461,7 @@ spec:
 
   steps:
     - name: build-and-push
-      image: quay.io/rapidfort/smithy:latest
+      image: ghcr.io/rapidfort/smithy:latest
       workingDir: $(workspaces.source.path)
       
       securityContext:
@@ -1516,7 +1516,7 @@ spec:
     fsGroup: 1000
   containers:
   - name: smithy
-    image: quay.io/rapidfort/smithy:latest
+    image: ghcr.io/rapidfort/smithy:latest
     command:
     - cat
     tty: true
@@ -1656,7 +1656,7 @@ containers:
 ```yaml
 containers:
 - name: smithy
-  image: quay.io/rapidfort/smithy:latest
+  image: ghcr.io/rapidfort/smithy:latest
   securityContext:
     runAsUser: 1000
     allowPrivilegeEscalation: true
@@ -1708,7 +1708,7 @@ spec:
   
   containers:
   - name: smithy
-    image: quay.io/rapidfort/smithy:latest
+    image: ghcr.io/rapidfort/smithy:latest
     securityContext:
       runAsNonRoot: true
       runAsUser: 1000
@@ -1853,7 +1853,7 @@ spec:
       
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -1926,7 +1926,7 @@ spec:
       
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -1982,7 +1982,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: quay.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy:latest
         # ... smithy configuration
 ```
 
