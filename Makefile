@@ -709,3 +709,4 @@ full: build push test-all
 	@echo "[SUCCESS] Full cycle complete!"
 
 .DEFAULT_GOAL := help
+

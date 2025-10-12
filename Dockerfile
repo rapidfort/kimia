@@ -10,7 +10,7 @@ ARG SMITHY_UID=1000
 ARG SMITHY_USER=smithy
 ARG BUILDAH_VERSION=1.41.5
 
-FROM golang:alpine AS smithy-builder
+FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -18,12 +18,14 @@ ARG BRANCH
 
 WORKDIR /app
 
+# Copy the entire src directory
 COPY src/ .
 
-RUN go mod init github.com/rapidfort/smithy 2>/dev/null || true
-
+# The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
+# Build from cmd/smithy
+# Note: ldflags use 'main' because cmd/smithy is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -31,10 +33,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.BuildDate=${BUILD_DATE} \
         -X main.CommitSHA=${COMMIT} \
         -X main.Branch=${BRANCH}" \
-    -o smithy main.go
+    -o smithy ./cmd/smithy
 
 # Stage 2: Build buildah v1.41.x with ONE LINE patched
-FROM golang:alpine AS buildah-builder
+FROM golang:${GOLANG_VERSION}-alpine AS buildah-builder
 ARG BUILDAH_VERSION
 
 USER 0
@@ -190,3 +192,4 @@ ENTRYPOINT ["/usr/local/bin/smithy"]
 
 # Default command shows help
 CMD ["--help"]
+
