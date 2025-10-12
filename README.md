@@ -98,22 +98,22 @@ Smithy is a **Kubernetes-native, OCI-compliant container builder** designed for 
 ### Why Smithy?
 
 **Security First**
-- 🔒 **Rootless by Design** - Runs as non-root user (UID 1000)
-- 🚫 **Privilege-Free** - No privileged mode required
-- 🎯 **Minimal Capabilities** - Only SETUID & SETGID required
-- 🛡️ **User Namespace Isolation** - Complete separation from host
+- **Rootless by Design** - Runs as non-root user (UID 1000)
+- **Privilege-Free** - No privileged mode required
+- **Minimal Capabilities** - Only SETUID & SETGID required
+- **User Namespace Isolation** - Complete separation from host
 
 **Cloud Native**
-- ☸️ **Kubernetes Native** - Designed for K8s from the ground up
-- 🔄 **GitOps Ready** - Works seamlessly with ArgoCD, Flux, Tekton
-- 🌍 **Multi-Platform** - Supports AWS, GCP, Azure, OpenShift
-- 📦 **Fully OCI-Compliant** - Standards-based image building
+- **Kubernetes Native** - Designed for K8s from the ground up
+- **GitOps Ready** - Works seamlessly with ArgoCD, Flux, Tekton
+- **Multi-Platform** - Supports AWS, GCP, Azure, OpenShift
+- **Fully OCI-Compliant** - Standards-based image building
 
 **Developer Friendly**
-- ⚡ **Kaniko Compatible** - Drop-in replacement for Kaniko
-- 🔌 **Git Integration** - Build directly from repositories
-- 💾 **Layer Caching** - Fast, efficient rebuilds
-- 📝 **Standard Dockerfiles** - No special syntax needed
+- **Kaniko Compatible** - Drop-in replacement for Kaniko
+- **Git Integration** - Build directly from repositories
+- **Layer Caching** - Fast, efficient rebuilds
+- **Standard Dockerfiles** - No special syntax needed
 
 ### Architecture
 
@@ -2397,27 +2397,8 @@ SOFTWARE.
 
 ---
 
-## Support
-
-- **Documentation**: Full docs at [docs.rapidfort.com/smithy](https://docs.rapidfort.com/smithy)
-- **Issues**: [GitHub Issues](https://github.com/rapidfort/smithy/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/rapidfort/smithy/discussions)
-- **Security**: Report security issues to security@rapidfort.com
-
----
-
 ## Acknowledgments
 
 - Built on [Buildah](https://buildah.io/) - The backbone of Smithy
 - Inspired by [Kaniko](https://github.com/GoogleContainerTools/kaniko) - Pioneering daemonless builds
 - Container tools from the [Containers](https://github.com/containers) organization
-
----
-
-<div align="center">
-
-**Made with ❤️ by the RapidFort team**
-
-[Website](https://rapidfort.com) • [Documentation](https://docs.rapidfort.com) • [GitHub](https://github.com/rapidfort)
-
-</div>
