@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Bug fixes
 
+## [1.0.9] - 2025-10-13
+
+### Added
+
+### Changed
+- Added examples (community nginx & redis)
+
+### Fixed
+
 ## [1.0.8] - 2025-10-12
 
 ### Added
