@@ -150,9 +150,6 @@ Even if a container escapes, it only has unprivileged user access on the host.
 | **Registry Authentication** | Multiple methods | Multiple methods | ✅ Equal: Flexible auth options |
 | **Multi-stage Builds** | Full support | Full support | ✅ Equal: Modern Dockerfile features |
 | **Git Integration** | Built-in (via args) | Built-in (via executor) | ✅ Equal: Both support Git directly |
-| **Docker Format** | Configurable (OCI/Docker) | OCI only | ✅ Smithy: Better legacy support |
-| **HEALTHCHECK Support** | ✅ (with `BUILDAH_FORMAT=docker`) | ❌ Limited | ✅ Smithy: Full Docker compatibility |
-| **SHELL Instruction** | ✅ (with `BUILDAH_FORMAT=docker`) | ❌ Limited | ✅ Smithy: Custom shell support |
 | **Attack Surface** | Minimal (rootless) | Larger (root) | ✅ Smithy: Significantly reduced |
 | **Pod Security Standards** | Restricted-compliant* | Baseline only | ✅ Smithy: Higher security standard |
 | **Build Performance** | Fast (native) | Fast (native) | ✅ Equal: Both performant |
@@ -204,53 +201,12 @@ capabilities:
 
 **Impact:** Smithy's approach is more transparent about security requirements.
 
-### Compatibility Advantages
-
-#### 1. **Docker-Specific Instructions**
-```dockerfile
-# Smithy - Full support with BUILDAH_FORMAT=docker
-HEALTHCHECK --interval=30s CMD curl -f http://localhost/ || exit 1
-SHELL ["/bin/bash", "-c"]
-STOPSIGNAL SIGTERM
-
-# Kaniko - Limited or no support for these instructions
-```
-
-#### 2. **Ownership Operations**
-```dockerfile
-# Smithy - Full support for complex chown operations
-RUN chown -R app:app /app && \
-    chown -R app:app /var/log && \
-    chmod -R 755 /app
-USER app
-
-# Kaniko - May have issues with complex chown operations in some scenarios
-```
-
-#### 3. **Build Context Flexibility**
-```yaml
-# Both Smithy and Kaniko support Git directly
-# Smithy
-args:
-  - --context=git://github.com/org/repo.git
-  - --git-branch=main
-  - --dockerfile=Dockerfile
-
-# Kaniko
-args:
-  - --context=git://github.com/org/repo.git
-  - --dockerfile=Dockerfile
-```
-
-**Note:** Both tools have built-in Git support - no init containers needed.
 
 ### When to Choose Smithy
 
 ✅ **Choose Smithy when:**
 - Security is paramount (defense in depth)
-- Using Dockerfiles with HEALTHCHECK or SHELL
 - Complex ownership operations needed
-- Building from Git repositories
 - Compliance requires rootless containers
 - Need Pod Security Standard "Restricted" compliance
 
