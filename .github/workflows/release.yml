@@ -46,27 +46,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Check registry access
-        run: |
-          echo "Testing registry authentication..."
-          if ! docker pull ghcr.io/rapidfort/smithy:latest 2>/dev/null; then
-            echo "⚠️  Package may not exist yet. This is normal for first publish."
-          else
-            echo "✅ Package exists and is accessible"
-          fi
-
       - name: Extract version metadata
         id: meta
         run: |
-          # Get version from tag or use manual input
+          # Get version from tag (strip 'v' prefix: v1.0.3 -> 1.0.3)
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            # Strip 'v' prefix from tag (v1.0.3 -> 1.0.3)
             VERSION=${GITHUB_REF#refs/tags/}
             VERSION=${VERSION#v}
-            RELEASE_TYPE="production"
           else
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
-            RELEASE_TYPE="${{ github.event.inputs.release_type || 'staging' }}"
           fi
           
           COMMIT=$(git rev-parse --short HEAD)
@@ -74,26 +62,19 @@ jobs:
           BUILD_DATE=$(date +%s)
           
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "RELEASE_TYPE=${RELEASE_TYPE}" >> $GITHUB_OUTPUT
           echo "COMMIT=${COMMIT}" >> $GITHUB_OUTPUT
           echo "BRANCH=${BRANCH}" >> $GITHUB_OUTPUT
           echo "BUILD_DATE=${BUILD_DATE}" >> $GITHUB_OUTPUT
           
           echo "📦 Building version: ${VERSION}"
-          echo "🏷️  Release type: ${RELEASE_TYPE}"
 
       - name: Generate Docker tags
         id: tags
         run: |
           VERSION="${{ steps.meta.outputs.VERSION }}"
-          RELEASE_TYPE="${{ steps.meta.outputs.RELEASE_TYPE }}"
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           
-          if [[ "$RELEASE_TYPE" == "staging" ]]; then
-            TAGS="${IMAGE}:${VERSION}-staging"
-          else
-            TAGS="${IMAGE}:${VERSION},${IMAGE}:latest"
-          fi
+          TAGS="${IMAGE}:${VERSION},${IMAGE}:latest"
           
           echo "TAGS=${TAGS}" >> $GITHUB_OUTPUT
           echo "🏷️  Tags: ${TAGS}"
@@ -164,3 +145,4 @@ jobs:
           echo "   git push origin v${{ needs.build-and-push.outputs.VERSION }}"
           echo ""
           echo "Or run: make release-publish VERSION=${{ needs.build-and-push.outputs.VERSION }}-staging"
+
