@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Bug fixes
 
+## [1.0.7] - 2025-10-12
+
+### Added
+
+### Changed
+- buildah version tagged with -rf for patch
+
+### Fixed
+- Arm64 build
+
 ## [1.0.4] - 2025-10-12
 
 ### Fixed
