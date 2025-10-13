@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Bug fixes
 
+## [1.0.4] - 2025-01-13
+
+### Fixed
+- GHCR authentication in release pipeline
+- Version tag format (removed 'v' prefix from image tags)
+- Multi-arch build workflow simplification
+
 ## [1.0.2] - 2025-10-12
 
 ### Added
@@ -32,4 +39,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial public release
 - Basic build functionality
-
