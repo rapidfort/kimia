@@ -290,34 +290,29 @@ kubectl apply -f - <<EOF
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-build
+  name: smithy-nginx-build
 spec:
+  ttlSecondsAfterFinished: 60
   template:
     spec:
+      restartPolicy: Never
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
       containers:
       - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/smithy
         args:
-          - --context=git://github.com/nginxinc/docker-nginx.git
+          - --context=https://github.com/nginx/docker-nginx.git
           - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=myregistry.io/nginx:custom
+          - --destination=mynginx
+          - --no-push
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
-        volumeMounts:
-        - name: docker-config
-          mountPath: /home/smithy/.docker
-      volumes:
-      - name: docker-config
-        secret:
-          secretName: registry-credentials
-      restartPolicy: Never
 EOF
 ```
 
@@ -328,7 +323,7 @@ EOF
 kubectl get jobs -w
 
 # View logs
-kubectl logs job/smithy-build -f
+kubectl logs job/smithy-nginx-build -f
 ```
 
 ---
@@ -1069,15 +1064,21 @@ Before deploying, test your custom image:
 ```bash
 # Test locally
 docker run --rm \
+  --cap-drop ALL \
+  --cap-add SETUID \
+  --cap-add SETGID \
   --security-opt seccomp=unconfined \
-  --user 1000:1000 \
+  --security-opt apparmor=unconfined \
   myregistry.io/smithy-bazel:latest \
   --version
 
 # Test Bazel availability
 docker run --rm \
+  --cap-drop ALL \
+  --cap-add SETUID \
+  --cap-add SETGID \
   --security-opt seccomp=unconfined \
-  --user 1000:1000 \
+  --security-opt apparmor=unconfined \
   myregistry.io/smithy-bazel:latest \
   bash -c "bazel --version"
 ```

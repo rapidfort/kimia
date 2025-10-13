@@ -5,7 +5,7 @@ import (
 )
 
 func printHelp() {
-	fmt.Println("Smithy – Kubernetes-Native OCI Builder")
+	fmt.Println("Smithy – Kubernetes-Native OCI Image Builder")
 	fmt.Println("Daemonless. Rootless. Privilege-free. Fully OCI-compliant.")
 	fmt.Println()
 	fmt.Println("USAGE:")

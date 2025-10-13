@@ -4,8 +4,13 @@
 
 set -e
 
+if [ -z "${RF_APP_HOST}" ]; then
+    REGISTRY=ghcr.io
+else
+    REGISTRY=${RF_APP_HOST}:5000}
+fi
+
 # Configuration
-REGISTRY="${REGISTRY:-localhost:5000}"
 NAMESPACE="smithy-tests"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
@@ -378,7 +383,7 @@ docker_test_1_version() {
 
 docker_test_2_basic_build() {
     run_docker_test 2 "Basic Build"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.basic <<EOF
 FROM alpine:latest
 RUN echo "Test build" && apk add --no-cache curl
@@ -417,7 +422,7 @@ EOF
 
 docker_test_3_build_args() {
     run_docker_test 3 "Build Arguments"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.buildargs <<EOF
 FROM alpine:latest
 ARG VERSION=1.0
@@ -462,7 +467,7 @@ EOF
 
 docker_test_4_labels() {
     run_docker_test 4 "Labels"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.labels <<EOF
 FROM alpine:latest
 RUN echo "Testing labels"
@@ -503,7 +508,7 @@ EOF
 
 docker_test_5_multistage() {
     run_docker_test 5 "Multi-stage Build"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.multistage <<EOF
 FROM alpine:latest AS builder
 RUN echo "Building..." && apk add --no-cache curl
@@ -577,7 +582,7 @@ docker_test_6_git_repo() {
 
 docker_test_7_cache() {
     run_docker_test 7 "Cache Build"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.cache <<EOF
 FROM alpine:latest
 RUN apk add --no-cache curl wget
@@ -618,7 +623,7 @@ EOF
 
 docker_test_8_tar_export() {
     run_docker_test 8 "TAR Export"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.tar <<EOF
 FROM alpine:latest
 RUN echo "Export test"
@@ -666,7 +671,7 @@ EOF
 
 docker_test_9_multiple_dest() {
     run_docker_test 9 "Multiple Destinations"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.multidest <<EOF
 FROM alpine:latest
 RUN echo "Multiple destinations test"
@@ -705,7 +710,7 @@ EOF
 
 docker_test_10_platform() {
     run_docker_test 10 "Platform Specification"
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.platform <<EOF
 FROM alpine:latest
 RUN echo "Platform test"
@@ -826,7 +831,7 @@ run_kubernetes_tests() {
 
 create_k8s_registry_secret() {
     log_verbose "Creating Kubernetes registry secret..."
-    
+
     if [ "$AUTH_MODE" == "credentials" ]; then
         kubectl create secret docker-registry docker-registry-credentials \
             --namespace=$NAMESPACE \
@@ -852,7 +857,7 @@ create_k8s_registry_secret() {
 
 create_k8s_test_configmap() {
     log_verbose "Creating test ConfigMap..."
-    
+
     cat > $RF_SMITHY_TMPDIR/Dockerfile.k8s <<EOF
 FROM alpine:latest
 RUN echo "Kubernetes test build"
@@ -869,14 +874,14 @@ run_k8s_job() {
     local job_name="$1"
     local test_name="$2"
     local job_yaml="$3"
-    
+
     echo ""
     echo -e "${BLUE}[Kubernetes Test] $test_name${NC}"
     echo "────────────────────────────────────────────────────────────────────────────"
-    
+
     # Apply the job
     echo "$job_yaml" | kubectl apply -f - >/dev/null 2>&1
-    
+
     # Wait for job to complete (timeout 5 minutes)
     if kubectl wait --for=condition=complete --timeout=300s job/$job_name -n $NAMESPACE >/dev/null 2>&1; then
         echo -e "${GREEN}✓ PASSED${NC}"
@@ -887,7 +892,7 @@ run_k8s_job() {
         echo -e "${RED}✗ FAILED${NC}"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("✗ K8s Test: $test_name")
-        
+
         if [ "$VERBOSE" = true ]; then
             echo "Job logs:"
             kubectl logs -n $NAMESPACE job/$job_name --tail=50

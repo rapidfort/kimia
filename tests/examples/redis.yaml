@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smithy-redis-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: smithy
+        image: ghcr.io/rapidfort/smithy:latest
+        args:
+          - --context=https://github.com/redis/docker-library-redis.git
+          - --dockerfile=7.4/debian/Dockerfile
+          - --destination=myredis
+          - --no-push
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]
+
