@@ -187,6 +187,10 @@ WORKDIR /home/${SMITHY_USER}
 
 ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
 
+# Add at the top of Dockerfile
+LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
+LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder"
+
 # Set smithy as the entrypoint
 ENTRYPOINT ["/usr/local/bin/smithy"]
 
