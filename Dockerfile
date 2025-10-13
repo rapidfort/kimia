@@ -9,6 +9,7 @@ ARG GOLANG_VERSION=1.25.2
 ARG SMITHY_UID=1000
 ARG SMITHY_USER=smithy
 ARG BUILDAH_VERSION=1.41.5
+ARG TARGETARCH
 
 FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
 ARG VERSION
@@ -70,13 +71,24 @@ RUN sed -i 's|const defaultRootLockPath = "/run/lock/netavark.lock"|const defaul
 # Verify the patch
 RUN grep "defaultRootLockPath" vendor/github.com/containers/common/libnetwork/netavark/const.go
 
-# Build patched buildah
-RUN make BUILDTAGS="seccomp selinux" && \
+# Configure git (required for commit)
+RUN git config --global user.email "dev@rapidfort.com" && \
+    git config --global user.name "RapidFort Build"
+
+# Commit the patch to make it "clean"
+RUN git add -A && \
+    git commit -m "RapidFort patch: Use /tmp/lock for netavark" && \
+    git tag -f v${BUILDAH_VERSION}-rf
+
+# Build patched buildah with RF version
+RUN make BUILDTAGS="seccomp selinux" GIT_COMMIT="$(git rev-parse HEAD)" VERSION="${BUILDAH_VERSION}-rf" && \
     make install
 
+# Build running image binary
 FROM alpine AS run-prep-image
 ARG SMITHY_UID
 ARG SMITHY_USER
+ARG TARGETARCH
 
 RUN apk update && apk add gnutls
 
@@ -162,15 +174,25 @@ RUN cat > /home/${SMITHY_USER}/.config/containers/policy.json <<'EOF'
 }
 EOF
 
-# Fetch latest ECR helper version dynamically
+# ECR helper
 RUN ECR_VERSION=$(curl -s https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    curl -fsSL "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-amd64/docker-credential-ecr-login" \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" \
     -o /usr/local/bin/docker-credential-ecr-login && \
     chmod +x /usr/local/bin/docker-credential-ecr-login
 
-# Fetch latest GCR helper version dynamically
+# GCR helper
 RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_amd64-${GCR_VERSION}.tar.gz" \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
