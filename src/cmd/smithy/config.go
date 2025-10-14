@@ -5,6 +5,7 @@ type Config struct {
 	// Core build arguments
 	Dockerfile  string
 	Context     string
+	SubContext  string
 	Destination []string
 
 	// Cache configuration

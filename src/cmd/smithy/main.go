@@ -102,7 +102,24 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to prepare build context: %v", err)
 	}
+
 	defer ctx.Cleanup()
+
+	if config.SubContext != "" {
+		logger.Debug("Applying sub-context path: %s", config.SubContext)
+
+		// Join the sub-path to the prepared context
+		newContextPath := filepath.Join(ctx.Path, config.SubContext)
+
+		// Verify the sub-context exists
+		if _, err := os.Stat(newContextPath); os.IsNotExist(err) {
+			logger.Fatal("Sub-context path does not exist: %s (full path: %s)", config.SubContext, newContextPath)
+		}
+
+		// Update the context path
+		ctx.Path = newContextPath
+		logger.Info("Using sub-context: %s", ctx.Path)
+	}
 
 	// Execute build
 	buildConfig := build.Config{
