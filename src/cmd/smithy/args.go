@@ -61,6 +61,13 @@ func parseArgs(args []string) *Config {
 				config.Context = args[i]
 			}
 
+		case "--context-sub-path":
+			if value != "" {
+				config.SubContext = value
+			} else if i+1 < len(args) {
+				i++
+				config.SubContext = args[i]
+			}
 		case "-d", "--destination":
 			dest := value
 			if dest == "" && i+1 < len(args) {

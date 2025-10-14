@@ -2250,7 +2250,12 @@ A: Smithy uses user namespaces for true rootless operation, while Kaniko runs as
 
 A: Yes! Smithy can run as a standard container:
 ```bash
-docker run --security-opt seccomp=unconfined --user 1000:1000 \
+docker run \
+  --cap-drop ALL \
+  --cap-add SETUID \
+  --cap-add SETGID \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
   -v $(pwd):/workspace \
   ghcr.io/rapidfort/smithy:latest \
   --context=/workspace --destination=registry/image:tag
@@ -2321,37 +2326,6 @@ initContainers:
   securityContext:
     runAsUser: 0
 ```
-
----
-
-## License
-
-Smithy is licensed under the [MIT License](LICENSE).
-
-```
-MIT License
-
-Copyright (c) 2025 RapidFort Inc.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
-
 ---
 
 ## Acknowledgments
