@@ -24,14 +24,17 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Handle check-environment command
+	if len(os.Args) > 1 && os.Args[1] == "check-environment" {
+		exitCode := preflight.CheckEnvironment()
+		os.Exit(exitCode)
+	}
+
 	// Parse configuration
 	config := parseArgs(os.Args[1:])
 
-	// Set up logging
-	logger.Setup(config.Verbosity, config.LogTimestamp)
-
 	// Log smithy version
-	logger.Info("Smithy Container Build System v%s (OSS)", Version)
+	logger.Info("Smithy – Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
 	// Validate storage driver
@@ -56,9 +59,8 @@ func main() {
 		logger.Info("Note: Overlay driver requires fuse-overlayfs to be installed")
 	}
 
-	// OSS only supports build mode
 	if config.Context == "" {
-		fmt.Fprintf(os.Stderr, "Error: Smithy OSS only supports BUILD mode\n\n")
+		fmt.Fprintf(os.Stderr, "Error: Smithy only supports BUILD mode\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
 		fmt.Fprintf(os.Stderr, "Run 'smithy --help' for more information.\n")
