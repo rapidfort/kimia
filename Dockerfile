@@ -92,7 +92,7 @@ ARG TARGETARCH
 
 RUN apk update && apk add gnutls
 
-# Install runtime dependencies
+# Install runtime dependencies including fuse-overlayfs
 RUN apk add --no-cache \
     bash \
     ca-certificates \
@@ -110,6 +110,7 @@ RUN apk add --no-cache \
     slirp4netns \
     netavark \
     aardvark-dns \
+    fuse-overlayfs \
     xz && \
     update-ca-certificates && \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
@@ -145,7 +146,7 @@ network_backend="netavark"
 userns="keep-id"
 EOF
 
-# Storage config
+# Storage config - support both VFS and overlay
 RUN cat > /home/${SMITHY_USER}/.config/containers/storage.conf <<'EOF'
 [storage]
 driver="vfs"
@@ -154,6 +155,10 @@ graphroot="/home/smithy/.local/share/containers/storage"
 
 [storage.options]
 vfs.ignore_chown_errors="true"
+
+[storage.options.overlay]
+mount_program="/usr/bin/fuse-overlayfs"
+mountopt="nodev,metacopy=on"
 EOF
 
 # Registries config
@@ -218,4 +223,3 @@ ENTRYPOINT ["/usr/local/bin/smithy"]
 
 # Default command shows help
 CMD ["--help"]
-

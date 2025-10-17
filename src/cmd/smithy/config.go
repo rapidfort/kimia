@@ -37,6 +37,7 @@ type Config struct {
 	// Build behavior
 	CustomPlatform string
 	Target         string
+	StorageDriver  string // Storage driver selection (vfs, overlay)
 
 	// Labels and metadata
 	Labels      map[string]string

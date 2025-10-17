@@ -29,6 +29,9 @@ type Config struct {
 	Cache    bool
 	CacheDir string
 
+	// Storage driver
+	StorageDriver string
+
 	// Security options
 	Insecure            bool
 	InsecurePull        bool
@@ -59,6 +62,12 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		} else {
 			args = append(args, "--authfile", authFile)
 		}
+	}
+
+	// Add storage driver option
+	if config.StorageDriver != "" {
+		args = append(args, "--storage-driver", config.StorageDriver)
+		logger.Debug("Using storage driver: %s", config.StorageDriver)
 	}
 
 	// Add Dockerfile
@@ -148,14 +157,20 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		)
 	}
 
-	// Add storage driver
-	cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+	// Set storage driver via environment variable (fallback)
+	if config.StorageDriver != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+	}
 
 	if err := cmd.Run(); err != nil {
 		// Enhanced error reporting
 		if strings.Contains(err.Error(), "authentication") ||
 			strings.Contains(err.Error(), "unauthorized") {
 			return fmt.Errorf("buildah build failed (authentication issue): %v", err)
+		}
+		if strings.Contains(err.Error(), "overlay") ||
+			strings.Contains(err.Error(), "fuse-overlayfs") {
+			return fmt.Errorf("buildah build failed (overlay driver issue - ensure fuse-overlayfs is installed): %v", err)
 		}
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
