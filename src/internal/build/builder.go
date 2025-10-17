@@ -64,12 +64,6 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		}
 	}
 
-	// Add storage driver option
-	if config.StorageDriver != "" {
-		args = append(args, "--storage-driver", config.StorageDriver)
-		logger.Debug("Using storage driver: %s", config.StorageDriver)
-	}
-
 	// Add Dockerfile
 	dockerfilePath := config.Dockerfile
 	if dockerfilePath == "" {
@@ -157,20 +151,14 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		)
 	}
 
-	// Set storage driver via environment variable (fallback)
-	if config.StorageDriver != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
-	}
+	// Add storage driver
+	cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
 
 	if err := cmd.Run(); err != nil {
 		// Enhanced error reporting
 		if strings.Contains(err.Error(), "authentication") ||
 			strings.Contains(err.Error(), "unauthorized") {
 			return fmt.Errorf("buildah build failed (authentication issue): %v", err)
-		}
-		if strings.Contains(err.Error(), "overlay") ||
-			strings.Contains(err.Error(), "fuse-overlayfs") {
-			return fmt.Errorf("buildah build failed (overlay driver issue - ensure fuse-overlayfs is installed): %v", err)
 		}
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
@@ -204,15 +192,82 @@ func exportToTar(config Config) error {
 	// Use the first destination as the image to export
 	image := config.Destination[0]
 
+	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
+	logger.Debug("Attempting TAR export with buildah push...")
 	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
+
+	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to export to tar: %v", err)
+		logger.Debug("Direct buildah push failed: %v", err)
+		logger.Debug("Stderr: %s", stderr.String())
+
+		// Method 2: Try with image ID instead of name (most reliable for overlay)
+		logger.Debug("Attempting with image ID...")
+		getIDCmd := exec.Command("buildah", "images", "--format", "{{.ID}}", "--filter", fmt.Sprintf("reference=%s", image))
+		idOutput, idErr := getIDCmd.Output()
+
+		if idErr == nil && len(strings.TrimSpace(string(idOutput))) > 0 {
+			imageID := strings.TrimSpace(string(idOutput))
+			logger.Debug("Found image ID: %s", imageID)
+
+			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+			cmd2.Stdout = os.Stdout
+			cmd2.Stderr = os.Stderr
+
+			if err2 := cmd2.Run(); err2 != nil {
+				return fmt.Errorf("TAR export failed with both name and ID:\n  by name: %v\n  by ID: %v", err, err2)
+			}
+			logger.Info("Successfully exported using image ID")
+		} else {
+			// Method 3: List all images and find a match
+			logger.Debug("Image ID lookup failed, searching all images...")
+			listCmd := exec.Command("buildah", "images", "--format", "{{.ID}}:{{.Names}}")
+			listOutput, listErr := listCmd.Output()
+
+			if listErr == nil {
+				lines := strings.Split(string(listOutput), "\n")
+				for _, line := range lines {
+					if strings.Contains(line, image) {
+						parts := strings.Split(line, ":")
+						if len(parts) >= 2 {
+							foundID := strings.TrimSpace(parts[0])
+							logger.Debug("Found matching image ID from list: %s", foundID)
+
+							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+							cmd3.Stdout = os.Stdout
+							cmd3.Stderr = os.Stderr
+
+							if err3 := cmd3.Run(); err3 != nil {
+								return fmt.Errorf("TAR export failed with all methods:\n  by name: %v\n  by ID lookup: %v\n  by search: %v", err, idErr, err3)
+							}
+							logger.Info("Successfully exported using searched image ID")
+							goto success
+						}
+					}
+				}
+			}
+
+			return fmt.Errorf("failed to export to tar: could not find image %s\n  direct push error: %v\n  ID lookup error: %v", image, err, idErr)
+		}
+	} else {
+		logger.Info("Successfully exported using direct buildah push")
 	}
 
+success:
 	logger.Info("Image exported to: %s", config.TarPath)
+
+	// Verify the tar file was created and is not empty
+	if info, err := os.Stat(config.TarPath); err != nil {
+		return fmt.Errorf("TAR file was not created: %v", err)
+	} else if info.Size() == 0 {
+		return fmt.Errorf("TAR file is empty")
+	} else {
+		logger.Debug("TAR file size: %d bytes", info.Size())
+	}
+
 	return nil
 }
 

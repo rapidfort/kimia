@@ -154,7 +154,7 @@ func main() {
 		CustomPlatform:             config.CustomPlatform,
 		Cache:                      config.Cache,
 		CacheDir:                   config.CacheDir,
-		StorageDriver:              config.StorageDriver,
+		StorageDriver:              config.StorageDriver, // Pass storage driver to build
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,
 		InsecureRegistry:           config.InsecureRegistry,
