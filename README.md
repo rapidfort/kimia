@@ -456,6 +456,7 @@ spec:
 | `--cache-dir` | Cache directory path | `--cache-dir=/cache` |
 | `--custom-platform` | Target platform | `--custom-platform=linux/arm64` |
 | `--no-push` | Build only, skip push | `--no-push` |
+| `--reproducible` | Enable reproducible builds by setting consistent timestamps and disabling layer caching | `--reproducible` |
 
 ### Git Options
 

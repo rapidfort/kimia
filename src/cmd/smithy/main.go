@@ -141,6 +141,7 @@ func main() {
 		DigestFile:                 config.DigestFile,
 		ImageNameWithDigestFile:    config.ImageNameWithDigestFile,
 		ImageNameTagWithDigestFile: config.ImageNameTagWithDigestFile,
+		Reproducible:               config.Reproducible,
 	}
 
 	if err := build.Execute(buildConfig, ctx, authFile); err != nil {

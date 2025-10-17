@@ -37,6 +37,7 @@ type Config struct {
 	// Build behavior
 	CustomPlatform string
 	Target         string
+	Reproducible   bool
 
 	// Labels and metadata
 	Labels      map[string]string

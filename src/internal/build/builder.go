@@ -42,6 +42,9 @@ type Config struct {
 	DigestFile                 string
 	ImageNameWithDigestFile    string
 	ImageNameTagWithDigestFile string
+
+	// Reproducible builds
+	Reproducible bool
 }
 
 // Execute executes a buildah build with authentication
@@ -100,7 +103,8 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	}
 
 	// Add cache options
-	if config.Cache {
+	// Note: For reproducible builds, we must run with --no-cache
+	if config.Cache && !config.Reproducible {
 		if config.CacheDir != "" {
 			// Buildah doesn't have direct cache-dir equivalent, but we can use layers
 			args = append(args, "--layers")
@@ -150,6 +154,11 @@ func Execute(config Config, ctx *Context, authFile string) error {
 
 	// Add storage driver
 	cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+
+	// Reproducible builds: set SOURCE_DATE_EPOCH=0 for reproducible timestamps
+	if config.Reproducible {
+		cmd.Env = append(cmd.Env, "SOURCE_DATE_EPOCH=0")
+	}
 
 	if err := cmd.Run(); err != nil {
 		// Enhanced error reporting
