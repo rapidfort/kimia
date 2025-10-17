@@ -7,7 +7,7 @@ set -e
 if [ -z "${RF_APP_HOST}" ]; then
     REGISTRY=ghcr.io
 else
-    REGISTRY=${RF_APP_HOST}:5000}
+    REGISTRY=${RF_APP_HOST}:5000
 fi
 
 # Configuration
@@ -84,7 +84,7 @@ EXAMPLES:
     # Test only VFS driver
     $0 -m docker -s vfs
 
-    # Test only overlay driver  
+    # Test only overlay driver
     $0 -m docker -s overlay
 
     # Run Kubernetes tests with credentials
@@ -342,16 +342,16 @@ create_suites_directory() {
     echo -e "${BLUE}Creating test suites directory...${NC}"
     rm -rf "$SUITES_DIR"
     mkdir -p "$SUITES_DIR"
-    
+
     # Create common utilities script
     create_common_utils
-    
+
     # Create run_all convenience script
     create_run_all_script
-    
+
     # Create README
     create_suites_readme
-    
+
     echo -e "${GREEN}✓ Test suites directory created: $SUITES_DIR${NC}"
     echo ""
 }
@@ -500,11 +500,11 @@ echo ""
 # Run tests
 for script in "${TEST_SCRIPTS[@]}"; do
     TEST_NAME=$(basename "$script")
-    
+
     echo -e "${CYAN}═══════════════════════════════════════════════${NC}"
     log_info "Running: $TEST_NAME"
     echo -e "${CYAN}═══════════════════════════════════════════════${NC}"
-    
+
     if bash "$script"; then
         PASSED_TESTS=$((PASSED_TESTS + 1))
         log_success "PASSED: $TEST_NAME"
@@ -512,7 +512,7 @@ for script in "${TEST_SCRIPTS[@]}"; do
         FAILED_TESTS=$((FAILED_TESTS + 1))
         FAILED_LIST+=("$TEST_NAME")
         log_error "FAILED: $TEST_NAME"
-        
+
         if [ "$STOP_ON_FAIL" = "true" ]; then
             log_error "Stopping execution due to failure"
             break
@@ -638,13 +638,13 @@ README_EOF
 
 generate_docker_tests() {
     local drivers=()
-    
+
     if [ "$STORAGE_DRIVER" = "both" ]; then
         drivers=("vfs" "overlay")
     else
         drivers=("$STORAGE_DRIVER")
     fi
-    
+
     for driver in "${drivers[@]}"; do
         generate_docker_version_check "$driver"
         generate_docker_basic_build "$driver"
@@ -662,7 +662,7 @@ generate_docker_tests() {
 generate_docker_version_check() {
     local driver=$1
     local script_name="docker_version_check_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Docker Test: Version Check [$driver]
@@ -700,7 +700,7 @@ SCRIPT_EOF
 generate_docker_basic_build() {
     local driver=$1
     local script_name="docker_basic_build_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Basic Build [DRIVER]
@@ -759,14 +759,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_build_args() {
     local driver=$1
     local script_name="docker_build_args_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Build Arguments [DRIVER]
@@ -826,14 +826,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_labels() {
     local driver=$1
     local script_name="docker_labels_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Labels [DRIVER]
@@ -889,14 +889,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_multistage() {
     local driver=$1
     local script_name="docker_multistage_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Multi-stage Build [DRIVER]
@@ -955,14 +955,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_git_repo() {
     local driver=$1
     local script_name="docker_git_repo_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Git Repository Build [DRIVER]
@@ -1009,14 +1009,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_cache() {
     local driver=$1
     local script_name="docker_cache_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Cache Build [DRIVER]
@@ -1073,14 +1073,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_tar_export() {
     local driver=$1
     local script_name="docker_tar_export_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: TAR Export [DRIVER]
@@ -1139,14 +1139,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_multiple_dest() {
     local driver=$1
     local script_name="docker_multiple_dest_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Multiple Destinations [DRIVER]
@@ -1201,14 +1201,14 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_docker_platform() {
     local driver=$1
     local script_name="docker_platform_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<'SCRIPT_EOF'
 #!/bin/bash -e
 # Docker Test: Platform Specification [DRIVER]
@@ -1263,19 +1263,19 @@ SCRIPT_EOF
     sed -i "s|REGISTRY_PLACEHOLDER|$REGISTRY|g" "$SUITES_DIR/$script_name"
     sed -i "s|SMITHY_IMAGE_PLACEHOLDER|$SMITHY_IMAGE|g" "$SUITES_DIR/$script_name"
     sed -i "s|DOCKER_CONFIG_DIR_PLACEHOLDER|$DOCKER_CONFIG_DIR|g" "$SUITES_DIR/$script_name"
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_kubernetes_tests() {
     local drivers=()
-    
+
     if [ "$STORAGE_DRIVER" = "both" ]; then
         drivers=("vfs" "overlay")
     else
         drivers=("$STORAGE_DRIVER")
     fi
-    
+
     for driver in "${drivers[@]}"; do
         generate_k8s_version_check "$driver"
         generate_k8s_basic_build "$driver"
@@ -1288,7 +1288,7 @@ generate_kubernetes_tests() {
 generate_k8s_version_check() {
     local driver=$1
     local script_name="kubernetes_version_check_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Kubernetes Test: Version Check [$driver]
@@ -1343,14 +1343,14 @@ else
     exit 1
 fi
 SCRIPT_EOF
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_k8s_basic_build() {
     local driver=$1
     local script_name="kubernetes_basic_build_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Kubernetes Test: Basic Build [$driver]
@@ -1428,14 +1428,14 @@ else
     exit 1
 fi
 SCRIPT_EOF
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_k8s_build_args() {
     local driver=$1
     local script_name="kubernetes_build_args_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Kubernetes Test: Build Arguments [$driver]
@@ -1515,14 +1515,14 @@ else
     exit 1
 fi
 SCRIPT_EOF
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_k8s_git_repo() {
     local driver=$1
     local script_name="kubernetes_git_repo_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Kubernetes Test: Git Repository Build [$driver]
@@ -1596,14 +1596,14 @@ else
     exit 1
 fi
 SCRIPT_EOF
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
 generate_k8s_multistage() {
     local driver=$1
     local script_name="kubernetes_multistage_${driver}.sh"
-    
+
     cat > "$SUITES_DIR/$script_name" <<SCRIPT_EOF
 #!/bin/bash -e
 # Kubernetes Test: Multi-stage Build [$driver]
@@ -1681,7 +1681,7 @@ else
     exit 1
 fi
 SCRIPT_EOF
-    
+
     chmod +x "$SUITES_DIR/$script_name"
 }
 
@@ -1692,7 +1692,7 @@ SCRIPT_EOF
 list_tests() {
     echo -e "${CYAN}Available Test Scripts:${NC}"
     echo ""
-    
+
     if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
         echo -e "${YELLOW}Docker Tests:${NC}"
         ls -1 "$SUITES_DIR"/docker_*.sh 2>/dev/null | while read script; do
@@ -1700,7 +1700,7 @@ list_tests() {
         done
         echo ""
     fi
-    
+
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
         echo -e "${YELLOW}Kubernetes Tests:${NC}"
         ls -1 "$SUITES_DIR"/kubernetes_*.sh 2>/dev/null | while read script; do
@@ -1708,7 +1708,7 @@ list_tests() {
         done
         echo ""
     fi
-    
+
     echo -e "${BLUE}To run a specific test:${NC}"
     echo "  cd $SUITES_DIR"
     echo "  ./docker_basic_build_vfs.sh"
@@ -1719,7 +1719,7 @@ list_tests() {
 
 run_single_test() {
     local test_script="$SUITES_DIR/$SINGLE_TEST"
-    
+
     if [ ! -f "$test_script" ]; then
         echo -e "${RED}Error: Test script not found: $SINGLE_TEST${NC}"
         echo ""
@@ -1727,12 +1727,12 @@ run_single_test() {
         list_tests
         exit 1
     fi
-    
+
     echo -e "${BLUE}Running single test: $SINGLE_TEST${NC}"
     echo ""
-    
+
     bash "$test_script"
-    
+
     if [ $? -eq 0 ]; then
         echo ""
         echo -e "${GREEN}✓ Test passed!${NC}"
@@ -1747,29 +1747,29 @@ run_single_test() {
 run_all_tests() {
     echo -e "${BLUE}Running all tests in blast mode...${NC}"
     echo ""
-    
+
     local test_scripts=()
-    
+
     if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
         while IFS= read -r script; do
             test_scripts+=("$script")
         done < <(ls -1 "$SUITES_DIR"/docker_*.sh 2>/dev/null)
     fi
-    
+
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
         while IFS= read -r script; do
             test_scripts+=("$script")
         done < <(ls -1 "$SUITES_DIR"/kubernetes_*.sh 2>/dev/null)
     fi
-    
+
     TOTAL_TESTS=${#test_scripts[@]}
     PASSED_TESTS=0
     FAILED_TESTS=0
-    
+
     for script in "${test_scripts[@]}"; do
         local test_name=$(basename "$script")
         echo -e "${CYAN}Running: $test_name${NC}"
-        
+
         if bash "$script" 2>&1 | grep -q "SUCCESS"; then
             PASSED_TESTS=$((PASSED_TESTS + 1))
             TEST_RESULTS+=("✓ $test_name")
@@ -1779,7 +1779,7 @@ run_all_tests() {
         fi
         echo ""
     done
-    
+
     # Show summary
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}                          TEST SUMMARY                              ${NC}"
@@ -1790,13 +1790,13 @@ run_all_tests() {
     echo -e "Failed:       ${RED}$FAILED_TESTS${NC}"
     echo "Success Rate: $(( PASSED_TESTS * 100 / TOTAL_TESTS ))%"
     echo ""
-    
+
     echo "Test Results:"
     for result in "${TEST_RESULTS[@]}"; do
         echo "  $result"
     done
     echo ""
-    
+
     if [ $FAILED_TESTS -gt 0 ]; then
         return 1
     fi
@@ -1810,22 +1810,22 @@ run_all_tests() {
 setup_kubernetes() {
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
         echo -e "${BLUE}Setting up Kubernetes resources...${NC}"
-        
+
         # Check kubectl
         if ! command -v kubectl &> /dev/null; then
             echo -e "${RED}Error: kubectl not found${NC}"
             exit 1
         fi
-        
+
         # Check cluster connection
         if ! kubectl cluster-info &> /dev/null; then
             echo -e "${RED}Error: Cannot connect to Kubernetes cluster${NC}"
             exit 1
         fi
-        
+
         # Create namespace
         kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
-        
+
         # Create Docker registry secret
         if [ "$AUTH_MODE" == "credentials" ]; then
             kubectl create secret docker-registry docker-registry-credentials \
@@ -1847,7 +1847,7 @@ setup_kubernetes() {
                 --type=kubernetes.io/dockerconfigjson \
                 --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
         fi
-        
+
         # Create test ConfigMap
         cat > $RF_SMITHY_TMPDIR/Dockerfile.k8s <<EOF
 FROM alpine:latest
@@ -1858,7 +1858,7 @@ EOF
             --namespace=$NAMESPACE \
             --from-file=Dockerfile=$RF_SMITHY_TMPDIR/Dockerfile.k8s \
             --dry-run=client -o yaml | kubectl apply -f - >/dev/null 2>&1
-        
+
         echo -e "${GREEN}✓ Kubernetes setup complete${NC}"
         echo ""
     fi
@@ -1870,14 +1870,14 @@ EOF
 
 main() {
     parse_args "$@"
-    
+
     if [ $# -eq 0 ]; then
         usage
     fi
-    
+
     validate_args
     print_header
-    
+
     echo -e "${BLUE}Configuration:${NC}"
     echo "  Test Mode:        $TEST_MODE"
     echo "  Run Mode:         $RUN_MODE"
@@ -1889,24 +1889,24 @@ main() {
         echo "  K8s Namespace:    $NAMESPACE"
     fi
     echo ""
-    
+
     # Create suites directory and generate test scripts
     create_suites_directory
-    
+
     if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
         echo -e "${BLUE}Generating Docker test scripts...${NC}"
         generate_docker_tests
         echo -e "${GREEN}✓ Docker test scripts generated${NC}"
         echo ""
     fi
-    
+
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
         echo -e "${BLUE}Generating Kubernetes test scripts...${NC}"
         generate_kubernetes_tests
         echo -e "${GREEN}✓ Kubernetes test scripts generated${NC}"
         echo ""
     fi
-    
+
     # Handle run modes
     case $RUN_MODE in
         list)
@@ -1925,17 +1925,17 @@ main() {
             if ! run_all_tests; then
                 EXIT_CODE=1
             fi
-            
+
             if [ "$CLEANUP_AFTER" = true ]; then
                 cleanup_resources
             fi
-            
+
             echo ""
             echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
             echo -e "${CYAN}                        ALL TESTS COMPLETE                          ${NC}"
             echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
             echo ""
-            
+
             if [ $EXIT_CODE -eq 0 ]; then
                 echo -e "${GREEN}✓ All tests completed successfully!${NC}"
                 echo ""
@@ -1950,7 +1950,7 @@ main() {
                 echo "  cd $SUITES_DIR"
                 echo "  ./failed_test_name.sh"
             fi
-            
+
             exit $EXIT_CODE
             ;;
     esac
