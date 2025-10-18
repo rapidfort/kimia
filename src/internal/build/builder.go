@@ -49,6 +49,16 @@ type Config struct {
 
 // Execute executes a buildah build with authentication
 func Execute(config Config, ctx *Context, authFile string) error {
+	// Detect if running as root
+	isRoot := os.Getuid() == 0
+
+	if isRoot {
+		logger.Warning("Running as root (UID 0) - using OCI isolation mode")
+		logger.Warning("For production, use rootless configuration (UID 1000) with SETUID/SETGID capabilities")
+	} else {
+		logger.Debug("Running as non-root (UID %d) - using chroot isolation with user namespaces", os.Getuid())
+	}
+
 	logger.Info("Starting buildah build...")
 
 	// Construct buildah command
@@ -136,9 +146,25 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 
-	// Set BUILDAH_ISOLATION if not already set
+	// =========================================================================
+	// CRITICAL: Set BUILDAH_ISOLATION based on UID
+	// =========================================================================
+	// This is the key to supporting both rootful and rootless modes:
+	// - Root (UID 0): Uses OCI runtime directly, no user namespaces needed
+	// - Non-root (UID 1000+): Uses chroot with user namespaces
+	// =========================================================================
 	if os.Getenv("BUILDAH_ISOLATION") == "" {
-		cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
+		if isRoot {
+			// Root mode: use OCI runtime (doesn't need user namespaces)
+			cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=oci")
+			logger.Debug("Set BUILDAH_ISOLATION=oci for root mode")
+		} else {
+			// Non-root mode: use chroot (with user namespaces)
+			cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
+			logger.Debug("Set BUILDAH_ISOLATION=chroot for rootless mode")
+		}
+	} else {
+		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
 
 	// Enhanced environment setup for auth
@@ -151,15 +177,45 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		)
 	}
 
-	// Add storage driver
-	cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+	// Storage driver configuration
+	storageDriver := config.StorageDriver
+	if storageDriver == "" {
+		storageDriver = "vfs" // Default to VFS for maximum compatibility
+	}
 
+	// Set storage driver environment variable
+	cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
+
+	if isRoot {
+		logger.Debug("Root mode: Using system storage at /var/lib/containers/storage")
+		// Root uses /etc/containers/storage.conf automatically
+	} else {
+		logger.Debug("Rootless mode: Using user storage at ~/.local/share/containers/storage")
+		// Non-root uses ~/.config/containers/storage.conf automatically
+	}
+
+	// Run the build
 	if err := cmd.Run(); err != nil {
-		// Enhanced error reporting
+		// Enhanced error reporting with context
+		if isRoot {
+			logger.Error("Build failed in root mode (UID 0)")
+			logger.Error("Root mode uses OCI isolation without user namespaces")
+			logger.Error("Storage location: /var/lib/containers/storage")
+		} else {
+			logger.Error("Build failed in rootless mode (UID %d)", os.Getuid())
+			logger.Error("Rootless mode requires user namespaces and SETUID/SETGID capabilities")
+			logger.Error("Storage location: ~/.local/share/containers/storage")
+		}
+
+		// Check for specific error types
 		if strings.Contains(err.Error(), "authentication") ||
 			strings.Contains(err.Error(), "unauthorized") {
 			return fmt.Errorf("buildah build failed (authentication issue): %v", err)
 		}
+		if strings.Contains(err.Error(), "unshare") {
+			return fmt.Errorf("buildah build failed (user namespace issue - may need allowPrivilegeEscalation: true in Kubernetes): %v", err)
+		}
+
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
 

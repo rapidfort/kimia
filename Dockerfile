@@ -126,27 +126,53 @@ RUN chmod +x /usr/local/bin/smithy
 RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
     adduser -D -G ${SMITHY_USER} -u ${SMITHY_UID} ${SMITHY_USER}
 
-# Setup subuid/subgid for smithy user
+# Setup subuid/subgid for smithy user (for rootless mode)
 RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
     echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
 
-# Create directories including /tmp/lock (writable!)
-RUN mkdir -p /home/${SMITHY_USER}/.local/share/containers/storage && \
-    mkdir -p /home/${SMITHY_USER}/.config/containers && \
-    mkdir -p /home/${SMITHY_USER}/.docker && \
-    mkdir -p /etc/containers && \
-    mkdir -p /tmp/lock && \
+# ============================================================================
+# Storage and Configuration Setup for BOTH root and rootless modes
+# ============================================================================
+
+# Create root storage directories (for rootful mode)
+RUN mkdir -p /var/lib/containers/storage \
+    /var/run/containers/storage \
+    /etc/containers \
+    /tmp/lock && \
     chmod 1777 /tmp/lock
 
-# Containers config
+# System-wide storage config (for root - UID 0)
+RUN cat > /etc/containers/storage.conf <<'EOF'
+[storage]
+driver="vfs"
+runroot="/var/run/containers/storage"
+graphroot="/var/lib/containers/storage"
+
+[storage.options]
+vfs.ignore_chown_errors="false"
+
+[storage.options.overlay]
+mount_program="/usr/bin/fuse-overlayfs"
+mountopt="nodev,metacopy=on"
+EOF
+
+# System-wide containers config
 RUN cat > /etc/containers/containers.conf <<'EOF'
 [engine]
 events_logger="file"
 network_backend="netavark"
-userns="keep-id"
+
+[engine.runtimes]
+runc = ["/usr/bin/runc"]
+crun = ["/usr/bin/crun"]
 EOF
 
-# Storage config - support both VFS and overlay
+# Create user directories for smithy (for rootless mode)
+RUN mkdir -p /home/${SMITHY_USER}/.local/share/containers/storage && \
+    mkdir -p /home/${SMITHY_USER}/.config/containers && \
+    mkdir -p /home/${SMITHY_USER}/.docker
+
+# User-specific storage config (for rootless - UID 1000)
 RUN cat > /home/${SMITHY_USER}/.config/containers/storage.conf <<'EOF'
 [storage]
 driver="vfs"
@@ -161,7 +187,7 @@ mount_program="/usr/bin/fuse-overlayfs"
 mountopt="nodev,metacopy=on"
 EOF
 
-# Registries config
+# Registries config (user-specific)
 RUN cat > /home/${SMITHY_USER}/.config/containers/registries.conf <<'EOF'
 unqualified-search-registries = ['docker.io', 'quay.io']
 
@@ -172,7 +198,7 @@ location = "docker.io"
 location = "quay.io"
 EOF
 
-# Policy
+# Policy (user-specific)
 RUN cat > /home/${SMITHY_USER}/.config/containers/policy.json <<'EOF'
 {
     "default": [{"type": "insecureAcceptAnything"}]
@@ -201,20 +227,24 @@ RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docke
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-# Set ownership
+# Set ownership for smithy user directories
 RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
 
+# Environment variables
 ENV BUILDAH_LOG_LEVEL=error
-ENV BUILDAH_ISOLATION=chroot
 ENV HOME=/home/smithy
 ENV DOCKER_CONFIG=/home/smithy/.docker
 
+# BUILDAH_ISOLATION is set dynamically by smithy based on UID:
+# - oci for root (UID 0) - doesn't need user namespaces
+# - chroot for non-root (UID 1000+) - uses user namespaces
+
+# Default to non-root user (rootless mode - recommended)
 USER ${SMITHY_UID}:${SMITHY_UID}
 WORKDIR /home/${SMITHY_USER}
 
 ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
 
-# Add at the top of Dockerfile
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
 LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder"
 
