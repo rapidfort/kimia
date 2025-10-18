@@ -168,6 +168,19 @@ parse_args() {
 # Helper Functions
 # ============================================================================
 
+# Cleanup function for interrupts
+cleanup_on_interrupt() {
+    echo ""
+    echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
+    echo -e "${YELLOW}Stopping tests and cleaning up...${NC}"
+    
+    # Kill any running test scripts
+    pkill -P $ 2>/dev/null || true
+    
+    echo -e "${GREEN}✓ Cleanup completed${NC}"
+    exit 130  # Standard exit code for SIGINT
+}
+
 print_header() {
     echo ""
     echo -e "${BLUE}═══════════════════════════════════════════════════════════${NC}"
@@ -317,6 +330,9 @@ main() {
         exit 1
     fi
 }
+
+# Trap interrupt signal
+trap cleanup_on_interrupt INT TERM
 
 # Run main
 main "$@"

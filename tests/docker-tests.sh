@@ -85,14 +85,14 @@ run_test() {
     echo -e "${CYAN}  Command: docker run ${test_cmd}${NC}"
     
     # Create temp directory for this test
-    local test_tmpdir="${RF_SMITHY_TMPDIR}/smithy-docker-test-$$-${TOTAL_TESTS}"
+    local test_tmpdir="${RF_SMITHY_TMPDIR}/smithy-docker-test-$-${TOTAL_TESTS}"
     mkdir -p "${test_tmpdir}"
     
-    # Run the test
+    # Run the test - using eval to properly expand variables
     local start_time=$(date +%s)
     local test_output="${test_tmpdir}/output.log"
     
-    if docker run $test_cmd > "${test_output}" 2>&1; then
+    if eval "docker run $test_cmd" > "${test_output}" 2>&1; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
@@ -126,10 +126,10 @@ run_test() {
 # ============================================================================
 
 create_test_dockerfile() {
-    local dockerfile="${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-$$"
+    local dockerfile="${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-$"
     
     cat > "$dockerfile" <<'EOF'
-FROM alpine:latest
+FROM docker.io/library/alpine:latest
 
 # Install basic tools
 RUN apk add --no-cache curl bash
@@ -165,6 +165,7 @@ run_rootless_tests() {
     print_section "ROOTLESS MODE TESTS (UID 1000) - ${driver^^} STORAGE"
     
     local dockerfile=$(create_test_dockerfile)
+    local dockerfile_name=$(basename "$dockerfile")
     local context_dir=$(dirname "$dockerfile")
     
     # Base Docker run command for rootless
@@ -175,6 +176,7 @@ run_rootless_tests() {
     BASE_CMD="$BASE_CMD --cap-add SETGID"
     BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
     BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
+    BASE_CMD="$BASE_CMD --device /dev/fuse"
     BASE_CMD="$BASE_CMD -e HOME=/home/smithy"
     BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/home/smithy/.docker"
     BASE_CMD="$BASE_CMD -v ${context_dir}:/workspace:ro"
@@ -203,7 +205,7 @@ run_rootless_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootless-basic-${driver}:latest \
         --storage-driver=$driver \
         --no-push \
@@ -216,7 +218,7 @@ run_rootless_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootless-buildargs-${driver}:latest \
         --build-arg=VERSION=2.0 \
         --build-arg=BUILD_DATE=$(date +%Y%m%d) \
@@ -231,7 +233,7 @@ run_rootless_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootless-labels-${driver}:latest \
         --label=test=true \
         --label=storage=${driver} \
@@ -267,14 +269,18 @@ run_rootful_tests() {
     print_section "ROOTFUL MODE TESTS (UID 0) - ${driver^^} STORAGE"
     
     local dockerfile=$(create_test_dockerfile)
+    local dockerfile_name=$(basename "$dockerfile")
     local context_dir=$(dirname "$dockerfile")
     
     # Base Docker run command for rootful
     local BASE_CMD="--rm"
     BASE_CMD="$BASE_CMD --user 0:0"
     BASE_CMD="$BASE_CMD --privileged"
+    BASE_CMD="$BASE_CMD --device /dev/fuse"
     BASE_CMD="$BASE_CMD -e HOME=/root"
     BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/root/.docker"
+    # Mount smithy's policy.json for root to use
+    BASE_CMD="$BASE_CMD -v /home/smithy/.config/containers/policy.json:/root/.config/containers/policy.json:ro"
     BASE_CMD="$BASE_CMD -v ${context_dir}:/workspace:ro"
     BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
     
@@ -301,7 +307,7 @@ run_rootful_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootful-basic-${driver}:latest \
         --storage-driver=$driver \
         --no-push \
@@ -314,7 +320,7 @@ run_rootful_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootful-buildargs-${driver}:latest \
         --build-arg=VERSION=2.0 \
         --build-arg=BUILD_DATE=$(date +%Y%m%d) \
@@ -329,7 +335,7 @@ run_rootful_tests() {
         "$driver" \
         $BASE_CMD \
         --context=/workspace \
-        --dockerfile=Dockerfile.smithy-test-$$ \
+        --dockerfile=${dockerfile_name} \
         --destination=test-rootful-labels-${driver}:latest \
         --label=test=true \
         --label=storage=${driver} \
@@ -371,6 +377,26 @@ cleanup() {
         
         echo -e "${GREEN}✓ Cleanup completed${NC}"
     fi
+}
+
+# Cleanup function for interrupts
+cleanup_on_interrupt() {
+    echo ""
+    echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
+    echo -e "${YELLOW}Cleaning up...${NC}"
+    
+    # Stop any running containers
+    docker ps -q --filter "ancestor=${SMITHY_IMAGE}" | xargs -r docker stop 2>/dev/null || true
+    
+    # Remove test images
+    docker images | grep "test-root" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
+    
+    # Remove test files
+    rm -f ${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-* 2>/dev/null || true
+    rm -rf ${RF_SMITHY_TMPDIR}/smithy-docker-test-* 2>/dev/null || true
+    
+    echo -e "${GREEN}✓ Cleanup completed${NC}"
+    exit 130  # Standard exit code for SIGINT
 }
 
 # ============================================================================
@@ -451,8 +477,9 @@ main() {
     exit 0
 }
 
-# Trap cleanup on exit
+# Trap cleanup on exit and interrupt
 trap cleanup EXIT
+trap cleanup_on_interrupt INT TERM
 
 # Run main
 main

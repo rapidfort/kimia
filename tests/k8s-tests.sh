@@ -437,6 +437,25 @@ cleanup() {
     fi
 }
 
+# Cleanup function for interrupts
+cleanup_on_interrupt() {
+    echo ""
+    echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
+    echo -e "${YELLOW}Cleaning up...${NC}"
+    
+    # Delete all test jobs
+    kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
+    
+    # Delete namespace
+    kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+    
+    # Remove temp files
+    rm -f /tmp/smithy-job-*.yaml 2>/dev/null || true
+    
+    echo -e "${GREEN}✓ Cleanup completed${NC}"
+    exit 130  # Standard exit code for SIGINT
+}
+
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -513,8 +532,9 @@ main() {
     fi
 }
 
-# Trap cleanup on exit
+# Trap cleanup on exit and interrupt
 trap cleanup EXIT
+trap cleanup_on_interrupt INT TERM
 
 # Run main
 main

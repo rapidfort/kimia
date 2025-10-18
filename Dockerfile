@@ -130,6 +130,22 @@ RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
 RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
     echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
 
+# System-wide policy (for root - UID 0)
+RUN mkdir -p /etc/containers && \
+    cat > /etc/containers/policy.json <<'EOF'
+{
+    "default": [{"type": "insecureAcceptAnything"}]
+}
+EOF
+
+# Also create for root's home directory
+RUN mkdir -p /root/.config/containers && \
+    cat > /root/.config/containers/policy.json <<'EOF'
+{
+    "default": [{"type": "insecureAcceptAnything"}]
+}
+EOF
+
 # ============================================================================
 # Storage and Configuration Setup for BOTH root and rootless modes
 # ============================================================================
