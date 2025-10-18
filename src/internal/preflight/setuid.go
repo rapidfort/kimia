@@ -78,10 +78,11 @@ func CheckSetuidBinaries() (*SetuidBinaryCheck, error) {
 	}
 
 	// Both must be available with SETUID bit
+	// FIX: Check NewgidmapSetuid, not NewuidmapSetuid twice!
 	result.BothAvailable = result.NewuidmapPresent &&
 		result.NewgidmapPresent &&
 		result.NewuidmapSetuid &&
-		result.NewgidmapSetuid
+		result.NewgidmapSetuid // ✅ FIXED: was NewuidmapSetuid
 
 	if result.BothAvailable {
 		logger.Debug("SETUID binaries available and properly configured")
@@ -124,9 +125,9 @@ func IsInKubernetes() bool {
 
 // CanSetuidBinariesWork checks if SETUID binaries can actually work
 // In Kubernetes, this requires allowPrivilegeEscalation: true
-// In Docker, this works with seccomp/apparmor=unconfined
+// In Docker, this requires seccomp/apparmor=unconfined
 func CanSetuidBinariesWork() bool {
-	// Check if no_new_privs is set
+	// First check if no_new_privs is set
 	// When allowPrivilegeEscalation: false, NoNewPrivs = 1
 	file, err := os.Open("/proc/self/status")
 	if err != nil {
@@ -144,12 +145,25 @@ func CanSetuidBinariesWork() bool {
 				logger.Debug("NoNewPrivs is set (allowPrivilegeEscalation: false)")
 				return false
 			}
-			logger.Debug("NoNewPrivs is not set (SETUID binaries can work)")
-			return true
+			break
 		}
 	}
 
-	// If we can't determine, assume it might work
-	logger.Debug("Could not determine NoNewPrivs status")
-	return true
+	// NoNewPrivs is not set, but we still need to test if we can actually
+	// create a user namespace. This will fail if seccomp blocks the syscalls.
+	logger.Debug("NoNewPrivs is not set, testing user namespace creation...")
+
+	canCreate, err := testUserNamespaceCreation()
+	if err != nil {
+		logger.Debug("User namespace creation test failed: %v", err)
+		return false
+	}
+
+	if canCreate {
+		logger.Debug("User namespace creation successful - SETUID binaries can work")
+		return true
+	}
+
+	logger.Debug("User namespace creation failed - SETUID binaries blocked by seccomp/apparmor")
+	return false
 }

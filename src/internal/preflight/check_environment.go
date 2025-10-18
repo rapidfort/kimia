@@ -52,16 +52,16 @@ func CheckEnvironment() int {
 		logger.Info("  CAP_SETGID:              %s %s", getPresence(caps.HasSetGID), getCheckmark(caps.HasSetGID))
 		logger.Info("  Effective Caps:          %s", caps.FormatCapabilities())
 
-		if !isRoot && !caps.HasRequiredCapabilities() {
-			allGood = false
-		}
+		// DON'T set allGood=false yet - check SETUID binaries first!
 	}
 	logger.Info("")
 
 	// User Namespaces (only for non-root)
+	var userns *UserNamespaceCheck
 	if !isRoot {
 		logger.Info("USER NAMESPACES")
-		userns, err := CheckUserNamespaces()
+		var err error
+		userns, err = CheckUserNamespaces()
 		if err != nil {
 			logger.Error("  Error: %v", err)
 			allGood = false
@@ -85,9 +85,7 @@ func CheckEnvironment() int {
 
 			logger.Info("  Namespace Creation:      %s %s", getSuccess(userns.CanCreate), getCheckmark(userns.CanCreate))
 
-			if !userns.IsUserNamespaceReady() {
-				allGood = false
-			}
+			// Don't fail yet - check if we can build via other means
 		}
 		logger.Info("")
 	}
@@ -147,30 +145,47 @@ func CheckEnvironment() int {
 	}
 	logger.Info("")
 
-	// Show SETUID binary check in BUILD MODE section
+	// BUILD MODE - Check if we can actually build
 	fmt.Println("BUILD MODE")
 
-	if allGood {
-		if isRoot {
-			fmt.Println("  Available Modes:         Root ✓")
-		} else {
-			// Check which method is available
-			hasRequiredCaps := caps != nil && caps.HasRequiredCapabilities()
-			setuidBins, _ := CheckSetuidBinaries()
-			hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
+	// For non-root, check BOTH capabilities AND SETUID binaries
+	var buildModeAvailable bool
+	var buildModeMethod string
 
-			if hasRequiredCaps {
-				fmt.Println("  Available Modes:         Rootless (via capabilities) ✓")
-			} else if hasSetuidBins {
-				fmt.Println("  Available Modes:         Rootless (via SETUID binaries) ✓")
-				fmt.Printf("    newuidmap:             %s\n", setuidBins.NewuidmapPath)
-				fmt.Printf("    newgidmap:             %s\n", setuidBins.NewgidmapPath)
-			} else {
-				fmt.Println("  Available Modes:         None ✗")
-			}
-		}
+	if isRoot {
+		buildModeAvailable = true
+		buildModeMethod = "Root"
 	} else {
-		fmt.Println("  Available Modes:         None ✗")
+		// Check capabilities
+		hasRequiredCaps := caps != nil && caps.HasRequiredCapabilities()
+
+		// Check SETUID binaries
+		setuidBins, _ := CheckSetuidBinaries()
+		hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
+		setuidCanWork := CanSetuidBinariesWork()
+
+		// Check if user namespaces work
+		usernsOK := userns != nil && userns.IsUserNamespaceReady()
+
+		if hasRequiredCaps && usernsOK {
+			buildModeAvailable = true
+			buildModeMethod = "Rootless (via capabilities)"
+		} else if hasSetuidBins && setuidCanWork && usernsOK {
+			buildModeAvailable = true
+			buildModeMethod = "Rootless (via SETUID binaries)"
+			fmt.Printf("    newuidmap:             %s\n", setuidBins.NewuidmapPath)
+			fmt.Printf("    newgidmap:             %s\n", setuidBins.NewgidmapPath)
+		} else {
+			buildModeAvailable = false
+			buildModeMethod = "None"
+			allGood = false // NOW we set allGood = false
+		}
+	}
+
+	if buildModeAvailable {
+		fmt.Printf("  Available Modes:         %s ✓\n", buildModeMethod)
+	} else {
+		fmt.Printf("  Available Modes:         %s ✗\n", buildModeMethod)
 	}
 
 	logger.Info("")
@@ -204,6 +219,7 @@ func CheckEnvironment() int {
 	// Verdict
 	logger.Info("VERDICT")
 	logger.Info("═══════════════════════════════════════════════════════════")
+	logger.Info("")
 
 	if allGood {
 		logger.Info("✓ Environment is properly configured for building images")
@@ -214,7 +230,7 @@ func CheckEnvironment() int {
 			logger.Warning("⚠  SECURITY WARNING: Running as root")
 			logger.Warning("   Consider rootless mode for production")
 		} else {
-			logger.Info("✓ Rootless mode available (recommended)")
+			logger.Info("✓ %s", buildModeMethod)
 			if storage != nil && storage.OverlayAvailable {
 				logger.Info("✓ Overlay storage available for better performance")
 			} else {
@@ -227,12 +243,17 @@ func CheckEnvironment() int {
 		return 0
 	} else {
 		logger.Error("✗ Environment is NOT configured for building")
+		logger.Error("Cannot proceed with build until environment is fixed.")
 		logger.Info("")
 		logger.Info("REQUIRED ACTIONS:")
 		logger.Info("")
 
 		if !isRoot {
-			if caps == nil || !caps.HasRequiredCapabilities() {
+			hasRequiredCaps := caps != nil && caps.HasRequiredCapabilities()
+			setuidBins, _ := CheckSetuidBinaries()
+			hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
+
+			if !hasRequiredCaps && !hasSetuidBins {
 				logger.Info("Enable Rootless Mode (Recommended):")
 				logger.Info("  Add to Kubernetes SecurityContext:")
 				logger.Info("    runAsUser: 1000")
@@ -242,6 +263,14 @@ func CheckEnvironment() int {
 				logger.Info("      drop: [ALL]")
 				logger.Info("      add: [SETUID, SETGID]")
 				logger.Info("")
+				logger.Info("  Or for Docker:")
+				logger.Info("    docker run --user 1000:1000 \\")
+				logger.Info("      --cap-drop ALL \\")
+				logger.Info("      --cap-add SETUID \\")
+				logger.Info("      --cap-add SETGID \\")
+				logger.Info("      --security-opt seccomp=unconfined \\")
+				logger.Info("      --security-opt apparmor=unconfined")
+				logger.Info("")
 			}
 		}
 
@@ -249,7 +278,7 @@ func CheckEnvironment() int {
 		logger.Info("  Add to Kubernetes SecurityContext:")
 		logger.Info("    runAsUser: 0")
 		logger.Info("")
-		logger.Error("Cannot proceed with build until environment is fixed.")
+
 		return 1
 	}
 }
