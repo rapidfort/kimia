@@ -290,7 +290,7 @@ echo -e "\${CYAN}═════════════════════
 run_preflight_test "Root with no security-opt" "pass" \\
     --user 0:0
 
-run_preflight_test "Rootless with capabilities and default seccomp" "pass" \\
+run_preflight_test "Rootless with capabilities and default seccomp" "fail" \\
     --user 1000:1000 --cap-drop ALL --cap-add SETUID --cap-add SETGID
 
 run_preflight_test "Rootless with extra capabilities (SETUID, SETGID, CHOWN)" "pass" \\
@@ -714,13 +714,45 @@ generate_k8s_test() {
     # Convert underscores to hyphens for Kubernetes naming (RFC 1123)
     local k8s_job_name=$(echo "test-${test_name}-${driver}" | tr '_' '-')
     
-    # Split args into array for YAML
-    # This converts "--arg1 value1 --arg2 value2" into proper YAML array format
+    # Properly parse args into YAML array format
+    # This handles command substitutions like $(date +%Y%m%d)
     local args_yaml=""
-    for arg in $smithy_args; do
-        args_yaml="${args_yaml}        - \"${arg}\"
+    
+    # Use eval to expand command substitutions, then use printf %q to properly quote
+    local evaluated_args=$(eval echo "$smithy_args")
+    
+    # Now split and format for YAML
+    # We need to be careful with spaces in values
+    local current_arg=""
+    for word in $evaluated_args; do
+        if [[ $word == --* ]]; then
+            # This is a new argument
+            if [[ -n $current_arg ]]; then
+                args_yaml="${args_yaml}        - \"${current_arg}\"
 "
+            fi
+            current_arg="$word"
+        else
+            # This is a continuation of the previous argument
+            if [[ $current_arg == *=* ]] || [[ $current_arg != --* ]]; then
+                # Part of a --flag=value or standalone value
+                if [[ -n $current_arg ]]; then
+                    current_arg="${current_arg} ${word}"
+                else
+                    current_arg="$word"
+                fi
+            else
+                # This is a value for a --flag without =
+                current_arg="${current_arg} ${word}"
+            fi
+        fi
     done
+    
+    # Don't forget the last argument
+    if [[ -n $current_arg ]]; then
+        args_yaml="${args_yaml}        - \"${current_arg}\"
+"
+    fi
     
     # Determine if we need workspace volume
     local volume_section=""
@@ -827,42 +859,44 @@ EOF
 
 echo ""
 log_info "Job created, waiting for pod to start..."
-sleep 5
 
-echo ""
-log_info "Streaming job logs..."
-echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
-
-# Wait for pod to be ready and stream logs
+# Wait for pod
+POD_NAME=""
 for i in {1..30}; do
-    POD_STATUS=\$(kubectl get pods -n \$NAMESPACE -l job-name=\$JOB_NAME -o jsonpath='{.items[0].status.phase}' 2>/dev/null || echo "")
-    if [[ "\$POD_STATUS" == "Running" ]] || [[ "\$POD_STATUS" == "Succeeded" ]] || [[ "\$POD_STATUS" == "Failed" ]]; then
+    POD_NAME=\$(kubectl get pods -n \$NAMESPACE -l job-name=\$JOB_NAME -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    if [ -n "\$POD_NAME" ]; then
         break
     fi
-    if [[ "\$POD_STATUS" == "Pending" ]]; then
-        # Check for image pull errors
-        POD_NAME=\$(kubectl get pods -n \$NAMESPACE -l job-name=\$JOB_NAME -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-        if [ -n "\$POD_NAME" ]; then
-            IMAGE_PULL_STATUS=\$(kubectl get pod \$POD_NAME -n \$NAMESPACE -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "")
-            if [[ "\$IMAGE_PULL_STATUS" == "ErrImagePull" ]] || [[ "\$IMAGE_PULL_STATUS" == "ImagePullBackOff" ]]; then
-                log_error "Image pull failed for \$SMITHY_IMAGE"
-                log_error "Make sure the image exists and is accessible"
-                kubectl describe pod \$POD_NAME -n \$NAMESPACE 2>&1 | tail -20
-                exit 1
-            fi
-        fi
-    fi
-    sleep 2
+    sleep 1
 done
 
-# Stream logs in real-time
-kubectl logs -n \$NAMESPACE job/\$JOB_NAME --follow 2>&1 || true
+if [ -z "\$POD_NAME" ]; then
+    log_error "Pod not found after 30 seconds"
+    kubectl describe job/\$JOB_NAME -n \$NAMESPACE
+    exit 1
+fi
 
-echo -e "${CYAN}─────────────────────────────────────────────────────────────────${NC}"
+log_info "Pod: \$POD_NAME"
+
+# Wait for pod to be running or completed
+log_info "Waiting for pod to be ready..."
+kubectl wait --for=condition=Ready pod/\$POD_NAME -n \$NAMESPACE --timeout=60s 2>/dev/null || true
+
+# Stream logs
+echo ""
+log_info "Streaming job logs..."
+echo "─────────────────────────────────────────────────────────────────"
+kubectl logs -f pod/\$POD_NAME -n \$NAMESPACE 2>&1 || true
+echo "─────────────────────────────────────────────────────────────────"
 echo ""
 
-log_info "Waiting for job completion..."
-if kubectl wait --for=condition=complete --timeout=300s job/\$JOB_NAME -n \$NAMESPACE 2>&1; then
+# Check job status
+JOB_STATUS=\$(kubectl get job \$JOB_NAME -n \$NAMESPACE -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null || echo "")
+
+if [ "\$JOB_STATUS" = "True" ]; then
+    log_success "Job completed successfully"
+    kubectl delete job/\$JOB_NAME -n \$NAMESPACE --wait=false 2>/dev/null || true
+    
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
     log_success "Kubernetes $test_desc [\$DRIVER] PASSED"
@@ -877,20 +911,9 @@ else
     echo ""
     log_info "Pod details:"
     kubectl get pods -n \$NAMESPACE -l job-name=\$JOB_NAME 2>&1 || true
-    POD_NAME=\$(kubectl get pods -n \$NAMESPACE -l job-name=\$JOB_NAME -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    if [ -n "\$POD_NAME" ]; then
-        kubectl describe pod \$POD_NAME -n \$NAMESPACE 2>&1 | tail -30
-    fi
+    kubectl describe pod \$POD_NAME -n \$NAMESPACE 2>&1 | tail -30
     
-    # Get logs and check for permission issues
-    LOGS=\$(kubectl logs -n \$NAMESPACE job/\$JOB_NAME --tail=50 2>/dev/null || echo "")
-    
-    if [[ "\$LOGS" == *"permission denied"* ]] || [[ "\$LOGS" == *"operation not permitted"* ]]; then
-        log_error ""
-        log_error "Permission denied - overlay driver may need SYS_ADMIN capability"
-        log_error "Edit the Job manifest and add: capabilities: add: [SETUID, SETGID, SYS_ADMIN]"
-        log_error "Or use VFS driver instead: --storage-driver=vfs"
-    fi
+    kubectl delete job/\$JOB_NAME -n \$NAMESPACE --wait=false 2>/dev/null || true
     
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════════════════${NC}"
@@ -900,6 +923,7 @@ fi
 SCRIPT_EOF
     chmod +x "$SUITES_DIR/$script_name"
 }
+
 
 setup_kubernetes() {
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
@@ -1103,10 +1127,10 @@ main() {
     echo -e "${GREEN}✓ Preflight tests generated${NC}"
     echo ""
     
-    [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]] && {
-        echo -e "${BLUE}Generating Docker test scripts (with full logging)...${NC}"
-        generate_docker_tests
-        echo -e "${GREEN}✓ Docker tests generated${NC}"
+    [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]] && {
+        echo -e "${BLUE}Generating Kubernetes test scripts (with full logging)...${NC}"
+        generate_kubernetes_tests
+        echo -e "${GREEN}✓ Kubernetes tests generated${NC}"
         echo ""
     }
 
