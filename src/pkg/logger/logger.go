@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	logLevel    = "info"
-	logDebug    *log.Logger
-	logInfo     *log.Logger
-	logWarn     *log.Logger
-	logError    *log.Logger
-	logFatal    *log.Logger
+	logLevel = "info"
+	logDebug *log.Logger
+	logInfo  *log.Logger
+	logWarn  *log.Logger
+	logError *log.Logger
+	logFatal *log.Logger
 )
 
 func Setup(verbosity string, timestamp bool) {

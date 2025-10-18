@@ -138,6 +138,197 @@ parse_args() {
 }
 
 # ============================================================================
+# Generate Preflight Validation Tests
+# ============================================================================
+
+generate_preflight_tests() {
+    echo -e "${BLUE}Generating preflight validation tests...${NC}"
+    
+    cat > "$SUITES_DIR/preflight_validation.sh" <<PREFLIGHT_EOF
+#!/bin/bash
+# Preflight Validation Tests - All Capability Scenarios
+
+set -e
+
+SCRIPT_DIR="\$( cd "\$( dirname "\${BASH_SOURCE[0]}" )" && pwd )"
+source "\${SCRIPT_DIR}/common.sh"
+
+REGISTRY="${REGISTRY}"
+SMITHY_IMAGE="${SMITHY_IMAGE}"
+
+echo ""
+echo -e "\${BLUE}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${BLUE}       PREFLIGHT VALIDATION TEST SUITE                     \${NC}"
+echo -e "\${BLUE}═══════════════════════════════════════════════════════════\${NC}"
+echo ""
+echo "Registry: \$REGISTRY"
+echo "Smithy Image: \$SMITHY_IMAGE"
+echo ""
+
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
+
+run_preflight_test() {
+    local test_name=\$1
+    local expected_result=\$2
+    shift 2
+    local docker_args=("\$@")
+    
+    TOTAL_TESTS=\$((TOTAL_TESTS + 1))
+    
+    echo ""
+    echo -e "\${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+    echo -e "\${YELLOW}Test #\${TOTAL_TESTS}: \${test_name}\${NC}"
+    echo -e "\${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+    echo "Expected: \$expected_result"
+    echo "Command: docker run \${docker_args[*]} \$SMITHY_IMAGE check-environment"
+    echo ""
+    
+    local output_file="/tmp/preflight-test-\$\$.log"
+    local actual_result="fail"
+    
+    if docker run --rm "\${docker_args[@]}" "\$SMITHY_IMAGE" check-environment > "\$output_file" 2>&1; then
+        actual_result="pass"
+    else
+        actual_result="fail"
+    fi
+    
+    echo -e "\${BLUE}Output:\${NC}"
+    cat "\$output_file"
+    echo ""
+    
+    if [ "\$expected_result" = "\$actual_result" ]; then
+        echo -e "\${GREEN}✓ PASS\${NC} - Got expected result: \$actual_result"
+        PASSED_TESTS=\$((PASSED_TESTS + 1))
+        rm -f "\$output_file"
+        return 0
+    else
+        echo -e "\${RED}✗ FAIL\${NC} - Expected \$expected_result, got \$actual_result"
+        FAILED_TESTS=\$((FAILED_TESTS + 1))
+        rm -f "\$output_file"
+        return 1
+    fi
+}
+
+# ROOT MODE TESTS
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  ROOT MODE TESTS                                          \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+
+run_preflight_test "Root mode with VFS" "pass" \\
+    --user 0:0 --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Root mode without explicit capabilities" "pass" \\
+    --user 0:0 --cap-drop ALL --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Root mode with unnecessary capabilities" "pass" \\
+    --user 0:0 --cap-drop ALL --cap-add SETUID --cap-add SETGID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+# ROOTLESS SUCCESS CASES
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  ROOTLESS MODE - SUCCESS CASES                            \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+
+run_preflight_test "Rootless with SETUID and SETGID" "pass" \\
+    --user 1000:1000 --cap-drop ALL --cap-add SETUID --cap-add SETGID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Rootless with all capabilities (privileged)" "pass" \\
+    --user 1000:1000 --privileged --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+# ROOTLESS FAILURE CASES
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  ROOTLESS MODE - FAILURE CASES                            \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+
+run_preflight_test "Rootless without capabilities" "fail" \\
+    --user 1000:1000 --cap-drop ALL --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Rootless with only SETUID" "fail" \\
+    --user 1000:1000 --cap-drop ALL --cap-add SETUID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Rootless with only SETGID" "fail" \\
+    --user 1000:1000 --cap-drop ALL --cap-add SETGID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Rootless with wrong capabilities (CHOWN, DAC_OVERRIDE)" "fail" \\
+    --user 1000:1000 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "Rootless with NET_ADMIN only" "fail" \\
+    --user 1000:1000 --cap-drop ALL --cap-add NET_ADMIN \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+# DIFFERENT USER IDS
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  DIFFERENT USER IDS                                        \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+
+run_preflight_test "UID 999 with capabilities" "pass" \\
+    --user 999:999 --cap-drop ALL --cap-add SETUID --cap-add SETGID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "UID 65534 (nobody) with capabilities" "pass" \\
+    --user 65534:65534 --cap-drop ALL --cap-add SETUID --cap-add SETGID \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+run_preflight_test "UID 2000 without capabilities" "fail" \\
+    --user 2000:2000 --cap-drop ALL --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+# EDGE CASES
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  EDGE CASES                                                \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+
+run_preflight_test "Root with no security-opt" "pass" \\
+    --user 0:0
+
+run_preflight_test "Rootless with capabilities and default seccomp" "pass" \\
+    --user 1000:1000 --cap-drop ALL --cap-add SETUID --cap-add SETGID
+
+run_preflight_test "Rootless with extra capabilities (SETUID, SETGID, CHOWN)" "pass" \\
+    --user 1000:1000 --cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN \\
+    --security-opt seccomp=unconfined --security-opt apparmor=unconfined
+
+# SUMMARY
+echo ""
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}                    TEST SUMMARY                           \${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════════\${NC}"
+echo ""
+echo "Total Tests:  \$TOTAL_TESTS"
+echo -e "Passed:       \${GREEN}\$PASSED_TESTS\${NC}"
+echo -e "Failed:       \${RED}\$FAILED_TESTS\${NC}"
+echo ""
+
+if [ \$TOTAL_TESTS -gt 0 ]; then
+    SUCCESS_RATE=\$(( PASSED_TESTS * 100 / TOTAL_TESTS ))
+    echo "Success Rate: \${SUCCESS_RATE}%"
+    echo ""
+fi
+
+if [ \$FAILED_TESTS -eq 0 ]; then
+    echo -e "\${GREEN}✓ All preflight validation tests PASSED!\${NC}"
+    exit 0
+else
+    echo -e "\${RED}✗ Some tests FAILED\${NC}"
+    exit 1
+fi
+PREFLIGHT_EOF
+    
+    chmod +x "$SUITES_DIR/preflight_validation.sh"
+    echo -e "${GREEN}✓ Generated preflight_validation.sh${NC}"
+}
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -268,6 +459,7 @@ create_suites_directory() {
         echo -e "${BLUE}Suites directory exists, updating scripts...${NC}"
         rm -f "$SUITES_DIR"/docker_*.sh 2>/dev/null || true
         rm -f "$SUITES_DIR"/kubernetes_*.sh 2>/dev/null || true
+        rm -f "$SUITES_DIR"/preflight_validation.sh 2>/dev/null || true  # ADD THIS LINE
     fi
     
     create_common_utils
@@ -765,13 +957,12 @@ list_tests() {
     echo -e "${CYAN}Available Test Scripts (All show full logs):${NC}"
     echo ""
     
-    if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
-        echo -e "${YELLOW}Docker Tests:${NC}"
-        ls -1 "$SUITES_DIR"/docker_*.sh 2>/dev/null | while read script; do
-            echo "  $(basename "$script")"
-        done
-        echo ""
+    # ADD THIS SECTION
+    echo -e "${YELLOW}Preflight Validation Tests:${NC}"
+    if [ -f "$SUITES_DIR/preflight_validation.sh" ]; then
+        echo "  preflight_validation.sh    (16 tests: root, rootless, capabilities)"
     fi
+    echo ""
     
     if [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]]; then
         echo -e "${YELLOW}Kubernetes Tests:${NC}"
@@ -807,11 +998,26 @@ run_all_tests() {
     echo ""
     
     local test_scripts=()
-    [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]] && \
-        while IFS= read -r script; do test_scripts+=("$script"); done < <(ls -1 "$SUITES_DIR"/docker_*.sh 2>/dev/null)
+
+    if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
+        if [ -f "$SUITES_DIR/preflight_validation.sh" ]; then
+            test_scripts+=("$SUITES_DIR/preflight_validation.sh")
+        fi
+    fi
+
+    if [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]]; then
+        while IFS= read -r script; do 
+            local script_name=$(basename "$script")
+            if [[ "$script_name" != "preflight_validation.sh" && "$script_name" != "common.sh" && "$script_name" != "README.md" ]]; then
+                test_scripts+=("$script")
+            fi
+        done < <(ls -1 "$SUITES_DIR"/docker_*.sh 2>/dev/null || true)
+    fi
+
+    # Add Kubernetes tests
     [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]] && \
-        while IFS= read -r script; do test_scripts+=("$script"); done < <(ls -1 "$SUITES_DIR"/kubernetes_*.sh 2>/dev/null)
-    
+        while IFS= read -r script; do test_scripts+=("$script"); done < <(ls -1 "$SUITES_DIR"/kubernetes_*.sh 2>/dev/null || true)
+
     TOTAL_TESTS=${#test_scripts[@]}
     PASSED_TESTS=0
     FAILED_TESTS=0
@@ -891,13 +1097,19 @@ main() {
         echo ""
     }
     
-    [[ "$TEST_MODE" == "kubernetes" || "$TEST_MODE" == "both" ]] && {
-        echo -e "${BLUE}Generating Kubernetes test scripts (with full logging)...${NC}"
-        generate_kubernetes_tests
-        echo -e "${GREEN}✓ Kubernetes tests generated${NC}"
+    # Generate preflight validation tests
+    echo -e "${BLUE}Generating preflight validation tests...${NC}"
+    generate_preflight_tests
+    echo -e "${GREEN}✓ Preflight tests generated${NC}"
+    echo ""
+    
+    [[ "$TEST_MODE" == "docker" || "$TEST_MODE" == "both" ]] && {
+        echo -e "${BLUE}Generating Docker test scripts (with full logging)...${NC}"
+        generate_docker_tests
+        echo -e "${GREEN}✓ Docker tests generated${NC}"
         echo ""
     }
-    
+
     case $RUN_MODE in
         list) list_tests; exit 0 ;;
         single)

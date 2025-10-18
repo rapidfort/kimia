@@ -8,6 +8,7 @@ import (
 
 	"github.com/rapidfort/smithy/internal/auth"
 	"github.com/rapidfort/smithy/internal/build"
+    "github.com/rapidfort/smithy/internal/preflight"
 	"github.com/rapidfort/smithy/pkg/logger"
 )
 
