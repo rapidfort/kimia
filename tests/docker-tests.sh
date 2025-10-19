@@ -279,8 +279,6 @@ run_rootful_tests() {
     BASE_CMD="$BASE_CMD --device /dev/fuse"
     BASE_CMD="$BASE_CMD -e HOME=/root"
     BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/root/.docker"
-    # Mount smithy's policy.json for root to use
-    BASE_CMD="$BASE_CMD -v /home/smithy/.config/containers/policy.json:/root/.config/containers/policy.json:ro"
     BASE_CMD="$BASE_CMD -v ${context_dir}:/workspace:ro"
     BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
     

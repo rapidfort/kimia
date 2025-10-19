@@ -146,6 +146,17 @@ RUN mkdir -p /root/.config/containers && \
 }
 EOF
 
+# System-wide registries config (for root - UID 0)  
+RUN cat > /etc/containers/registries.conf <<'EOF'
+unqualified-search-registries = ['docker.io', 'quay.io']
+
+[[registry]]
+location = "docker.io"
+
+[[registry]]
+location = "quay.io"
+EOF
+
 # ============================================================================
 # Storage and Configuration Setup for BOTH root and rootless modes
 # ============================================================================
