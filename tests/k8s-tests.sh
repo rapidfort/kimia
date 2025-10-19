@@ -154,7 +154,7 @@ spec:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
-            add: [SETUID, SETGID]
+            add: [SETUID, SETGID, MKNOD]
         
         env:
         - name: HOME
@@ -204,7 +204,10 @@ spec:
         
         securityContext:
           runAsUser: 0
-          privileged: true
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID, MKNOD, SYS_ADMIN]
         
         env:
         - name: HOME
@@ -283,38 +286,28 @@ run_k8s_test() {
     
     # Stream logs
     local start_time=$(date +%s)
-    echo -e "${CYAN}  Streaming logs...${NC}"
     
-    # Wait for pod to be running first
-    kubectl wait --for=condition=Ready pod/${pod_name} -n ${NAMESPACE} --timeout=60s &> /dev/null || true
+    # Stream logs in background while waiting for completion
+    echo -e "${CYAN}  Build output:${NC}"
+    kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' &
+    local logs_pid=$!
     
-    # Stream logs - always show them
-    echo -e "${CYAN}  Streaming logs...${NC}"
-    kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
-    
-    # Wait for job completion
-    echo -e "${CYAN}  Waiting for job completion...${NC}"
+    # Wait for job to complete (not pod to be ready)
     if kubectl wait --for=condition=complete job/${job_name} -n ${NAMESPACE} --timeout=${JOB_TIMEOUT}s &> /dev/null; then
+        # Wait for logs to finish streaming
+        wait $logs_pid 2>/dev/null || true
+        
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
-        # Double-check job status
-        local succeeded=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.succeeded}' 2>/dev/null || echo "0")
-        
-        if [ "$succeeded" = "1" ]; then
-            echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
-            PASSED_TESTS=$((PASSED_TESTS + 1))
-            TEST_RESULTS+=("PASS: ${test_name} (${mode}, ${driver})")
-        else
-            echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
-            FAILED_TESTS=$((FAILED_TESTS + 1))
-            TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver})")
-            
-            # Show ALL pod logs on failure
-            echo -e "${RED}  Complete pod logs:${NC}"
-            kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /'
-        fi
+        echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        TEST_RESULTS+=("PASS: ${test_name} (${mode}, ${driver})")
     else
+        # Kill log streaming if still running
+        kill $logs_pid 2>/dev/null || true
+        wait $logs_pid 2>/dev/null || true
+        
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
@@ -330,9 +323,9 @@ run_k8s_test() {
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver}) - Timeout or failure")
         
-        # Show ALL pod logs on failure
+        # Show complete logs on failure
         echo -e "${RED}  Complete pod logs:${NC}"
-        kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /'
+        kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
     fi
     
     # Cleanup job
@@ -518,7 +511,8 @@ main() {
     
     echo -e "Total Time:   ${overall_minutes}m ${overall_seconds}s"
     echo ""
-        echo ""
+    
+    if [ $FAILED_TESTS -gt 0 ]; then
         echo -e "${RED}Failed tests:${NC}"
         for result in "${TEST_RESULTS[@]}"; do
             if [[ $result == FAIL* ]]; then
@@ -526,10 +520,10 @@ main() {
             fi
         done
         exit 1
-    else
-        echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
-        exit 0
     fi
+    
+    echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
+    exit 0
 }
 
 # Trap cleanup on exit and interrupt
