@@ -73,9 +73,9 @@ done
 
 print_section() {
     echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 
@@ -145,7 +145,7 @@ spec:
       containers:
       - name: smithy
         image: ${SMITHY_IMAGE}
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         
         args: ${args}
         
@@ -173,7 +173,13 @@ spec:
 EOF
     else
         # Rootful configuration (UID 0)
-        cat > "$yaml_file" <<EOF
+        # Least privilege approach:
+        # - VFS: No privileged needed
+        # - Overlay: Privileged required for mount operations
+        
+        if [ "$driver" = "overlay" ]; then
+            # Overlay storage needs privileged mode
+            cat > "$yaml_file" <<EOF
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -198,22 +204,21 @@ spec:
       containers:
       - name: smithy
         image: ${SMITHY_IMAGE}
-        imagePullPolicy: Always
+        imagePullPolicy: IfNotPresent
         
         args: ${args}
         
         securityContext:
           runAsUser: 0
-          allowPrivilegeEscalation: true
-          capabilities:
-            drop: [ALL]
-            add: [SETUID, SETGID, MKNOD, SYS_ADMIN]
+          privileged: true
         
         env:
         - name: HOME
           value: /root
         - name: DOCKER_CONFIG
           value: /root/.docker
+        - name: BUILDAH_ISOLATION
+          value: chroot
         
         resources:
           requests:
@@ -224,6 +229,62 @@ spec:
             cpu: "4"
             ephemeral-storage: "10Gi"
 EOF
+        else
+            # VFS storage works without privileged
+            cat > "$yaml_file" <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${job_name}
+  namespace: ${NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: smithy-test
+        mode: rootful
+        storage: ${driver}
+    spec:
+      restartPolicy: Never
+      
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      
+      containers:
+      - name: smithy
+        image: ${SMITHY_IMAGE}
+        imagePullPolicy: IfNotPresent
+        
+        args: ${args}
+        
+        securityContext:
+          runAsUser: 0
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID, MKNOD]
+        
+        env:
+        - name: HOME
+          value: /root
+        - name: DOCKER_CONFIG
+          value: /root/.docker
+        - name: BUILDAH_ISOLATION
+          value: chroot
+        
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "8Gi"
+            cpu: "4"
+            ephemeral-storage: "10Gi"
+EOF
+        fi
     fi
     
     echo "$yaml_file"
@@ -261,8 +322,8 @@ run_k8s_test() {
         return 1
     fi
     
-    # Wait for pod to be ready
-    echo -e "${CYAN}  Waiting for pod to start...${NC}"
+    # Wait for pod to be created
+    echo -e "${CYAN}  Waiting for pod to be created...${NC}"
     local pod_name=""
     local wait_count=0
     while [ -z "$pod_name" ] && [ $wait_count -lt 60 ]; do
@@ -274,7 +335,7 @@ run_k8s_test() {
     done
     
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}  ✗ FAIL${NC} - Pod did not start within timeout"
+        echo -e "${RED}  ✗ FAIL${NC} - Pod did not get created within timeout"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver}) - Pod creation timeout")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
@@ -282,7 +343,84 @@ run_k8s_test() {
         return 1
     fi
     
-    echo -e "${CYAN}  Pod started: ${pod_name}${NC}"
+    echo -e "${CYAN}  Pod created: ${pod_name}${NC}"
+    
+    # Wait for pod to start (not Ready, but at least Running or better diagnostics)
+    echo -e "${CYAN}  Waiting for pod to start (max 120s)...${NC}"
+    wait_count=0
+    while [ $wait_count -lt 120 ]; do
+        pod_phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        
+        # Check if pod is running or succeeded
+        if [ "$pod_phase" = "Running" ] || [ "$pod_phase" = "Succeeded" ]; then
+            echo -e "${CYAN}  Pod phase: ${pod_phase}${NC}"
+            break
+        fi
+        
+        # Check if pod failed
+        if [ "$pod_phase" = "Failed" ]; then
+            echo -e "${RED}  Pod failed to start!${NC}"
+            echo -e "${YELLOW}  Pod events:${NC}"
+            kubectl describe pod ${pod_name} -n ${NAMESPACE} | grep -A 10 "Events:" | sed 's/^/    /'
+            echo -e "${YELLOW}  Container status:${NC}"
+            kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state}' | sed 's/^/    /'
+            echo ""
+            
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+            TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver}) - Pod failed to start")
+            kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+            rm -f "$yaml_file"
+            return 1
+        fi
+        
+        # If still in Pending after 30 seconds, show diagnostics
+        if [ $wait_count -eq 30 ] && [ "$pod_phase" = "Pending" ]; then
+            echo -e "${YELLOW}  Pod still pending after 30s, checking status...${NC}"
+            
+            # Check container status
+            container_state=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null || echo "{}")
+            
+            # Check for image pull issues
+            if echo "$container_state" | grep -q "ImagePullBackOff\|ErrImagePull"; then
+                echo -e "${RED}  ✗ Image pull failed!${NC}"
+                echo -e "${YELLOW}  Container state:${NC}"
+                echo "$container_state" | sed 's/^/    /'
+                echo -e "${YELLOW}  Recent events:${NC}"
+                kubectl describe pod ${pod_name} -n ${NAMESPACE} | grep -A 5 "Events:" | sed 's/^/    /'
+                
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver}) - Image pull failed")
+                kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+                rm -f "$yaml_file"
+                return 1
+            fi
+            
+            # Check for other waiting reasons
+            if echo "$container_state" | grep -q "ContainerCreating"; then
+                echo -e "${YELLOW}  Container is still being created...${NC}"
+                waiting_reason=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null || echo "Unknown")
+                waiting_message=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.message}' 2>/dev/null || echo "No message")
+                echo -e "${YELLOW}  Reason: ${waiting_reason}${NC}"
+                echo -e "${YELLOW}  Message: ${waiting_message}${NC}"
+            fi
+        fi
+        
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    
+    # Final check after wait loop
+    if [ $wait_count -ge 120 ]; then
+        echo -e "${RED}  ✗ FAIL${NC} - Pod did not start within 120s timeout"
+        echo -e "${YELLOW}  Final pod status:${NC}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} | grep -A 20 "Events:" | sed 's/^/    /'
+        
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver}) - Pod start timeout")
+        kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+        rm -f "$yaml_file"
+        return 1
+    fi
     
     # Stream logs
     local start_time=$(date +%s)

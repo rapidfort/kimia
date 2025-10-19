@@ -53,7 +53,7 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	isRoot := os.Getuid() == 0
 
 	if isRoot {
-		logger.Warning("Running as root (UID 0) - using OCI isolation mode")
+		logger.Warning("Running as root (UID 0) - using chroot isolation")
 		logger.Warning("For production, use rootless configuration (UID 1000) with SETUID/SETGID capabilities")
 	} else {
 		logger.Debug("Running as non-root (UID %d) - using chroot isolation with user namespaces", os.Getuid())
@@ -147,26 +147,17 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	cmd.Env = os.Environ()
 
 	// =========================================================================
-	// CRITICAL: Set BUILDAH_ISOLATION based on UID
+	// CRITICAL: Always use chroot isolation for both root and rootless
 	// =========================================================================
-	// This is the key to supporting both rootful and rootless modes:
-	// - Root (UID 0): Uses OCI runtime directly, no user namespaces needed
-	// - Non-root (UID 1000+): Uses chroot with user namespaces
+	// chroot isolation works for both modes and is more reliable in containers
+	// Override only if explicitly set via environment variable
 	// =========================================================================
 	if os.Getenv("BUILDAH_ISOLATION") == "" {
-		if isRoot {
-			// Root mode: use OCI runtime (doesn't need user namespaces)
-			cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=oci")
-			logger.Debug("Set BUILDAH_ISOLATION=oci for root mode")
-		} else {
-			// Non-root mode: use chroot (with user namespaces)
-			cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
-			logger.Debug("Set BUILDAH_ISOLATION=chroot for rootless mode")
-		}
+		cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
+		logger.Debug("Set BUILDAH_ISOLATION=chroot (default for all modes)")
 	} else {
 		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
-
 	// Enhanced environment setup for auth
 	if authFile != "" {
 		// Set multiple env vars that different tools might look for
