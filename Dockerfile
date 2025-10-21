@@ -5,10 +5,9 @@ ARG COMMIT="unknown"
 ARG BRANCH="unknown"
 ARG RELEASE="0"
 
-ARG GOLANG_VERSION=1.25.2
+ARG GOLANG_VERSION=1.25.3
 ARG SMITHY_UID=1000
 ARG SMITHY_USER=smithy
-ARG BUILDAH_VERSION=1.41.5
 ARG TARGETARCH
 
 FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
@@ -35,54 +34,6 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.CommitSHA=${COMMIT} \
         -X main.Branch=${BRANCH}" \
     -o smithy ./cmd/smithy
-
-# Stage 2: Build buildah v1.41.x with ONE LINE patched
-FROM golang:${GOLANG_VERSION}-alpine AS buildah-builder
-ARG BUILDAH_VERSION
-
-USER 0
-
-# Install build dependencies
-RUN apk add --no-cache \
-    bash \
-    btrfs-progs-dev \
-    build-base \
-    git \
-    go-md2man \
-    gpgme-dev \
-    libassuan-dev \
-    libseccomp-dev \
-    libselinux-dev \
-    lvm2-dev \
-    make \
-    ostree-dev
-
-WORKDIR /go/src/github.com/containers
-
-RUN git clone https://github.com/containers/buildah.git && \
-    cd buildah && \
-    git checkout v${BUILDAH_VERSION}
-
-# THE SINGLE LINE PATCH!
-WORKDIR /go/src/github.com/containers/buildah
-RUN sed -i 's|const defaultRootLockPath = "/run/lock/netavark.lock"|const defaultRootLockPath = "/tmp/lock/netavark.lock"|' \
-    vendor/github.com/containers/common/libnetwork/netavark/const.go
-
-# Verify the patch
-RUN grep "defaultRootLockPath" vendor/github.com/containers/common/libnetwork/netavark/const.go
-
-# Configure git (required for commit)
-RUN git config --global user.email "dev@rapidfort.com" && \
-    git config --global user.name "RapidFort Build"
-
-# Commit the patch to make it "clean"
-RUN git add -A && \
-    git commit -m "RapidFort patch: Use /tmp/lock for netavark" && \
-    git tag -f v${BUILDAH_VERSION}-rf
-
-# Build patched buildah with RF version
-RUN make BUILDTAGS="seccomp selinux" GIT_COMMIT="$(git rev-parse HEAD)" VERSION="${BUILDAH_VERSION}-rf" && \
-    make install
 
 # Build running image binary
 FROM alpine AS run-prep-image
@@ -111,12 +62,10 @@ RUN apk add --no-cache \
     netavark \
     aardvark-dns \
     fuse-overlayfs \
-    xz && \
+    xz \
+    buildah && \
     update-ca-certificates && \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
-
-# Copy patched buildah
-COPY --from=buildah-builder /usr/local/bin/buildah /usr/local/bin/buildah
 
 # Copy smithy binary
 COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
@@ -254,17 +203,19 @@ RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docke
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-# Set ownership for smithy user directories
-RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
+
 
 # Environment variables
 ENV BUILDAH_LOG_LEVEL=error
 ENV HOME=/home/smithy
 ENV DOCKER_CONFIG=/home/smithy/.docker
+ENV XDG_RUNTIME_DIR=/run/user/${SMITHY_UID}
+ENV NETAVARK_LOCK_PATH=/tmp/lock/netavark.lock
 
-# BUILDAH_ISOLATION is set dynamically by smithy based on UID:
-# - oci for root (UID 0) - doesn't need user namespaces
-# - chroot for non-root (UID 1000+) - uses user namespaces
+# Set ownership for smithy user directories
+RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
+RUN mkdir -p "${XDG_RUNTIME_DIR}" && \
+    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}"
 
 # Default to non-root user (rootless mode - recommended)
 USER ${SMITHY_UID}:${SMITHY_UID}
