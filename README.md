@@ -1587,6 +1587,7 @@ Smithy supports most Kaniko arguments for easy migration.
 | `--skip-tls-verify` | `--skip-tls-verify` | ✅ Direct compatibility |
 | `--verbosity` | `--verbosity` | ✅ Direct compatibility |
 | `--label` | `--label` | ✅ Direct compatibility |
+| `--reproducible` | `--reproducible` | ✅ Direct compatibility |
 | `--git` | Built-in Git support | ℹ️ Use `--context=git://...` |
 | `--snapshot-mode` | N/A | ℹ️ VFS storage handles this |
 | `--use-new-run` | N/A | ℹ️ Buildah default behavior |
