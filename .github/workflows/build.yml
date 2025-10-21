@@ -43,7 +43,11 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=sha,prefix={{branch}}-
+            # Use a fixed prefix for SHA-based tags to avoid producing an
+            # invalid tag when the branch template is empty (which can
+            # generate a leading '-' like ":-df2dc06"). This produces
+            # tags like 'sha-df2dc06' which are valid.
+            type=sha,prefix=sha-
 
       - name: Build multi-arch image
         uses: docker/build-push-action@v5
