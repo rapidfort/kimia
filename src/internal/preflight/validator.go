@@ -74,7 +74,7 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 	}
 	result.Capabilities = caps
 
-	// 2b. Check SETUID binaries (NEW)
+	// 2b. Check SETUID binaries
 	setuidBins, err := CheckSetuidBinaries()
 	if err != nil {
 		result.Errors = append(result.Errors, fmt.Sprintf("Failed to check SETUID binaries: %v", err))
@@ -102,7 +102,16 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 		result.Status = validateRootlessMode(result)
 	}
 
-	// Rest of validation...
+	// 4. Validate storage driver
+	if result.Status != StatusError {
+		storageStatus := validateStorageDriver(result)
+		if storageStatus == StatusError {
+			result.Status = StatusError
+		} else if storageStatus == StatusWarning && result.Status != StatusError {
+			result.Status = StatusWarning
+		}
+	}
+
 	return result, nil
 }
 
@@ -110,17 +119,49 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 func validateRootMode(result *ValidationResult) ValidationStatus {
 	logger.Debug("Validating root mode configuration")
 
-	// Root mode always works, but has security warnings
+	// Check if running in Kubernetes
+	if IsInKubernetes() {
+		result.Errors = append(result.Errors,
+			"Rootful mode is NOT supported in Kubernetes environments",
+			"",
+			"Kubernetes requires rootless mode with capabilities:",
+			"  securityContext:",
+			"    runAsUser: 1000",
+			"    runAsNonRoot: true",
+			"    allowPrivilegeEscalation: true",
+			"    capabilities:",
+			"      drop: [ALL]")
+
+		// Add storage-specific capability requirements
+		if result.StorageDriver == "overlay" {
+			result.Errors = append(result.Errors,
+				"      add: [SETUID, SETGID, MKNOD]  # MKNOD required for overlay")
+		} else {
+			result.Errors = append(result.Errors,
+				"      add: [SETUID, SETGID]  # MKNOD not needed for vfs")
+		}
+
+		return StatusError
+	}
+
+	// Root mode works in Docker, but has security warnings
 	result.Warnings = append(result.Warnings,
 		"Running in ROOT mode",
 		"Security implications:",
 		"  • Container escapes grant root access to host",
 		"  • No user namespace isolation",
 		"  • Violates Pod Security Standards",
+		"",
 		"For production, use rootless mode:",
-		"  runAsUser: 1000",
-		"  capabilities: [SETUID, SETGID]",
-	)
+		"  runAsUser: 1000")
+
+	if result.StorageDriver == "overlay" {
+		result.Warnings = append(result.Warnings,
+			"  capabilities: [SETUID, SETGID, MKNOD]")
+	} else {
+		result.Warnings = append(result.Warnings,
+			"  capabilities: [SETUID, SETGID]")
+	}
 
 	// Check if capabilities are unnecessarily configured
 	if result.Capabilities.HasSetUID || result.Capabilities.HasSetGID {
@@ -128,11 +169,9 @@ func validateRootMode(result *ValidationResult) ValidationStatus {
 			"",
 			"Unnecessary capabilities detected",
 			"Root already has all privileges. The SETUID/SETGID",
-			"capabilities have no effect and can be removed.",
-		)
+			"capabilities have no effect and can be removed.")
 	}
 
-	// Root mode can proceed
 	return StatusWarning
 }
 
@@ -147,20 +186,31 @@ func validateRootlessMode(result *ValidationResult) ValidationStatus {
 	hasSetuidBinaries := result.SetuidBinaries.HasSetuidBinaries()
 	setuidCanWork := CanSetuidBinariesWork()
 
-	logger.Debug("Environment: K8s=%v, HasCaps=%v, HasSetuid=%v, SetuidCanWork=%v",
-		isK8s, hasCapabilities, hasSetuidBinaries, setuidCanWork)
+	// For overlay storage, also check MKNOD capability
+	needsMknod := result.StorageDriver == "overlay"
+	hasMknod := result.Capabilities.HasCapability("CAP_MKNOD")
+
+	logger.Debug("Environment: K8s=%v, HasCaps=%v, HasSetuid=%v, SetuidCanWork=%v, StorageDriver=%s, NeedsMknod=%v, HasMknod=%v",
+		isK8s, hasCapabilities, hasSetuidBinaries, setuidCanWork, result.StorageDriver, needsMknod, hasMknod)
 
 	// Determine if we can create user namespaces
 	canCreateUserNS := false
 
 	if isK8s {
 		// In Kubernetes: Need capabilities AND allowPrivilegeEscalation
-		// We detect APE by checking if SETUID binaries can work
 		if hasCapabilities && setuidCanWork {
-			canCreateUserNS = true
+			// Check MKNOD for overlay
+			if needsMknod && !hasMknod {
+				issues = append(issues, "Missing CAP_MKNOD capability (required for overlay storage)")
+			} else {
+				canCreateUserNS = true
+			}
 		} else {
 			if !hasCapabilities {
 				issues = append(issues, "Missing required capabilities: SETUID, SETGID")
+				if needsMknod {
+					issues = append(issues, "Missing required capability: MKNOD (for overlay storage)")
+				}
 			}
 			if !setuidCanWork {
 				issues = append(issues, "allowPrivilegeEscalation is not enabled (NoNewPrivs is set)")
@@ -172,20 +222,36 @@ func validateRootlessMode(result *ValidationResult) ValidationStatus {
 			issues = append(issues, "    allowPrivilegeEscalation: true")
 			issues = append(issues, "    capabilities:")
 			issues = append(issues, "      drop: [ALL]")
-			issues = append(issues, "      add: [SETUID, SETGID]")
+
+			if needsMknod {
+				issues = append(issues, "      add: [SETUID, SETGID, MKNOD]  # MKNOD for overlay")
+			} else {
+				issues = append(issues, "      add: [SETUID, SETGID]  # No MKNOD needed for vfs")
+			}
 		}
 	} else {
 		// In Docker: Either capabilities OR SETUID binaries work
 		if hasCapabilities {
-			canCreateUserNS = true
-			logger.Debug("User namespace creation possible via capabilities")
+			// Check MKNOD for overlay
+			if needsMknod && !hasMknod {
+				issues = append(issues, "Missing CAP_MKNOD capability (required for overlay storage)")
+			} else {
+				canCreateUserNS = true
+				logger.Debug("User namespace creation possible via capabilities")
+			}
 		} else if hasSetuidBinaries && setuidCanWork {
 			canCreateUserNS = true
 			logger.Debug("User namespace creation possible via SETUID binaries")
 		} else {
 			issues = append(issues, "Cannot create user namespaces")
 			issues = append(issues, "Need one of:")
-			issues = append(issues, "  1. Capabilities: --cap-add SETUID --cap-add SETGID")
+
+			if needsMknod {
+				issues = append(issues, "  1. Capabilities: --cap-add SETUID --cap-add SETGID --cap-add MKNOD")
+			} else {
+				issues = append(issues, "  1. Capabilities: --cap-add SETUID --cap-add SETGID")
+			}
+
 			issues = append(issues, "  2. SETUID binaries with: --security-opt seccomp=unconfined")
 
 			if hasSetuidBinaries && !setuidCanWork {
@@ -210,10 +276,32 @@ func validateRootlessMode(result *ValidationResult) ValidationStatus {
 
 	// Success - add info about which method is being used
 	if hasCapabilities {
-		logger.Info("Rootless mode: Using capabilities (SETUID, SETGID)")
+		if needsMknod {
+			logger.Info("Rootless mode: Using capabilities (SETUID, SETGID, MKNOD)")
+		} else {
+			logger.Info("Rootless mode: Using capabilities (SETUID, SETGID)")
+		}
 	} else if hasSetuidBinaries {
 		logger.Info("Rootless mode: Using SETUID binaries (%s, %s)",
 			result.SetuidBinaries.NewuidmapPath, result.SetuidBinaries.NewgidmapPath)
+	}
+
+	return StatusSuccess
+}
+
+// validateStorageDriver validates storage-specific requirements
+func validateStorageDriver(result *ValidationResult) ValidationStatus {
+	logger.Debug("Validating storage driver: %s", result.StorageDriver)
+
+	if result.StorageDriver == "overlay" {
+		// Check if MKNOD capability is available for overlay
+		if !result.IsRoot && !result.Capabilities.HasCapability("CAP_MKNOD") {
+			result.Warnings = append(result.Warnings,
+				"",
+				"Overlay storage requires CAP_MKNOD capability",
+				"Consider using VFS storage if MKNOD cannot be granted")
+			return StatusWarning
+		}
 	}
 
 	return StatusSuccess
@@ -236,7 +324,7 @@ func PrintValidationResult(result *ValidationResult) {
 		logger.Info("Storage Driver: %s", result.StorageDriver)
 
 	case StatusWarning:
-		logger.Info("⚠ Pre-flight validation passed with warnings")
+		logger.Info("⚠  Pre-flight validation passed with warnings")
 		logger.Info("Build Mode: %s", result.BuildMode)
 		logger.Info("Storage Driver: %s", result.StorageDriver)
 		logger.Warning("")

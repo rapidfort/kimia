@@ -2,6 +2,7 @@
 # Smithy Docker Test Suite
 # Tests both rootless (UID 1000) and rootful (UID 0) modes
 # Tests both VFS and Overlay storage drivers
+# Note: MKNOD capability required ONLY for overlay storage in rootless mode
 
 set -e
 
@@ -16,6 +17,10 @@ SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
 RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
 STORAGE_DRIVER="both"
 CLEANUP_AFTER=false
+
+# Script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+SUITES_DIR="${SCRIPT_DIR}/suites"
 
 # Colors
 RED='\033[0;31m'
@@ -60,17 +65,86 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Create suites directory
+mkdir -p "${SUITES_DIR}"
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
 
 print_section() {
     echo ""
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
     echo ""
 }
+
+# ============================================================================
+# Test Script Generator
+# ============================================================================
+
+create_test_script() {
+    local test_type="$1"  # "happy" or "unhappy"
+    local test_name="$2"
+    local mode="$3"
+    local driver="$4"
+    local test_command="$5"
+    
+    # Sanitize test name for filename: replace spaces with dashes, lowercase
+    local safe_name=$(echo "$test_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
+    
+    local script_file="${SUITES_DIR}/${test_type}-${mode}-${driver}-${safe_name}.sh"
+    
+    cat > "$script_file" <<TESTSCRIPT
+#!/bin/bash
+# Auto-generated Docker test script
+# Type: ${test_type}
+# Test: ${test_name}
+# Mode: ${mode}
+# Driver: ${driver}
+# Generated: $(date)
+
+set -e
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+echo ""
+echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}Docker Test: ${test_name}\${NC}"
+echo -e "\${CYAN}Type: ${test_type}\${NC}"
+echo -e "\${CYAN}Mode: ${mode}\${NC}"
+echo -e "\${CYAN}Driver: ${driver}\${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo ""
+
+# Test execution
+echo "Running test command..."
+echo ""
+
+if ${test_command}; then
+    echo ""
+    echo -e "\${GREEN}✓ Test PASSED\${NC}"
+    exit 0
+else
+    exit_code=\$?
+    echo ""
+    echo -e "\${RED}✗ Test FAILED (exit code: \${exit_code})\${NC}"
+    exit \$exit_code
+fi
+TESTSCRIPT
+    
+    chmod +x "$script_file"
+    echo "$script_file"
+}
+
+# ============================================================================
+# Test Execution
+# ============================================================================
 
 run_test() {
     local test_name="$1"
@@ -81,71 +155,53 @@ run_test() {
     
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     
+    # CREATE the happy case test script file
+    local script_file=$(create_test_script "happy" "$test_name" "$mode" "$driver" "$test_cmd")
+    
     echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${mode}, ${driver})"
-    echo -e "${CYAN}  Command: docker run ${test_cmd}${NC}"
+    echo -e "${CYAN}  Script: $(basename $script_file)${NC}"
     
-    # Create temp directory for this test
-    local test_tmpdir="${RF_SMITHY_TMPDIR}/smithy-docker-test-$-${TOTAL_TESTS}"
-    mkdir -p "${test_tmpdir}"
-    
-    # Run the test - using eval to properly expand variables
-    local start_time=$(date +%s)
-    local test_output="${test_tmpdir}/output.log"
-    
-    if eval "docker run $test_cmd" > "${test_output}" 2>&1; then
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
-        
-        echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
+    # EXECUTE the test script
+    if bash "$script_file" > /tmp/test-$$.log 2>&1; then
+        echo -e "${GREEN}  ✓ PASS${NC}"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${mode}, ${driver})")
-        
-        # Show ALL output
-        echo -e "${CYAN}  Build output:${NC}"
-        cat "${test_output}" | sed 's/^/    /'
     else
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
-        
-        echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
+        echo -e "${RED}  ✗ FAIL${NC}"
+        echo -e "${YELLOW}  To re-run: bash $script_file${NC}"
+        cat /tmp/test-$$.log | sed 's/^/    /'
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver})")
-        
-        # Show ALL error output
-        echo -e "${RED}  Build output:${NC}"
-        cat "${test_output}" | sed 's/^/    /'
     fi
     
-    # Cleanup test directory
-    rm -rf "${test_tmpdir}"
+    rm -f /tmp/test-$$.log
     echo ""
 }
 
 # ============================================================================
-# Test Dockerfile Creation
+# Dockerfile Generator
 # ============================================================================
 
 create_test_dockerfile() {
-    local dockerfile="${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-$"
+    local dockerfile="/tmp/Dockerfile.test-$$"
     
     cat > "$dockerfile" <<'EOF'
-FROM docker.io/library/alpine:latest
+FROM alpine:latest
 
 # Install basic tools
-RUN apk add --no-cache curl bash
+RUN apk add --no-cache bash curl
 
-# Create test content
-RUN echo "Build completed successfully" > /test.txt
-RUN echo "Build date: $(date)" >> /test.txt
+# Create test file
+RUN echo "Test build successful" > /test.txt
 
-# Add build args test
+# Build args test
 ARG VERSION=1.0
 ARG BUILD_DATE=unknown
 
 RUN echo "Version: ${VERSION}" >> /test.txt
-RUN echo "Build date arg: ${BUILD_DATE}" >> /test.txt
+RUN echo "Build date: ${BUILD_DATE}" >> /test.txt
 
-# Add labels
+# Labels
 LABEL maintainer="test@example.com"
 LABEL version="${VERSION}"
 
@@ -164,16 +220,27 @@ run_rootless_tests() {
     
     print_section "ROOTLESS MODE TESTS (UID 1000) - ${driver^^} STORAGE"
     
+    if [ "$driver" = "overlay" ]; then
+        echo -e "${YELLOW}Note: Overlay storage requires CAP_MKNOD in rootless mode${NC}"
+        echo ""
+    fi
+    
     local dockerfile=$(create_test_dockerfile)
     local dockerfile_name=$(basename "$dockerfile")
     local context_dir=$(dirname "$dockerfile")
     
     # Base Docker run command for rootless
-    local BASE_CMD="--rm"
+    local BASE_CMD="docker run --rm"
     BASE_CMD="$BASE_CMD --user 1000:1000"
     BASE_CMD="$BASE_CMD --cap-drop ALL"
     BASE_CMD="$BASE_CMD --cap-add SETUID"
     BASE_CMD="$BASE_CMD --cap-add SETGID"
+    
+    # Add MKNOD only for overlay
+    if [ "$driver" = "overlay" ]; then
+        BASE_CMD="$BASE_CMD --cap-add MKNOD"
+    fi
+    
     BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
     BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
     BASE_CMD="$BASE_CMD --device /dev/fuse"
@@ -184,23 +251,21 @@ run_rootless_tests() {
     
     # Test 1: Version check
     run_test \
-        "Version Check" \
+        "version" \
         "rootless" \
         "$driver" \
-        $BASE_CMD \
-        --version
+        $BASE_CMD --version
     
     # Test 2: Check environment
     run_test \
-        "Environment Check" \
+        "envcheck" \
         "rootless" \
         "$driver" \
-        $BASE_CMD \
-        check-environment
+        $BASE_CMD check-environment
     
     # Test 3: Basic build
     run_test \
-        "Basic Build" \
+        "basic-build" \
         "rootless" \
         "$driver" \
         $BASE_CMD \
@@ -213,7 +278,7 @@ run_rootless_tests() {
     
     # Test 4: Build with args
     run_test \
-        "Build with Arguments" \
+        "build-args" \
         "rootless" \
         "$driver" \
         $BASE_CMD \
@@ -228,7 +293,7 @@ run_rootless_tests() {
     
     # Test 5: Build with labels
     run_test \
-        "Build with Labels" \
+        "labels" \
         "rootless" \
         "$driver" \
         $BASE_CMD \
@@ -243,7 +308,7 @@ run_rootless_tests() {
     
     # Test 6: Git repository build
     run_test \
-        "Git Repository Build" \
+        "git-build" \
         "rootless" \
         "$driver" \
         $BASE_CMD \
@@ -260,7 +325,7 @@ run_rootless_tests() {
 }
 
 # ============================================================================
-# Rootful Mode Tests (UID 0)
+# Rootful Mode Tests (UID 0) - Docker Only
 # ============================================================================
 
 run_rootful_tests() {
@@ -268,12 +333,15 @@ run_rootful_tests() {
     
     print_section "ROOTFUL MODE TESTS (UID 0) - ${driver^^} STORAGE"
     
+    echo -e "${YELLOW}WARNING: Rootful mode for Docker only (NOT for Kubernetes)${NC}"
+    echo ""
+    
     local dockerfile=$(create_test_dockerfile)
     local dockerfile_name=$(basename "$dockerfile")
     local context_dir=$(dirname "$dockerfile")
     
     # Base Docker run command for rootful
-    local BASE_CMD="--rm"
+    local BASE_CMD="docker run --rm"
     BASE_CMD="$BASE_CMD --user 0:0"
     BASE_CMD="$BASE_CMD --privileged"
     BASE_CMD="$BASE_CMD --device /dev/fuse"
@@ -284,23 +352,21 @@ run_rootful_tests() {
     
     # Test 1: Version check
     run_test \
-        "Version Check" \
+        "version" \
         "rootful" \
         "$driver" \
-        $BASE_CMD \
-        --version
+        $BASE_CMD --version
     
     # Test 2: Check environment
     run_test \
-        "Environment Check" \
+        "envcheck" \
         "rootful" \
         "$driver" \
-        $BASE_CMD \
-        check-environment
+        $BASE_CMD check-environment
     
     # Test 3: Basic build
     run_test \
-        "Basic Build" \
+        "basic-build" \
         "rootful" \
         "$driver" \
         $BASE_CMD \
@@ -313,7 +379,7 @@ run_rootful_tests() {
     
     # Test 4: Build with args
     run_test \
-        "Build with Arguments" \
+        "build-args" \
         "rootful" \
         "$driver" \
         $BASE_CMD \
@@ -328,7 +394,7 @@ run_rootful_tests() {
     
     # Test 5: Build with labels
     run_test \
-        "Build with Labels" \
+        "labels" \
         "rootful" \
         "$driver" \
         $BASE_CMD \
@@ -343,7 +409,7 @@ run_rootful_tests() {
     
     # Test 6: Git repository build
     run_test \
-        "Git Repository Build" \
+        "git-build" \
         "rootful" \
         "$driver" \
         $BASE_CMD \
@@ -360,41 +426,31 @@ run_rootful_tests() {
 }
 
 # ============================================================================
-# Cleanup Function
+# Cleanup
 # ============================================================================
 
 cleanup() {
     if [ "$CLEANUP_AFTER" = true ]; then
         print_section "CLEANUP"
         
-        echo "Removing test images..."
-        docker images | grep "test-root" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-        
-        echo "Removing test files..."
-        rm -f ${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-* 2>/dev/null || true
+        echo "Removing temp files..."
+        rm -f /tmp/Dockerfile.test-* 2>/dev/null || true
+        rm -f /tmp/test-*.log 2>/dev/null || true
         
         echo -e "${GREEN}✓ Cleanup completed${NC}"
     fi
 }
 
-# Cleanup function for interrupts
 cleanup_on_interrupt() {
     echo ""
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Cleaning up...${NC}"
     
-    # Stop any running containers
-    docker ps -q --filter "ancestor=${SMITHY_IMAGE}" | xargs -r docker stop 2>/dev/null || true
-    
-    # Remove test images
-    docker images | grep "test-root" | awk '{print $3}' | xargs -r docker rmi -f 2>/dev/null || true
-    
-    # Remove test files
-    rm -f ${RF_SMITHY_TMPDIR}/Dockerfile.smithy-test-* 2>/dev/null || true
-    rm -rf ${RF_SMITHY_TMPDIR}/smithy-docker-test-* 2>/dev/null || true
+    rm -f /tmp/Dockerfile.test-* 2>/dev/null || true
+    rm -f /tmp/test-*.log 2>/dev/null || true
     
     echo -e "${GREEN}✓ Cleanup completed${NC}"
-    exit 130  # Standard exit code for SIGINT
+    exit 130
 }
 
 # ============================================================================
@@ -404,21 +460,22 @@ cleanup_on_interrupt() {
 main() {
     print_section "DOCKER TEST SUITE"
     
+    # Check Docker
+    if ! command -v docker &> /dev/null; then
+        echo -e "${RED}Error: Docker is not installed or not in PATH${NC}"
+        exit 1
+    fi
+    
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Registry:       ${REGISTRY}"
     echo -e "  Image:          ${SMITHY_IMAGE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
     echo -e "  Cleanup:        ${CLEANUP_AFTER}"
+    echo -e "  Suites Dir:     ${SUITES_DIR}"
     echo ""
     
     # Start overall timer
     local overall_start=$(date +%s)
-    
-    # Check if Docker is available
-    if ! command -v docker &> /dev/null; then
-        echo -e "${RED}Error: Docker is not installed or not in PATH${NC}"
-        exit 1
-    fi
     
     # Determine which drivers to test
     local drivers=()
@@ -468,10 +525,16 @@ main() {
                 echo -e "${RED}  - $result${NC}"
             fi
         done
+        echo ""
+        echo -e "${YELLOW}Re-run individual tests from:${NC}"
+        echo -e "${YELLOW}  ${SUITES_DIR}/${NC}"
         exit 1
     fi
     
     echo -e "${GREEN}✓ All Docker tests passed successfully!${NC}"
+    echo ""
+    echo -e "${CYAN}Generated test scripts in: ${SUITES_DIR}/${NC}"
+    echo -e "${CYAN}Example: bash ${SUITES_DIR}/happy-rootless-vfs-version.sh${NC}"
     exit 0
 }
 

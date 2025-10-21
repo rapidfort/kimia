@@ -29,6 +29,7 @@ type CapabilityCheck struct {
 const (
 	CAP_SETGID = 6  // bit 6
 	CAP_SETUID = 7  // bit 7
+	CAP_MKNOD  = 27 // bit 27 - CREATE special files (needed for overlay)
 )
 
 // CheckCapabilities reads /proc/self/status and parses capabilities
@@ -43,7 +44,7 @@ func CheckCapabilities() (*CapabilityCheck, error) {
 
 	var capEffHex string
 	scanner := bufio.NewScanner(file)
-	
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "CapEff:") {
@@ -74,9 +75,11 @@ func CheckCapabilities() (*CapabilityCheck, error) {
 	// Check specific capabilities
 	hasSetUID := (capEff & (1 << CAP_SETUID)) != 0
 	hasSetGID := (capEff & (1 << CAP_SETGID)) != 0
+	hasMknod := (capEff & (1 << CAP_MKNOD)) != 0
 
 	logger.Debug("CAP_SETUID (bit %d): %v", CAP_SETUID, hasSetUID)
 	logger.Debug("CAP_SETGID (bit %d): %v", CAP_SETGID, hasSetGID)
+	logger.Debug("CAP_MKNOD (bit %d): %v", CAP_MKNOD, hasMknod)
 
 	result := &CapabilityCheck{
 		HasSetUID:     hasSetUID,
@@ -85,6 +88,7 @@ func CheckCapabilities() (*CapabilityCheck, error) {
 		Capabilities: []Capability{
 			{Name: "CAP_SETUID", Bit: CAP_SETUID, Present: hasSetUID},
 			{Name: "CAP_SETGID", Bit: CAP_SETGID, Present: hasSetGID},
+			{Name: "CAP_MKNOD", Bit: CAP_MKNOD, Present: hasMknod},
 		},
 	}
 
@@ -96,17 +100,66 @@ func (c *CapabilityCheck) HasRequiredCapabilities() bool {
 	return c.HasSetUID && c.HasSetGID
 }
 
+// HasCapability checks if a specific capability is present by name
+func (c *CapabilityCheck) HasCapability(capName string) bool {
+	// Normalize the capability name (handle with or without CAP_ prefix)
+	capName = strings.ToUpper(capName)
+	if !strings.HasPrefix(capName, "CAP_") {
+		capName = "CAP_" + capName
+	}
+
+	// Check against stored capabilities
+	for _, cap := range c.Capabilities {
+		if cap.Name == capName {
+			return cap.Present
+		}
+	}
+
+	// For backward compatibility, also check by bit position
+	switch capName {
+	case "CAP_SETUID":
+		return c.HasSetUID
+	case "CAP_SETGID":
+		return c.HasSetGID
+	case "CAP_MKNOD":
+		return (c.EffectiveCaps & (1 << CAP_MKNOD)) != 0
+	default:
+		logger.Debug("Unknown capability requested: %s", capName)
+		return false
+	}
+}
+
 // GetMissingCapabilities returns a list of missing required capabilities
 func (c *CapabilityCheck) GetMissingCapabilities() []string {
 	var missing []string
-	
+
 	if !c.HasSetUID {
 		missing = append(missing, "CAP_SETUID")
 	}
 	if !c.HasSetGID {
 		missing = append(missing, "CAP_SETGID")
 	}
-	
+
+	return missing
+}
+
+// GetMissingCapabilitiesForStorage returns missing capabilities for a specific storage driver
+func (c *CapabilityCheck) GetMissingCapabilitiesForStorage(storageDriver string) []string {
+	var missing []string
+
+	// SETUID and SETGID are always required
+	if !c.HasSetUID {
+		missing = append(missing, "CAP_SETUID")
+	}
+	if !c.HasSetGID {
+		missing = append(missing, "CAP_SETGID")
+	}
+
+	// MKNOD only required for overlay
+	if storageDriver == "overlay" && !c.HasCapability("CAP_MKNOD") {
+		missing = append(missing, "CAP_MKNOD")
+	}
+
 	return missing
 }
 
