@@ -47,8 +47,42 @@ type Config struct {
 	ImageNameTagWithDigestFile string
 }
 
-// Execute executes a buildah build with authentication
+// detectBuilder determines which builder is available
+func detectBuilder() string {
+	// Check for BuildKit first (preferred/default)
+	if _, err := exec.LookPath("buildkitd"); err == nil {
+		if _, err := exec.LookPath("buildctl"); err == nil {
+			return "buildkit"
+		}
+	}
+
+	// Check for Buildah (legacy)
+	if _, err := exec.LookPath("buildah"); err == nil {
+		return "buildah"
+	}
+
+	return "unknown"
+}
+
+// Execute executes a build using the detected builder (buildah or buildkit)
 func Execute(config Config, ctx *Context, authFile string) error {
+	builder := detectBuilder()
+
+	if builder == "unknown" {
+		return fmt.Errorf("no builder found (expected buildkitd or buildah)")
+	}
+
+	logger.Info("Using builder: %s", strings.ToUpper(builder))
+
+	if builder == "buildkit" {
+		return executeBuildKit(config, ctx, authFile)
+	}
+
+	return executeBuildah(config, ctx, authFile)
+}
+
+// executeBuildah executes a buildah build with authentication
+func executeBuildah(config Config, ctx *Context, authFile string) error {
 	// Detect if running as root
 	isRoot := os.Getuid() == 0
 
@@ -146,21 +180,16 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 
-	// =========================================================================
-	// CRITICAL: Always use chroot isolation for both root and rootless
-	// =========================================================================
-	// chroot isolation works for both modes and is more reliable in containers
-	// Override only if explicitly set via environment variable
-	// =========================================================================
+	// Always use chroot isolation for both root and rootless
 	if os.Getenv("BUILDAH_ISOLATION") == "" {
 		cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
 		logger.Debug("Set BUILDAH_ISOLATION=chroot (default for all modes)")
 	} else {
 		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
+
 	// Enhanced environment setup for auth
 	if authFile != "" {
-		// Set multiple env vars that different tools might look for
 		cmd.Env = append(cmd.Env,
 			fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile),
 			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
@@ -170,73 +199,141 @@ func Execute(config Config, ctx *Context, authFile string) error {
 
 	// Storage driver configuration
 	storageDriver := config.StorageDriver
-	if storageDriver == "" {
-		storageDriver = "vfs" // Default to VFS for maximum compatibility
+	if storageDriver != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
+		logger.Debug("Set STORAGE_DRIVER=%s", storageDriver)
 	}
 
-	// Set storage driver environment variable
-	cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
-
-	if isRoot {
-		logger.Debug("Root mode: Using system storage at /var/lib/containers/storage")
-		// Root uses /etc/containers/storage.conf automatically
-	} else {
-		logger.Debug("Rootless mode: Using user storage at ~/.local/share/containers/storage")
-		// Non-root uses ~/.config/containers/storage.conf automatically
-	}
-
-	// Run the build
 	if err := cmd.Run(); err != nil {
-		// Enhanced error reporting with context
-		if isRoot {
-			logger.Error("Build failed in root mode (UID 0)")
-			logger.Error("Root mode uses OCI isolation without user namespaces")
-			logger.Error("Storage location: /var/lib/containers/storage")
-		} else {
-			logger.Error("Build failed in rootless mode (UID %d)", os.Getuid())
-			logger.Error("Rootless mode requires user namespaces and SETUID/SETGID capabilities")
-			logger.Error("Storage location: ~/.local/share/containers/storage")
-		}
-
-		// Check for specific error types
-		if strings.Contains(err.Error(), "authentication") ||
-			strings.Contains(err.Error(), "unauthorized") {
-			return fmt.Errorf("buildah build failed (authentication issue): %v", err)
-		}
-		if strings.Contains(err.Error(), "unshare") {
-			return fmt.Errorf("buildah build failed (user namespace issue - may need allowPrivilegeEscalation: true in Kubernetes): %v", err)
-		}
-
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
 
 	logger.Info("Build completed successfully")
 
-	// Handle special output options
+	// Handle TAR export if requested
 	if config.TarPath != "" {
 		if err := exportToTar(config); err != nil {
-			return fmt.Errorf("failed to export to tar: %v", err)
+			return err
 		}
 	}
 
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		if err := saveDigestInfo(config); err != nil {
-			return fmt.Errorf("failed to save digest info: %v", err)
-		}
+	// Save digest information
+	if err := saveDigestInfo(config); err != nil {
+		logger.Warning("Failed to save digest information: %v", err)
 	}
 
 	return nil
 }
 
-// exportToTar exports the built image to a tar archive
-func exportToTar(config Config) error {
-	if len(config.Destination) == 0 {
-		return fmt.Errorf("no destination image to export")
+// executeBuildKit executes a buildkit build
+func executeBuildKit(config Config, ctx *Context, authFile string) error {
+	logger.Info("Starting BuildKit build...")
+
+	// Use buildctl-daemonless.sh for daemonless mode (simpler, no daemon management)
+	args := []string{
+		"build",
+		"--frontend", "dockerfile.v0",
+		"--local", fmt.Sprintf("context=%s", ctx.Path),
+		"--local", fmt.Sprintf("dockerfile=%s", ctx.Path),
 	}
 
-	logger.Info("Exporting image to tar: %s", config.TarPath)
+	// Add dockerfile path if not default
+	dockerfilePath := config.Dockerfile
+	if dockerfilePath == "" {
+		dockerfilePath = "Dockerfile"
+	}
+	if dockerfilePath != "Dockerfile" {
+		args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
+	}
 
-	// Use the first destination as the image to export
+	// Add build arguments
+	for key, value := range config.BuildArgs {
+		if value != "" {
+			args = append(args, "--opt", fmt.Sprintf("build-arg:%s=%s", key, value))
+		} else {
+			// Use environment variable
+			args = append(args, "--opt", fmt.Sprintf("build-arg:%s", key))
+		}
+	}
+
+	// Add labels
+	for key, value := range config.Labels {
+		args = append(args, "--opt", fmt.Sprintf("label:%s=%s", key, value))
+	}
+
+	// Add target if specified
+	if config.Target != "" {
+		args = append(args, "--opt", fmt.Sprintf("target=%s", config.Target))
+	}
+
+	// Add platform if specified
+	if config.CustomPlatform != "" {
+		args = append(args, "--opt", fmt.Sprintf("platform=%s", config.CustomPlatform))
+	}
+
+	// Add cache options
+	if !config.Cache {
+		args = append(args, "--no-cache")
+	}
+
+	// Handle outputs (destinations)
+	if config.TarPath != "" {
+		// Export to tar
+		args = append(args, "--output", fmt.Sprintf("type=docker,dest=%s", config.TarPath))
+	} else if !config.NoPush {
+		// Push to registries
+		for _, dest := range config.Destination {
+			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=true", dest))
+		}
+	} else {
+		// Build only, no push (store in local image store)
+		for _, dest := range config.Destination {
+			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=false", dest))
+		}
+	}
+
+	// Log the command
+	logger.Debug("BuildKit command: buildctl-daemonless.sh %s", strings.Join(args, " "))
+
+	// Execute buildctl-daemonless.sh
+	cmd := exec.Command("buildctl-daemonless.sh", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	// Set BuildKit configuration
+	cmd.Env = append(cmd.Env, "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox")
+
+	// Enhanced environment setup for auth
+	if authFile != "" {
+		cmd.Env = append(cmd.Env,
+			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
+		)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("buildkit build failed: %v", err)
+	}
+
+	logger.Info("Build completed successfully")
+
+	// Note: BuildKit handles push as part of the build, so no separate push step needed
+	// Digest files are not yet implemented for BuildKit (TODO)
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
+		logger.Warning("Digest file export not yet implemented for BuildKit")
+	}
+
+	return nil
+}
+
+// exportToTar exports the built image to a tar file (Buildah only)
+func exportToTar(config Config) error {
+	logger.Info("Exporting image to TAR: %s", config.TarPath)
+
+	if len(config.Destination) == 0 {
+		return fmt.Errorf("no destination specified for TAR export")
+	}
+
 	image := config.Destination[0]
 
 	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
@@ -318,7 +415,7 @@ success:
 	return nil
 }
 
-// saveDigestInfo saves image digest information to files
+// saveDigestInfo saves image digest information to files (Buildah only)
 func saveDigestInfo(config Config) error {
 	if len(config.Destination) == 0 {
 		return nil

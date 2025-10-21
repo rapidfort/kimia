@@ -3,12 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/rapidfort/smithy/internal/auth"
 	"github.com/rapidfort/smithy/internal/build"
-    "github.com/rapidfort/smithy/internal/preflight"
+	"github.com/rapidfort/smithy/internal/preflight"
 	"github.com/rapidfort/smithy/pkg/logger"
 )
 
@@ -31,11 +30,14 @@ func main() {
 		os.Exit(exitCode)
 	}
 
+	// Detect which builder is available (moved to build.Execute)
+	// No need to detect here anymore - build.Execute handles it
+
 	// Parse configuration
 	config := parseArgs(os.Args[1:])
 
-	// Log smithy version
-	logger.Info("Smithy – Kubernetes-Native OCI Image Builder v%s", Version)
+	// Log smithy version (builder will be logged by build.Execute)
+	logger.Info("Smithy — Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
 	// Validate storage driver
@@ -57,7 +59,7 @@ func main() {
 	// Log storage driver selection
 	logger.Info("Using storage driver: %s", storageDriver)
 	if storageDriver == "overlay" {
-		logger.Info("Note: Overlay driver requires fuse-overlayfs to be installed")
+		logger.Info("Note: Overlay driver requires fuse-overlayfs")
 	}
 
 	if config.Context == "" {
@@ -87,67 +89,32 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  --context: Build context (directory or Git URL)\n")
 		fmt.Fprintf(os.Stderr, "  --destination: Target image name\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=myregistry.io/myimage:latest\n")
+		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
 		os.Exit(1)
 	}
 
-	logger.Info("Operating in BUILD-ONLY mode")
+	// Setup logging
+	logger.Setup(config.Verbosity, config.LogTimestamp)
 
-	// Setup authentication for pushing built images
-	authSetupConfig := auth.SetupConfig{
+	// Prepare build context
+	ctx, err := build.PrepareContext(config.Context, config.SubContext, config.GitBranch, config.GitRevision, config.GitTokenFile, config.GitTokenUser)
+	if err != nil {
+		logger.Fatal("Failed to prepare build context: %v", err)
+	}
+	defer ctx.Cleanup()
+
+	// Setup authentication
+	authSetup := auth.SetupConfig{
 		Destinations:     config.Destination,
 		InsecureRegistry: config.InsecureRegistry,
 	}
 
-	authFile, err := auth.Setup(authSetupConfig)
+	authFile, err := auth.Setup(authSetup)
 	if err != nil {
-		logger.Warning("Failed to setup authentication: %v", err)
-		authFile, err = auth.CreateMinimal(authSetupConfig)
-		if err != nil {
-			logger.Error("Failed to create minimal auth config: %v", err)
-		}
-	} else if authFile != "" {
-		logger.Info("Authentication configured: %s", authFile)
-		if err := auth.EnsurePermissions(authFile); err != nil {
-			logger.Warning("Failed to set auth file permissions: %v", err)
-		}
-		os.Setenv("REGISTRY_AUTH_FILE", authFile)
-		os.Setenv("DOCKER_CONFIG", filepath.Dir(authFile))
+		logger.Fatal("Failed to setup authentication: %v", err)
 	}
 
-	// Prepare build context
-	gitConfig := build.GitConfig{
-		Context:   config.Context,
-		Branch:    config.GitBranch,
-		Revision:  config.GitRevision,
-		TokenFile: config.GitTokenFile,
-		TokenUser: config.GitTokenUser,
-	}
-
-	ctx, err := build.Prepare(gitConfig)
-	if err != nil {
-		logger.Fatal("Failed to prepare build context: %v", err)
-	}
-
-	defer ctx.Cleanup()
-
-	if config.SubContext != "" {
-		logger.Debug("Applying sub-context path: %s", config.SubContext)
-
-		// Join the sub-path to the prepared context
-		newContextPath := filepath.Join(ctx.Path, config.SubContext)
-
-		// Verify the sub-context exists
-		if _, err := os.Stat(newContextPath); os.IsNotExist(err) {
-			logger.Fatal("Sub-context path does not exist: %s (full path: %s)", config.SubContext, newContextPath)
-		}
-
-		// Update the context path
-		ctx.Path = newContextPath
-		logger.Info("Using sub-context: %s", ctx.Path)
-	}
-
-	// Execute build
+	// Execute build based on detected builder
 	buildConfig := build.Config{
 		Dockerfile:                 config.Dockerfile,
 		Destination:                config.Destination,
@@ -157,7 +124,7 @@ func main() {
 		CustomPlatform:             config.CustomPlatform,
 		Cache:                      config.Cache,
 		CacheDir:                   config.CacheDir,
-		StorageDriver:              config.StorageDriver, // Pass storage driver to build
+		StorageDriver:              config.StorageDriver,
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,
 		InsecureRegistry:           config.InsecureRegistry,
@@ -170,12 +137,13 @@ func main() {
 		ImageNameTagWithDigestFile: config.ImageNameTagWithDigestFile,
 	}
 
+	// Execute build
 	if err := build.Execute(buildConfig, ctx, authFile); err != nil {
 		logger.Fatal("Build failed: %v", err)
 	}
 
-	// Push built images
-	if !config.NoPush && len(config.Destination) > 0 {
+	// Push images if not disabled
+	if !config.NoPush && config.TarPath == "" {
 		pushConfig := build.PushConfig{
 			Destinations:        config.Destination,
 			Insecure:            config.Insecure,
@@ -190,5 +158,5 @@ func main() {
 		}
 	}
 
-	logger.Info("Build operation completed successfully!")
+	logger.Info("Build completed successfully!")
 }

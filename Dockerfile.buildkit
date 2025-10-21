@@ -1,0 +1,183 @@
+# Dockerfile.buildkit - BuildKit-based Smithy Image
+# Stage 1: Build smithy binary (SAME as Buildah version)
+ARG VERSION="0.0.0-dev"
+ARG BUILD_DATE="0"
+ARG COMMIT="unknown"
+ARG BRANCH="unknown"
+ARG RELEASE="0"
+
+ARG GOLANG_VERSION=1.25.3
+ARG SMITHY_UID=1000
+ARG SMITHY_USER=smithy
+ARG TARGETARCH
+
+FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
+ARG VERSION
+ARG BUILD_DATE
+ARG COMMIT
+ARG BRANCH
+
+WORKDIR /app
+
+# Copy the entire src directory
+COPY src/ .
+
+# The go.mod already exists in src/, so just tidy dependencies
+RUN go mod tidy
+
+# Build from cmd/smithy
+# Note: ldflags use 'main' because cmd/smithy is the main package
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w \
+        -X main.Version=${VERSION} \
+        -X main.BuildDate=${BUILD_DATE} \
+        -X main.CommitSHA=${COMMIT} \
+        -X main.Branch=${BRANCH}" \
+    -o smithy ./cmd/smithy
+
+# Stage 2: BuildKit Runtime Image
+FROM alpine AS run-prep-image
+ARG SMITHY_UID
+ARG SMITHY_USER
+ARG TARGETARCH
+ARG BUILDKIT_VERSION=v0.25.1
+
+RUN apk update && apk add gnutls
+
+# Install BuildKit and dependencies
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    shadow \
+    shadow-uidmap \
+    fuse-overlayfs \
+    && update-ca-certificates
+
+# Install BuildKit binaries
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    echo "Installing BuildKit ${BUILDKIT_VERSION} for ${ARCH}..." && \
+    wget -q -O /tmp/buildkit.tar.gz \
+        "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" && \
+    tar -xzf /tmp/buildkit.tar.gz -C /usr/local && \
+    rm /tmp/buildkit.tar.gz && \
+    chmod +x /usr/local/bin/buildctl /usr/local/bin/buildkitd /usr/local/bin/buildctl-daemonless.sh
+
+# Verify BuildKit installation
+RUN buildctl --version && buildkitd --version
+
+# Setup SETUID binaries (same as Buildah image)
+RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+
+# Copy smithy binary
+COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
+RUN chmod +x /usr/local/bin/smithy
+
+# Create smithy user (SAME as Buildah)
+RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
+    adduser -D -G ${SMITHY_USER} -u ${SMITHY_UID} ${SMITHY_USER}
+
+# Setup subuid/subgid for smithy user (for rootless mode - SAME as Buildah)
+RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
+    echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
+
+# Create BuildKit config directory and config file
+RUN mkdir -p /home/${SMITHY_USER}/.config/buildkit && \
+    chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}/.config
+
+# Create buildkitd.toml with native snapshotter (for security parity with Buildah)
+RUN cat > /home/${SMITHY_USER}/.config/buildkit/buildkitd.toml <<'EOF'
+# BuildKit configuration for Smithy
+# Configured for security parity with Buildah
+
+debug = false
+
+[grpc]
+  address = [ "unix:///run/user/1000/buildkit/buildkitd.sock" ]
+
+[worker.oci]
+  enabled = true
+  # Use native snapshotter for security (no overlayfs) - like VFS in Buildah
+  snapshotter = "native"
+  # Enable rootless mode with user namespaces
+  rootless = true
+  # Run in container without process sandbox
+  noProcessSandbox = true
+
+  # Garbage collection
+  gc = true
+  gckeepstorage = "10GB"
+
+  [[worker.oci.gcpolicy]]
+    keepBytes = "512MB"
+    keepDuration = "48h"
+    filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
+
+  [[worker.oci.gcpolicy]]
+    all = true
+    keepBytes = "10GB"
+
+[worker.containerd]
+  enabled = false
+EOF
+
+# Install ECR and GCR credential helpers (SAME as Buildah)
+# ECR helper
+RUN ECR_VERSION=$(wget -qO- https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    wget -q -O /usr/local/bin/docker-credential-ecr-login \
+        "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login
+
+# GCR helper
+RUN GCR_VERSION=$(wget -qO- https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    wget -qO- "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
+    | tar xz -C /usr/local/bin/ docker-credential-gcr && \
+    chmod +x /usr/local/bin/docker-credential-gcr
+
+# Environment variables
+ENV HOME=/home/smithy
+ENV DOCKER_CONFIG=/home/smithy/.docker
+ENV XDG_RUNTIME_DIR=/run/user/${SMITHY_UID}
+ENV BUILDKIT_HOST=unix:///run/user/1000/buildkit/buildkitd.sock
+
+# Set ownership for smithy user directories
+RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
+RUN mkdir -p "${XDG_RUNTIME_DIR}" && \
+    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}"
+
+# Create buildkit state directory
+RUN mkdir -p /home/${SMITHY_USER}/.local/share/buildkit && \
+    chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}/.local
+
+# Default to non-root user (rootless mode - SAME security as Buildah)
+USER ${SMITHY_UID}:${SMITHY_UID}
+WORKDIR /home/${SMITHY_USER}
+
+ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
+
+LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
+LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (BuildKit)"
+LABEL org.opencontainers.image.builder="buildkit"
+
+# Set smithy as the entrypoint
+ENTRYPOINT ["/usr/local/bin/smithy"]
+
+# Default command shows help
+CMD ["--help"]
+
