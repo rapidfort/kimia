@@ -456,6 +456,7 @@ spec:
 | `--cache-dir` | Cache directory path | `--cache-dir=/cache` |
 | `--custom-platform` | Target platform | `--custom-platform=linux/arm64` |
 | `--no-push` | Build only, skip push | `--no-push` |
+| `--reproducible` | Enable reproducible builds by setting consistent timestamps and disabling layer caching | `--reproducible` |
 
 ### Git Options
 
@@ -1586,6 +1587,7 @@ Smithy supports most Kaniko arguments for easy migration.
 | `--skip-tls-verify` | `--skip-tls-verify` | ✅ Direct compatibility |
 | `--verbosity` | `--verbosity` | ✅ Direct compatibility |
 | `--label` | `--label` | ✅ Direct compatibility |
+| `--reproducible` | `--reproducible` | ✅ Direct compatibility |
 | `--git` | Built-in Git support | ℹ️ Use `--context=git://...` |
 | `--snapshot-mode` | N/A | ℹ️ VFS storage handles this |
 | `--use-new-run` | N/A | ℹ️ Buildah default behavior |

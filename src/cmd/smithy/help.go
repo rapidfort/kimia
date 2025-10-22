@@ -25,6 +25,7 @@ func printHelp() {
 	fmt.Println("  --cache                               Enable layer caching")
 	fmt.Println("  --cache-dir PATH                      Cache directory path")
 	fmt.Println("  --custom-platform PLATFORM            Target platform (e.g., linux/amd64)")
+	fmt.Println("  --reproducible                        Enable reproducible builds by setting consistent timestamps and disabling layer caching")
 	fmt.Println()
 	fmt.Println("GIT OPTIONS:")
 	fmt.Println("  --git-branch BRANCH                   Git branch to checkout")

@@ -242,6 +242,9 @@ func parseArgs(args []string) *Config {
 				config.RegistryCertificate = args[i]
 			}
 
+		case "--reproducible":
+			config.Reproducible = true
+
 		// Enterprise flags (will error out)
 		case "--scan":
 			config.Scan = true
