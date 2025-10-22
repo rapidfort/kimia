@@ -15,7 +15,7 @@ func parseArgs(args []string) *Config {
 		Verbosity:        "info",
 		InsecureRegistry: []string{},
 		Destination:      []string{},
-		StorageDriver:    "vfs", // Default to vfs
+		StorageDriver:    "", // Empty by default, only used by Buildah
 	}
 
 	// If no arguments provided, show help

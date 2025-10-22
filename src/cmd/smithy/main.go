@@ -37,29 +37,34 @@ func main() {
 	config := parseArgs(os.Args[1:])
 
 	// Log smithy version (builder will be logged by build.Execute)
-	logger.Info("Smithy — Kubernetes-Native OCI Image Builder v%s", Version)
+	logger.Info("Smithy Ã¢â‚¬â€ Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
-	// Validate storage driver
-	validDrivers := []string{"vfs", "overlay"}
-	storageDriver := strings.ToLower(config.StorageDriver)
-	isValid := false
-	for _, driver := range validDrivers {
-		if storageDriver == driver {
-			isValid = true
-			break
+	// Validate storage driver only if specified (only used by Buildah)
+	if config.StorageDriver != "" {
+		validDrivers := []string{"vfs", "overlay"}
+		storageDriver := strings.ToLower(config.StorageDriver)
+		isValid := false
+		for _, driver := range validDrivers {
+			if storageDriver == driver {
+				isValid = true
+				break
+			}
 		}
-	}
-	if !isValid {
-		fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
-		fmt.Fprintf(os.Stderr, "Valid options: vfs, overlay\n\n")
-		os.Exit(1)
-	}
+		if !isValid {
+			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
+			fmt.Fprintf(os.Stderr, "Valid options: vfs, overlay\n\n")
+			os.Exit(1)
+		}
 
-	// Log storage driver selection
-	logger.Info("Using storage driver: %s", storageDriver)
-	if storageDriver == "overlay" {
-		logger.Info("Note: Overlay driver requires fuse-overlayfs")
+		// Log storage driver selection
+		logger.Info("Using storage driver: %s", storageDriver)
+		if storageDriver == "overlay" {
+			logger.Info("Note: Overlay driver requires fuse-overlayfs")
+		}
+		if storageDriver == "vfs" {
+			logger.Info("Note: VFS storage (Buildah only)")
+		}
 	}
 
 	if config.Context == "" {
@@ -97,7 +102,15 @@ func main() {
 	logger.Setup(config.Verbosity, config.LogTimestamp)
 
 	// Prepare build context
-	ctx, err := build.PrepareContext(config.Context, config.SubContext, config.GitBranch, config.GitRevision, config.GitTokenFile, config.GitTokenUser)
+	gitConfig := build.GitConfig{
+		Context:   config.Context,
+		Branch:    config.GitBranch,
+		Revision:  config.GitRevision,
+		TokenFile: config.GitTokenFile,
+		TokenUser: config.GitTokenUser,
+	}
+	
+	ctx, err := build.Prepare(gitConfig)
 	if err != nil {
 		logger.Fatal("Failed to prepare build context: %v", err)
 	}

@@ -95,6 +95,17 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	logger.Info("Starting buildah build...")
 
+	// Log storage driver if specified
+	if config.StorageDriver != "" {
+		storageDriver := strings.ToLower(config.StorageDriver)
+		logger.Info("Using storage driver: %s", storageDriver)
+		if storageDriver == "overlay" {
+			logger.Info("Note: Overlay driver requires fuse-overlayfs")
+		} else if storageDriver == "vfs" {
+			logger.Info("Note: VFS storage driver selected")
+		}
+	}
+
 	// Construct buildah command
 	args := []string{"bud"}
 
@@ -300,9 +311,6 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-
-	// Set BuildKit configuration
-	cmd.Env = append(cmd.Env, "BUILDKITD_FLAGS=--oci-worker-no-process-sandbox")
 
 	// Enhanced environment setup for auth
 	if authFile != "" {

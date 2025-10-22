@@ -1,6 +1,7 @@
 #!/bin/bash
 # Smithy Master Test Script
 # Main orchestrator for Docker and Kubernetes tests
+# Supports both BuildKit (default) and Buildah (legacy) images
 
 set -e
 
@@ -19,6 +20,7 @@ fi
 NAMESPACE=${NAMESPACE:-"smithy-tests"}
 SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
 RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
+BUILDER=${BUILDER:-"buildkit"}  # buildkit (default) or buildah
 
 # Colors
 RED='\033[0;31m'
@@ -55,7 +57,8 @@ ${YELLOW}OPTIONS:${NC}
     -m, --mode MODE             Test mode: docker, kubernetes, both (required)
     -r, --registry URL          Registry URL (default: ${REGISTRY})
     -i, --image IMAGE           Smithy image to test
-    -s, --storage DRIVER        Storage driver: vfs, overlay, both (default: both)
+    -b, --builder BUILDER       Builder: buildkit (default), buildah
+    -s, --storage DRIVER        Storage driver: vfs, overlay, native, both (default: both)
     -c, --cleanup               Clean up resources after tests
     --namespace NAMESPACE       Kubernetes namespace (default: ${NAMESPACE})
 
@@ -64,17 +67,33 @@ ${YELLOW}MODES:${NC}
     kubernetes                  Run Kubernetes tests only (rootless + rootful)
     both                        Run all tests
 
+${YELLOW}BUILDERS:${NC}
+    buildkit                    Test BuildKit-based smithy (default, recommended)
+    buildah                     Test Buildah-based smithy-bud (legacy)
+
 ${YELLOW}STORAGE DRIVERS:${NC}
-    vfs                         Test VFS storage driver only
-    overlay                     Test Overlay storage driver only
-    both                        Test both drivers (default)
+    native                      Test native storage (BuildKit) or vfs (Buildah)
+    vfs                         Test VFS storage (legacy, Buildah only)
+    overlay                     Test Overlay storage with fuse-overlayfs
+    both                        Test both primary driver and overlay (default)
+
+${YELLOW}STORAGE MAPPING:${NC}
+    BuildKit:
+      - native:  Native snapshotter (default, secure)
+      - overlay: fuse-overlayfs (high performance)
+    Buildah:
+      - vfs:     VFS storage (default, secure)
+      - overlay: fuse-overlayfs (high performance)
 
 ${YELLOW}EXAMPLES:${NC}
-    # Run all tests
+    # Run all tests with BuildKit (default)
     $0 -m both
 
-    # Run Docker tests only with VFS
-    $0 -m docker -s vfs
+    # Run Docker tests only with BuildKit and native storage
+    $0 -m docker -s native
+
+    # Run tests with Buildah image
+    $0 -m both -b buildah
 
     # Run Kubernetes tests with cleanup
     $0 -m kubernetes -c
@@ -84,8 +103,8 @@ ${YELLOW}EXAMPLES:${NC}
 
 ${YELLOW}TEST COVERAGE:${NC}
     Docker Tests:
-      - Rootless mode (UID 1000) with VFS and Overlay
-      - Rootful mode (UID 0) with VFS and Overlay
+      - Rootless mode (UID 1000) with native/vfs and overlay
+      - Rootful mode (UID 0) with native/vfs and overlay
       - Version checks, basic builds, build-args, Git repos
     
     Kubernetes Tests:
@@ -99,6 +118,7 @@ ${YELLOW}ENVIRONMENT VARIABLES:${NC}
     SMITHY_IMAGE                Override smithy image
     NAMESPACE                   Override K8s namespace
     RF_SMITHY_TMPDIR           Override temp directory
+    BUILDER                     Override builder (buildkit/buildah)
 
 EOF
     exit 0
@@ -124,6 +144,10 @@ parse_args() {
                 ;;
             -i|--image)
                 SMITHY_IMAGE="$2"
+                shift 2
+                ;;
+            -b|--builder)
+                BUILDER="$2"
                 shift 2
                 ;;
             -s|--storage)
@@ -157,10 +181,37 @@ parse_args() {
         usage
     fi
 
-    # Validate storage driver
-    if [[ ! "$STORAGE_DRIVER" =~ ^(vfs|overlay|both)$ ]]; then
-        echo -e "${RED}Error: Invalid storage driver. Must be: vfs, overlay, or both${NC}"
+    # Validate builder
+    if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
+        echo -e "${RED}Error: Invalid builder. Must be: buildkit or buildah${NC}"
         usage
+    fi
+
+    # Validate storage driver
+    if [[ ! "$STORAGE_DRIVER" =~ ^(native|vfs|overlay|both)$ ]]; then
+        echo -e "${RED}Error: Invalid storage driver. Must be: native, vfs, overlay, or both${NC}"
+        usage
+    fi
+
+    # Auto-set image based on builder if not specified
+    if [ -z "$SMITHY_IMAGE" ] || [ "$SMITHY_IMAGE" = "${REGISTRY}/rapidfort/smithy:latest" ]; then
+        if [ "$BUILDER" = "buildah" ]; then
+            SMITHY_IMAGE="${REGISTRY}/rapidfort/smithy-bud:latest"
+            echo -e "${CYAN}Auto-selected Buildah image: ${SMITHY_IMAGE}${NC}"
+        else
+            SMITHY_IMAGE="${REGISTRY}/rapidfort/smithy:latest"
+            echo -e "${CYAN}Auto-selected BuildKit image: ${SMITHY_IMAGE}${NC}"
+        fi
+    fi
+
+    # Normalize storage driver for builder
+    if [ "$STORAGE_DRIVER" = "native" ] && [ "$BUILDER" = "buildah" ]; then
+        echo -e "${YELLOW}Warning: 'native' storage not supported by Buildah, using 'vfs' instead${NC}"
+        STORAGE_DRIVER="vfs"
+    fi
+    
+    if [ "$STORAGE_DRIVER" = "vfs" ] && [ "$BUILDER" = "buildkit" ]; then
+        echo -e "${YELLOW}Warning: 'vfs' storage not recommended for BuildKit, consider 'native' instead${NC}"
     fi
 }
 
@@ -175,7 +226,7 @@ cleanup_on_interrupt() {
     echo -e "${YELLOW}Stopping tests and cleaning up...${NC}"
     
     # Kill any running test scripts
-    pkill -P $ 2>/dev/null || true
+    pkill -P $$ 2>/dev/null || true
     
     echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130  # Standard exit code for SIGINT
@@ -216,6 +267,7 @@ run_docker_tests() {
     local cmd="${SCRIPT_DIR}/docker-tests.sh"
     cmd="$cmd --registry $REGISTRY"
     cmd="$cmd --image $SMITHY_IMAGE"
+    cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
     
     [ "$CLEANUP_AFTER" = true ] && cmd="$cmd --cleanup"
@@ -238,6 +290,7 @@ run_kubernetes_tests() {
     cmd="$cmd --registry $REGISTRY"
     cmd="$cmd --image $SMITHY_IMAGE"
     cmd="$cmd --namespace $NAMESPACE"
+    cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
     
     [ "$CLEANUP_AFTER" = true ] && cmd="$cmd --cleanup"
@@ -259,6 +312,7 @@ main() {
     
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Mode:           ${TEST_MODE}"
+    echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
     echo -e "  Image:          ${SMITHY_IMAGE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"

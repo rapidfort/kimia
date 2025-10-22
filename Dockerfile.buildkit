@@ -1,16 +1,16 @@
-# Dockerfile.buildkit - BuildKit-based Smithy Image
-# Stage 1: Build smithy binary (SAME as Buildah version)
+# Dockerfile.buildkit - Self-contained Smithy with BuildKit
+# Smithy launches its own rootlesskit + buildkitd
+
 ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
 ARG COMMIT="unknown"
 ARG BRANCH="unknown"
-ARG RELEASE="0"
-
 ARG GOLANG_VERSION=1.25.3
-ARG SMITHY_UID=1000
-ARG SMITHY_USER=smithy
+ARG BUILDKIT_VERSION=v0.25.1
+ARG ROOTLESSKIT_VERSION=v2.3.5
 ARG TARGETARCH
 
+# Stage 1: Build smithy binary
 FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
 ARG VERSION
 ARG BUILD_DATE
@@ -18,15 +18,9 @@ ARG COMMIT
 ARG BRANCH
 
 WORKDIR /app
-
-# Copy the entire src directory
 COPY src/ .
-
-# The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
-# Build from cmd/smithy
-# Note: ldflags use 'main' because cmd/smithy is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -36,99 +30,130 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.Branch=${BRANCH}" \
     -o smithy ./cmd/smithy
 
-# Stage 2: BuildKit Runtime Image
-FROM alpine AS run-prep-image
-ARG SMITHY_UID
-ARG SMITHY_USER
+# Stage 2: Runtime image with BuildKit + rootlesskit + crun
+FROM alpine:latest
 ARG TARGETARCH
-ARG BUILDKIT_VERSION=v0.25.1
+ARG BUILDKIT_VERSION
 
-RUN apk update && apk add gnutls
-
-# Install BuildKit and dependencies
+# Install all dependencies
 RUN apk add --no-cache \
     bash \
     ca-certificates \
-    curl \
     git \
+    curl \
     shadow \
     shadow-uidmap \
+    crun \
     fuse-overlayfs \
+    slirp4netns \
     && update-ca-certificates
 
-# Install BuildKit binaries
+# Install RootlessKit
+ARG ROOTLESSKIT_VERSION
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "x86_64" ;; \
+        "arm64") echo "aarch64" ;; \
+        *) echo "x86_64" ;; \
+    esac) && \
+    wget -q -O /tmp/rootlesskit.tar.gz \
+        "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" && \
+    tar -xzf /tmp/rootlesskit.tar.gz -C /usr/local/bin && \
+    rm /tmp/rootlesskit.tar.gz && \
+    chmod +x /usr/local/bin/rootlesskit*
+
+# Install BuildKit (buildkitd + buildctl)
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    echo "Installing BuildKit ${BUILDKIT_VERSION} for ${ARCH}..." && \
     wget -q -O /tmp/buildkit.tar.gz \
         "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" && \
     tar -xzf /tmp/buildkit.tar.gz -C /usr/local && \
     rm /tmp/buildkit.tar.gz && \
-    chmod +x /usr/local/bin/buildctl /usr/local/bin/buildkitd /usr/local/bin/buildctl-daemonless.sh
-
-# Verify BuildKit installation
-RUN buildctl --version && buildkitd --version
-
-# Setup SETUID binaries (same as Buildah image)
-RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+    chmod +x /usr/local/bin/buildctl /usr/local/bin/buildkitd
 
 # Copy smithy binary
 COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
 RUN chmod +x /usr/local/bin/smithy
 
-# Create smithy user (SAME as Buildah)
-RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
-    adduser -D -G ${SMITHY_USER} -u ${SMITHY_UID} ${SMITHY_USER}
+# Create buildctl-daemonless.sh wrapper script (patched for rootless /run)
+RUN cat > /usr/local/bin/buildctl-daemonless.sh <<'EOF'
+#!/bin/sh
+# Ephemeral BuildKit: starts buildkitd (rootless-friendly) and runs buildctl.
+set -eu
 
-# Setup subuid/subgid for smithy user (for rootless mode - SAME as Buildah)
-RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
-    echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
+: ${BUILDCTL:=buildctl}
+: ${BUILDCTL_CONNECT_RETRIES_MAX:=10}
+: ${BUILDKITD:=buildkitd}
 
-# Create BuildKit config directory and config file
-RUN mkdir -p /home/${SMITHY_USER}/.config/buildkit && \
-    chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}/.config
+# BuildKit worker defaults (rootless-friendly)
+: ${BUILDKIT_ROOT:="$HOME/.local/share/buildkit"}
+: ${BUILDKITD_FLAGS:="--oci-worker-rootless --oci-worker-snapshotter=native --oci-worker-binary=crun --root=$BUILDKIT_ROOT"}
 
-# Create buildkitd.toml with native snapshotter (for security parity with Buildah)
-RUN cat > /home/${SMITHY_USER}/.config/buildkit/buildkitd.toml <<'EOF'
-# BuildKit configuration for Smithy
-# Configured for security parity with Buildah
+# RootlessKit with a writable /run shadow and simple user networking
+: ${ROOTLESSKIT:=rootlesskit}
+: ${ROOTLESSKIT_FLAGS:="--copy-up=/etc --copy-up=/run --net=host --disable-host-loopback"}
 
-debug = false
+# Ensure XDG_RUNTIME_DIR exists for rootless; do not rely on /run
+: ${XDG_RUNTIME_DIR:="$HOME/run"}
 
-[grpc]
-  address = [ "unix:///run/user/1000/buildkit/buildkitd.sock" ]
+tmp="$(mktemp -d /tmp/buildctl-daemonless.XXXXXX)"
+cleanup() {
+  if [ -f "$tmp/pid" ]; then
+    kill "$(cat "$tmp/pid")" 2>/dev/null || true
+    wait "$(cat "$tmp/pid")" 2>/dev/null || true
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
 
-[worker.oci]
-  enabled = true
-  # Use native snapshotter for security (no overlayfs) - like VFS in Buildah
-  snapshotter = "native"
-  # Enable rootless mode with user namespaces
-  rootless = true
-  # Run in container without process sandbox
-  noProcessSandbox = true
+startBuildkitd() {
+  if [ "$(id -u)" = "0" ]; then
+    # rootful: use /run/buildkit (writable as root)
+    addr="unix:///run/buildkit/buildkitd.sock"
+    mkdir -p /run/buildkit
+    helper=""
+    exec_cmd="$BUILDKITD $BUILDKITD_FLAGS --addr=$addr"
+  else
+    # rootless: keep everything under user's dirs
+    addr="unix://$XDG_RUNTIME_DIR/buildkit/buildkitd.sock"
+    mkdir -p "$XDG_RUNTIME_DIR/buildkit"
+    mkdir -p "$BUILDKIT_ROOT"
+    # run via rootlesskit and shadow /run so buildkit never touches host /run
+    helper="$ROOTLESSKIT $ROOTLESSKIT_FLAGS"
+    exec_cmd="$helper $BUILDKITD $BUILDKITD_FLAGS --addr=$addr"
+  fi
 
-  # Garbage collection
-  gc = true
-  gckeepstorage = "10GB"
+  # shellcheck disable=SC2086
+  sh -c "$exec_cmd" >"$tmp/log" 2>&1 &
+  echo $! >"$tmp/pid"
+  echo "$addr" >"$tmp/addr"
+}
 
-  [[worker.oci.gcpolicy]]
-    keepBytes = "512MB"
-    keepDuration = "48h"
-    filters = [ "type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
+waitForBuildkitd() {
+  addr="$(cat "$tmp/addr")"
+  try=0
+  max="$BUILDCTL_CONNECT_RETRIES_MAX"
+  until "$BUILDCTL" --addr="$addr" debug workers >/dev/null 2>&1; do
+    if [ "$try" -gt "$max" ]; then
+      echo >&2 "could not connect to $addr after $max tries"
+      cat "$tmp/log" >&2 || true
+      exit 1
+    fi
+    sleep 1
+    try=$((try + 1))
+  done
+}
 
-  [[worker.oci.gcpolicy]]
-    all = true
-    keepBytes = "10GB"
-
-[worker.containerd]
-  enabled = false
+startBuildkitd
+waitForBuildkitd
+"$BUILDCTL" --addr="$(cat "$tmp/addr")" "$@"
 EOF
 
-# Install ECR and GCR credential helpers (SAME as Buildah)
-# ECR helper
+RUN chmod +x /usr/local/bin/buildctl-daemonless.sh
+
+# Install credential helpers
 RUN ECR_VERSION=$(wget -qO- https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -139,7 +164,6 @@ RUN ECR_VERSION=$(wget -qO- https://api.github.com/repos/awslabs/amazon-ecr-cred
         "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
     chmod +x /usr/local/bin/docker-credential-ecr-login
 
-# GCR helper
 RUN GCR_VERSION=$(wget -qO- https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -150,34 +174,41 @@ RUN GCR_VERSION=$(wget -qO- https://api.github.com/repos/GoogleCloudPlatform/doc
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-# Environment variables
+# Setup SETUID binaries for user namespaces
+RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+
+# Create smithy user
+RUN addgroup -g 1000 smithy && \
+    adduser -D -G smithy -u 1000 smithy
+
+# Setup subuid/subgid for rootless mode
+RUN echo "smithy:100000:65536" >> /etc/subuid && \
+    echo "smithy:100000:65536" >> /etc/subgid
+
+# Create directories
+RUN mkdir -p /home/smithy/.local/share/buildkit && \
+    chown -R smithy:smithy /home/smithy
+
+# Environment
 ENV HOME=/home/smithy
 ENV DOCKER_CONFIG=/home/smithy/.docker
-ENV XDG_RUNTIME_DIR=/run/user/${SMITHY_UID}
+ENV XDG_RUNTIME_DIR=/run/user/1000
 ENV BUILDKIT_HOST=unix:///run/user/1000/buildkit/buildkitd.sock
 
-# Set ownership for smithy user directories
-RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
-RUN mkdir -p "${XDG_RUNTIME_DIR}" && \
-    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}"
+# Create runtime dir with correct permissions
+RUN mkdir -p /run/user/1000 && \
+    chown -R smithy:smithy /run/user/1000
 
-# Create buildkit state directory
-RUN mkdir -p /home/${SMITHY_USER}/.local/share/buildkit && \
-    chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}/.local
+# Switch to non-root user
+USER smithy
+WORKDIR /home/smithy
 
-# Default to non-root user (rootless mode - SAME security as Buildah)
-USER ${SMITHY_UID}:${SMITHY_UID}
-WORKDIR /home/${SMITHY_USER}
-
-ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
+ENV PATH="/home/smithy/rapidfort:${PATH}"
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
-LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (BuildKit)"
+LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
 LABEL org.opencontainers.image.builder="buildkit"
 
-# Set smithy as the entrypoint
+# Smithy will launch rootlesskit + buildkitd internally
 ENTRYPOINT ["/usr/local/bin/smithy"]
-
-# Default command shows help
 CMD ["--help"]
-

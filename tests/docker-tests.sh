@@ -1,8 +1,11 @@
 #!/bin/bash
 # Smithy Docker Test Suite
 # Tests both rootless (UID 1000) and rootful (UID 0) modes
-# Tests both VFS and Overlay storage drivers
-# Note: MKNOD capability required ONLY for overlay storage in rootless mode
+# Supports BuildKit (default) and Buildah (legacy) images
+# Tests storage drivers based on builder:
+#   - BuildKit: native (default), overlay
+#   - Buildah: vfs (default), overlay
+# Note: Overlay requires appropriate capabilities in rootless mode
 
 set -e
 
@@ -15,6 +18,7 @@ fi
 
 SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
 RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
+BUILDER=${BUILDER:-"buildkit"}  # buildkit or buildah
 STORAGE_DRIVER="both"
 CLEANUP_AFTER=false
 
@@ -50,6 +54,10 @@ while [[ $# -gt 0 ]]; do
             SMITHY_IMAGE="$2"
             shift 2
             ;;
+        --builder)
+            BUILDER="$2"
+            shift 2
+            ;;
         --storage)
             STORAGE_DRIVER="$2"
             shift 2
@@ -64,6 +72,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate builder
+if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
+    echo -e "${RED}Error: Invalid builder '$BUILDER'. Must be: buildkit or buildah${NC}"
+    exit 1
+fi
 
 # Create suites directory
 mkdir -p "${SUITES_DIR}"
@@ -80,6 +94,31 @@ print_section() {
     echo ""
 }
 
+# Get the primary storage driver name based on builder
+get_primary_driver() {
+    if [ "$BUILDER" = "buildkit" ]; then
+        echo "native"
+    else
+        echo "vfs"
+    fi
+}
+
+# Get the actual storage flag value for smithy
+get_storage_flag() {
+    local driver="$1"
+    
+    # BuildKit uses 'native' which maps to native snapshotter
+    # Buildah uses 'vfs' which maps to VFS storage
+    # Both support 'overlay'
+    if [ "$driver" = "native" ] && [ "$BUILDER" = "buildah" ]; then
+        echo "vfs"  # Fallback for buildah
+    elif [ "$driver" = "vfs" ] && [ "$BUILDER" = "buildkit" ]; then
+        echo "native"  # Fallback for buildkit
+    else
+        echo "$driver"
+    fi
+}
+
 # ============================================================================
 # Test Script Generator
 # ============================================================================
@@ -94,11 +133,12 @@ create_test_script() {
     # Sanitize test name for filename: replace spaces with dashes, lowercase
     local safe_name=$(echo "$test_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
     
-    local script_file="${SUITES_DIR}/${test_type}-${mode}-${driver}-${safe_name}.sh"
+    local script_file="${SUITES_DIR}/${test_type}-${BUILDER}-${mode}-${driver}-${safe_name}.sh"
     
     cat > "$script_file" <<TESTSCRIPT
 #!/bin/bash
 # Auto-generated Docker test script
+# Builder: ${BUILDER}
 # Type: ${test_type}
 # Test: ${test_name}
 # Mode: ${mode}
@@ -114,12 +154,13 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo ""
-echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
-echo -e "\${CYAN}Docker Test: ${test_name}\${NC}"
-echo -e "\${CYAN}Type: ${test_type}\${NC}"
-echo -e "\${CYAN}Mode: ${mode}\${NC}"
-echo -e "\${CYAN}Driver: ${driver}\${NC}"
-echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}╔═══════════════════════════════════════════════════════╗\${NC}"
+echo -e "\${CYAN}║ Docker Test: ${test_name}\${NC}"
+echo -e "\${CYAN}║ Builder: ${BUILDER}\${NC}"
+echo -e "\${CYAN}║ Type: ${test_type}\${NC}"
+echo -e "\${CYAN}║ Mode: ${mode}\${NC}"
+echo -e "\${CYAN}║ Driver: ${driver}\${NC}"
+echo -e "\${CYAN}╚═══════════════════════════════════════════════════════╝\${NC}"
 echo ""
 
 # Test execution
@@ -158,20 +199,20 @@ run_test() {
     # CREATE the happy case test script file
     local script_file=$(create_test_script "happy" "$test_name" "$mode" "$driver" "$test_cmd")
     
-    echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${mode}, ${driver})"
+    echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, ${mode}, ${driver})"
     echo -e "${CYAN}  Script: $(basename $script_file)${NC}"
     
     # EXECUTE the test script
     if bash "$script_file" > /tmp/test-$$.log 2>&1; then
         echo -e "${GREEN}  ✓ PASS${NC}"
         PASSED_TESTS=$((PASSED_TESTS + 1))
-        TEST_RESULTS+=("PASS: ${test_name} (${mode}, ${driver})")
+        TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, ${mode}, ${driver})")
     else
         echo -e "${RED}  ✗ FAIL${NC}"
         echo -e "${YELLOW}  To re-run: bash $script_file${NC}"
         cat /tmp/test-$$.log | sed 's/^/    /'
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        TEST_RESULTS+=("FAIL: ${test_name} (${mode}, ${driver})")
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver})")
     fi
     
     rm -f /tmp/test-$$.log
@@ -210,7 +251,6 @@ EOF
     
     echo "$dockerfile"
 }
-
 # ============================================================================
 # Rootless Mode Tests (UID 1000)
 # ============================================================================
@@ -218,10 +258,24 @@ EOF
 run_rootless_tests() {
     local driver="$1"
     
-    print_section "ROOTLESS MODE TESTS (UID 1000) - ${driver^^} STORAGE"
+    # Get the actual storage flag value
+    local storage_flag=$(get_storage_flag "$driver")
+    
+    print_section "ROOTLESS MODE TESTS (UID 1000) - ${BUILDER^^} with ${driver^^} STORAGE"
     
     if [ "$driver" = "overlay" ]; then
-        echo -e "${YELLOW}Note: Overlay storage requires CAP_MKNOD in rootless mode${NC}"
+        echo -e "${YELLOW}Note: Overlay storage requires additional capabilities in rootless mode${NC}"
+        if [ "$BUILDER" = "buildkit" ]; then
+            echo -e "${YELLOW}      BuildKit overlay uses fuse-overlayfs${NC}"
+        else
+            echo -e "${YELLOW}      Buildah overlay requires CAP_MKNOD${NC}"
+        fi
+        echo ""
+    elif [ "$driver" = "native" ]; then
+        echo -e "${CYAN}Note: Native snapshotter (BuildKit) provides security with good performance${NC}"
+        echo ""
+    elif [ "$driver" = "vfs" ]; then
+        echo -e "${CYAN}Note: VFS storage (Buildah) is the most secure but slower${NC}"
         echo ""
     fi
     
@@ -236,9 +290,15 @@ run_rootless_tests() {
     BASE_CMD="$BASE_CMD --cap-add SETUID"
     BASE_CMD="$BASE_CMD --cap-add SETGID"
     
-    # Add MKNOD only for overlay
+    # Add additional capabilities for overlay
     if [ "$driver" = "overlay" ]; then
-        BASE_CMD="$BASE_CMD --cap-add MKNOD"
+        if [ "$BUILDER" = "buildkit" ]; then
+            # BuildKit with overlay needs DAC_OVERRIDE for fuse
+            BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
+        else
+            # Buildah with overlay needs MKNOD
+            BASE_CMD="$BASE_CMD --cap-add MKNOD"
+        fi
     fi
     
     BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
@@ -271,8 +331,8 @@ run_rootless_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootless-basic-${driver}:latest \
-        --storage-driver=$driver \
+        --destination=test-${BUILDER}-rootless-basic-${driver}:latest \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -284,10 +344,10 @@ run_rootless_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootless-buildargs-${driver}:latest \
+        --destination=test-${BUILDER}-rootless-buildargs-${driver}:latest \
         --build-arg=VERSION=2.0 \
         --build-arg=BUILD_DATE=$(date +%Y%m%d) \
-        --storage-driver=$driver \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -299,10 +359,11 @@ run_rootless_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootless-labels-${driver}:latest \
+        --destination=test-${BUILDER}-rootless-labels-${driver}:latest \
         --label=test=true \
+        --label=builder=${BUILDER} \
         --label=storage=${driver} \
-        --storage-driver=$driver \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -315,8 +376,8 @@ run_rootless_tests() {
         --context=https://github.com/nginxinc/docker-nginx.git \
         --git-branch=master \
         --dockerfile=mainline/alpine/Dockerfile \
-        --destination=test-rootless-git-${driver}:latest \
-        --storage-driver=$driver \
+        --destination=test-${BUILDER}-rootless-git-${driver}:latest \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -331,7 +392,10 @@ run_rootless_tests() {
 run_rootful_tests() {
     local driver="$1"
     
-    print_section "ROOTFUL MODE TESTS (UID 0) - ${driver^^} STORAGE"
+    # Get the actual storage flag value
+    local storage_flag=$(get_storage_flag "$driver")
+    
+    print_section "ROOTFUL MODE TESTS (UID 0) - ${BUILDER^^} with ${driver^^} STORAGE"
     
     echo -e "${YELLOW}WARNING: Rootful mode for Docker only (NOT for Kubernetes)${NC}"
     echo ""
@@ -372,8 +436,8 @@ run_rootful_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootful-basic-${driver}:latest \
-        --storage-driver=$driver \
+        --destination=test-${BUILDER}-rootful-basic-${driver}:latest \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -385,10 +449,10 @@ run_rootful_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootful-buildargs-${driver}:latest \
+        --destination=test-${BUILDER}-rootful-buildargs-${driver}:latest \
         --build-arg=VERSION=2.0 \
         --build-arg=BUILD_DATE=$(date +%Y%m%d) \
-        --storage-driver=$driver \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -400,10 +464,11 @@ run_rootful_tests() {
         $BASE_CMD \
         --context=/workspace \
         --dockerfile=${dockerfile_name} \
-        --destination=test-rootful-labels-${driver}:latest \
+        --destination=test-${BUILDER}-rootful-labels-${driver}:latest \
         --label=test=true \
+        --label=builder=${BUILDER} \
         --label=storage=${driver} \
-        --storage-driver=$driver \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -416,8 +481,8 @@ run_rootful_tests() {
         --context=https://github.com/nginxinc/docker-nginx.git \
         --git-branch=master \
         --dockerfile=mainline/alpine/Dockerfile \
-        --destination=test-rootful-git-${driver}:latest \
-        --storage-driver=$driver \
+        --destination=test-${BUILDER}-rootful-git-${driver}:latest \
+        --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
@@ -452,7 +517,6 @@ cleanup_on_interrupt() {
     echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130
 }
-
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -467,6 +531,7 @@ main() {
     fi
     
     echo -e "${CYAN}Configuration:${NC}"
+    echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
     echo -e "  Image:          ${SMITHY_IMAGE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
@@ -474,16 +539,39 @@ main() {
     echo -e "  Suites Dir:     ${SUITES_DIR}"
     echo ""
     
+    # Describe storage mappings
+    echo -e "${CYAN}Storage Driver Mappings:${NC}"
+    if [ "$BUILDER" = "buildkit" ]; then
+        echo -e "  native  → Native snapshotter (default for BuildKit)"
+        echo -e "  overlay → fuse-overlayfs (high performance)"
+    else
+        echo -e "  vfs     → VFS storage (default for Buildah)"
+        echo -e "  overlay → fuse-overlayfs (high performance)"
+    fi
+    echo ""
+    
     # Start overall timer
     local overall_start=$(date +%s)
     
-    # Determine which drivers to test
+    # Determine which drivers to test based on builder and storage selection
     local drivers=()
+    local primary_driver=$(get_primary_driver)
+    
     if [ "$STORAGE_DRIVER" = "both" ]; then
-        drivers=("vfs" "overlay")
+        drivers=("$primary_driver" "overlay")
+        echo -e "${CYAN}Testing both ${primary_driver} and overlay storage${NC}"
+    elif [ "$STORAGE_DRIVER" = "native" ] || [ "$STORAGE_DRIVER" = "vfs" ]; then
+        # Map to primary driver
+        drivers=("$primary_driver")
+        echo -e "${CYAN}Testing ${primary_driver} storage only${NC}"
+    elif [ "$STORAGE_DRIVER" = "overlay" ]; then
+        drivers=("overlay")
+        echo -e "${CYAN}Testing overlay storage only${NC}"
     else
         drivers=("$STORAGE_DRIVER")
+        echo -e "${CYAN}Testing ${STORAGE_DRIVER} storage${NC}"
     fi
+    echo ""
     
     # Run tests for each storage driver
     for driver in "${drivers[@]}"; do
@@ -506,6 +594,7 @@ main() {
     # Print summary
     print_section "TEST SUMMARY"
     
+    echo -e "Builder:      ${BUILDER}"
     echo -e "Total Tests:  ${TOTAL_TESTS}"
     echo -e "${GREEN}Passed:       ${PASSED_TESTS}${NC}"
     
@@ -534,7 +623,7 @@ main() {
     echo -e "${GREEN}✓ All Docker tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated test scripts in: ${SUITES_DIR}/${NC}"
-    echo -e "${CYAN}Example: bash ${SUITES_DIR}/happy-rootless-vfs-version.sh${NC}"
+    echo -e "${CYAN}Example: bash ${SUITES_DIR}/happy-${BUILDER}-rootless-${primary_driver}-version.sh${NC}"
     exit 0
 }
 
