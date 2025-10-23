@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- New features here
 - Added --image-download-retry flag for controlling retry attempts when pulling base images during build
 
 ### Changed
