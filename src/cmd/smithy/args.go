@@ -165,6 +165,14 @@ func parseArgs(args []string) *Config {
 				config.PushRetry = parseInt(args[i])
 			}
 
+		case "--image-download-retry":
+			if value != "" {
+				config.ImageDownloadRetry = parseInt(value)
+			} else if i+1 < len(args) {
+				i++
+				config.ImageDownloadRetry = parseInt(args[i])
+			}
+
 		case "-v", "--verbosity":
 			if value != "" {
 				config.Verbosity = value

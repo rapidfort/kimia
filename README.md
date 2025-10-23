@@ -475,6 +475,7 @@ spec:
 | `--insecure-registry` | Specific insecure registry (repeatable) | `--insecure-registry=localhost:5000` |
 | `--skip-tls-verify` | Skip TLS verification | Flag only |
 | `--push-retry` | Push retry attempts | `--push-retry=3` |
+| `--image-download-retry` | Image pull retry attempts during build | `--image-download-retry=5` |
 | `--registry-certificate` | Registry certificate directory | `--registry-certificate=/certs` |
 
 ### Output Options
@@ -1588,6 +1589,7 @@ Smithy supports most Kaniko arguments for easy migration.
 | `--verbosity` | `--verbosity` | ✅ Direct compatibility |
 | `--label` | `--label` | ✅ Direct compatibility |
 | `--reproducible` | `--reproducible` | ✅ Direct compatibility |
+| `--image-download-retry` | `--image-download-retry` | ✅ Direct compatibility |
 | `--git` | Built-in Git support | ℹ️ Use `--context=git://...` |
 | `--snapshot-mode` | N/A | ℹ️ VFS storage handles this |
 | `--use-new-run` | N/A | ℹ️ Buildah default behavior |
