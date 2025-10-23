@@ -136,6 +136,7 @@ func main() {
 		InsecureRegistry:           config.InsecureRegistry,
 		SkipTLSVerify:              config.SkipTLSVerify,
 		RegistryCertificate:        config.RegistryCertificate,
+		ImageDownloadRetry:         config.ImageDownloadRetry,
 		NoPush:                     config.NoPush,
 		TarPath:                    config.TarPath,
 		DigestFile:                 config.DigestFile,

@@ -29,6 +29,7 @@ type Config struct {
 	SkipTLSVerify       bool
 	RegistryCertificate string
 	PushRetry           int
+	ImageDownloadRetry  int
 
 	// Logging options
 	Verbosity    string

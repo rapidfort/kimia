@@ -35,6 +35,7 @@ type Config struct {
 	InsecureRegistry    []string
 	SkipTLSVerify       bool
 	RegistryCertificate string
+	ImageDownloadRetry  int
 
 	// Output options
 	NoPush                     bool
@@ -113,6 +114,12 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		}
 	} else {
 		args = append(args, "--no-cache")
+	}
+
+	// Add retry option for image downloads
+	if config.ImageDownloadRetry > 0 {
+		args = append(args, "--retry", fmt.Sprintf("%d", config.ImageDownloadRetry))
+		logger.Info("Image download retry set to %d attempts", config.ImageDownloadRetry)
 	}
 
 	// Add insecure registry options for build

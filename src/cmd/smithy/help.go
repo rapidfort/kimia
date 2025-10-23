@@ -38,6 +38,7 @@ func printHelp() {
 	fmt.Println("  --insecure-registry REGISTRY          Specific insecure registry (repeatable)")
 	fmt.Println("  --skip-tls-verify                     Skip TLS certificate verification")
 	fmt.Println("  --push-retry N                        Push retry attempts (default: 1)")
+	fmt.Println("  --image-download-retry N              Image pull retry attempts during build")
 	fmt.Println("  --registry-certificate PATH           Registry certificate directory")
 	fmt.Println()
 	fmt.Println("OUTPUT OPTIONS:")
