@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Bug fixes
 
+## [1.0.11] - 2025-10-22
+
+### Added
+
+### Changed
+
+### Fixed
+- Fix --context-sub-path arg parsing when the context sub-path is an empty string ""
+
 ## [1.0.10] - 2025-10-21
 
 ### Added
