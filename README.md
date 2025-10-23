@@ -1589,7 +1589,7 @@ Smithy supports most Kaniko arguments for easy migration.
 | `--verbosity` | `--verbosity` | ✅ Direct compatibility |
 | `--label` | `--label` | ✅ Direct compatibility |
 | `--reproducible` | `--reproducible` | ✅ Direct compatibility |
-| `--image-download-retry` | `--image-download-retry` | ✅ Direct compatibility (maps to `--retry`) |
+| `--image-download-retry` | `--image-download-retry` | ✅ Direct compatibility |
 | `--git` | Built-in Git support | ℹ️ Use `--context=git://...` |
 | `--snapshot-mode` | N/A | ℹ️ VFS storage handles this |
 | `--use-new-run` | N/A | ℹ️ Buildah default behavior |
