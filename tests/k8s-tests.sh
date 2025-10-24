@@ -2,7 +2,7 @@
 # Smithy Kubernetes Test Suite
 # Tests ROOTLESS mode (UID 1000) ONLY
 # Smithy is designed for rootless operation in all environments
-# Supports BuildKit (default) and Buildah (legacy) images
+# Supports BuildKit (default) and Buildah images
 # Tests storage drivers based on builder:
 #   - BuildKit: native (default), overlay
 #   - Buildah: vfs (default), overlay
@@ -96,9 +96,9 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${BLUE}â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${BLUE}â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢${NC}"
     echo ""
 }
 
@@ -149,7 +149,7 @@ setup_namespace() {
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
 
-    echo -e "${GREEN}✓ Namespace ready${NC}"
+    echo -e "${GREEN}âœ“ Namespace ready${NC}"
 }
 
 # ============================================================================
@@ -210,11 +210,11 @@ EOF
     echo ""
 
     if [[ "$result" == *"FUSE_AVAILABLE"* ]]; then
-        echo -e "${GREEN}✓ /dev/fuse is available on cluster nodes${NC}"
+        echo -e "${GREEN}âœ“ /dev/fuse is available on cluster nodes${NC}"
         echo -e "${GREEN}  Overlay storage will be tested with fuse-overlayfs${NC}"
         return 0
     else
-        echo -e "${YELLOW}⚠ /dev/fuse is NOT available on cluster nodes${NC}"
+        echo -e "${YELLOW}âš  /dev/fuse is NOT available on cluster nodes${NC}"
         echo -e "${YELLOW}  Overlay storage will be skipped${NC}"
         echo -e "${YELLOW}  To enable overlay: run 'sudo modprobe fuse' on all nodes${NC}"
         return 1
@@ -260,8 +260,8 @@ generate_job_yaml() {
 
     # Overlay storage needs additional configuration
     if [ "$driver" = "overlay" ]; then
-        # Add MKNOD and DAC_OVERRIDE for overlay
-        caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
+        # Add MKNOD, DAC_OVERRIDE, and SYS_ADMIN for overlay with fuse-overlayfs
+        caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE, SYS_ADMIN]"
 
         # Buildah with overlay also needs Unconfined seccomp + AppArmor
         if [ "$BUILDER" = "buildah" ]; then
@@ -366,7 +366,7 @@ run_k8s_test() {
     # Create job
     echo -e "${CYAN}  Creating job...${NC}"
     if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
-        echo -e "${RED}  ✗ FAIL${NC} (Failed to create job)"
+        echo -e "${RED}  âœ— FAIL${NC} (Failed to create job)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         echo ""
@@ -379,7 +379,7 @@ run_k8s_test() {
     local pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
 
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}  ✗ FAIL${NC} (Failed to get pod name)"
+        echo -e "${RED}  âœ— FAIL${NC} (Failed to get pod name)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
@@ -401,7 +401,7 @@ run_k8s_test() {
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
 
-        echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
+        echo -e "${GREEN}  âœ“ PASS${NC} (${duration}s)"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver})")
     else
@@ -411,7 +411,7 @@ run_k8s_test() {
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
 
-        echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
+        echo -e "${RED}  âœ— FAIL${NC} (${duration}s)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
 
@@ -491,7 +491,7 @@ cleanup() {
         echo "Deleting namespace: ${NAMESPACE}"
         kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
 
-        echo -e "${GREEN}✓ Cleanup completed${NC}"
+        echo -e "${GREEN}âœ“ Cleanup completed${NC}"
     fi
 }
 
@@ -503,7 +503,7 @@ cleanup_on_interrupt() {
     kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
     kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
 
-    echo -e "${GREEN}✓ Cleanup completed${NC}"
+    echo -e "${GREEN}âœ“ Cleanup completed${NC}"
     exit 130
 }
 
@@ -530,11 +530,11 @@ main() {
     # Describe storage mappings
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  native  → Native snapshotter (default for BuildKit)"
-        echo -e "  overlay → fuse-overlayfs (high performance)"
+        echo -e "  native  â†’ Native snapshotter (default for BuildKit)"
+        echo -e "  overlay â†’ fuse-overlayfs (high performance)"
     else
-        echo -e "  vfs     → VFS storage (default for Buildah)"
-        echo -e "  overlay → fuse-overlayfs (high performance)"
+        echo -e "  vfs     â†’ VFS storage (default for Buildah)"
+        echo -e "  overlay â†’ fuse-overlayfs (high performance)"
     fi
     echo ""
 
@@ -586,14 +586,14 @@ main() {
         # Add overlay only if FUSE is available
         if [ "$fuse_available" = true ]; then
             drivers+=("overlay")
-            echo -e "${GREEN}✓ Will test both ${primary_driver} and overlay storage${NC}"
+            echo -e "${GREEN}âœ“ Will test both ${primary_driver} and overlay storage${NC}"
         else
-            echo -e "${YELLOW}⚠ Will test ${primary_driver} only (overlay skipped - FUSE not available)${NC}"
+            echo -e "${YELLOW}âš  Will test ${primary_driver} only (overlay skipped - FUSE not available)${NC}"
         fi
     elif [ "$STORAGE_DRIVER" = "overlay" ]; then
         if [ "$fuse_available" = true ]; then
             drivers=("overlay")
-            echo -e "${GREEN}✓ Will test overlay storage${NC}"
+            echo -e "${GREEN}âœ“ Will test overlay storage${NC}"
         else
             echo -e "${RED}Error: Overlay storage requested but FUSE is not available${NC}"
             echo -e "${RED}Solution: Load FUSE module on nodes: 'sudo modprobe fuse'${NC}"
@@ -602,16 +602,16 @@ main() {
     elif [ "$STORAGE_DRIVER" = "native" ] || [ "$STORAGE_DRIVER" = "vfs" ]; then
         # Map to primary driver
         drivers=("$primary_driver")
-        echo -e "${GREEN}✓ Will test ${primary_driver} storage${NC}"
+        echo -e "${GREEN}âœ“ Will test ${primary_driver} storage${NC}"
     else
         drivers=("$STORAGE_DRIVER")
-        echo -e "${GREEN}✓ Will test ${STORAGE_DRIVER} storage${NC}"
+        echo -e "${GREEN}âœ“ Will test ${STORAGE_DRIVER} storage${NC}"
     fi
 
     echo ""
-    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${CYAN}â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢${NC}"
     echo -e "${CYAN}Starting tests for storage drivers: ${drivers[@]}${NC}"
-    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${CYAN}â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢â€¢${NC}"
     echo ""
 
     # Run tests for each storage driver (ROOTLESS ONLY)
@@ -657,7 +657,7 @@ main() {
         exit 1
     fi
 
-    echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
+    echo -e "${GREEN}âœ“ All Kubernetes tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated YAML files in: ${SUITES_DIR}/${NC}"
     exit 0
