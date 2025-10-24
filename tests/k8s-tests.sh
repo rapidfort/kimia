@@ -96,9 +96,9 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo -e "${BLUE}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo ""
 }
 
@@ -149,7 +149,7 @@ setup_namespace() {
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
     
-    echo -e "${GREEN}âœ“ Namespace ready${NC}"
+    echo -e "${GREEN}✓ Namespace ready${NC}"
 }
 
 # ============================================================================
@@ -210,11 +210,11 @@ EOF
     echo ""
     
     if [[ "$result" == *"FUSE_AVAILABLE"* ]]; then
-        echo -e "${GREEN}âœ“ /dev/fuse is available on cluster nodes${NC}"
+        echo -e "${GREEN}✓ /dev/fuse is available on cluster nodes${NC}"
         echo -e "${GREEN}  Overlay storage will be tested with fuse-overlayfs${NC}"
         return 0
     else
-        echo -e "${YELLOW}âœ— /dev/fuse is NOT available on cluster nodes${NC}"
+        echo -e "${YELLOW}⚠ /dev/fuse is NOT available on cluster nodes${NC}"
         echo -e "${YELLOW}  Overlay storage will be skipped${NC}"
         echo -e "${YELLOW}  To enable overlay: run 'sudo modprobe fuse' on all nodes${NC}"
         return 1
@@ -235,7 +235,7 @@ generate_job_yaml() {
     
     local yaml_file="${SUITES_DIR}/job-${job_name}.yaml"
     
-    # Determine capabilities based on storage driver and builder
+    # Set capabilities based on storage driver and builder
     local caps_add="[SETUID, SETGID]"
     local pod_seccomp=""
     local pod_apparmor=""
@@ -244,21 +244,44 @@ generate_job_yaml() {
     local volume_mounts=""
     local volumes=""
     
-    if [ "$driver" = "overlay" ]; then
-        # Both BuildKit and Buildah with overlay need these capabilities
-        caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
+    # CRITICAL FIX: BuildKit ALWAYS needs Unconfined seccomp + AppArmor for mount syscalls
+    # This applies to BOTH native and overlay storage
+    if [ "$BUILDER" = "buildkit" ]; then
         pod_seccomp="seccompProfile:
-          type: Unconfined"
-        pod_apparmor="appArmorProfile:
           type: Unconfined"
         container_seccomp="seccompProfile:
             type: Unconfined"
+        # AppArmor also blocks mount syscalls - must be Unconfined
+        pod_apparmor="appArmorProfile:
+          type: Unconfined"
         container_apparmor="appArmorProfile:
             type: Unconfined"
+    fi
+    
+    # Overlay storage needs additional configuration
+    if [ "$driver" = "overlay" ]; then
+        # Add MKNOD and DAC_OVERRIDE for overlay
+        caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
+        
+        # Buildah with overlay also needs Unconfined seccomp + AppArmor
+        if [ "$BUILDER" = "buildah" ]; then
+            pod_seccomp="seccompProfile:
+          type: Unconfined"
+            container_seccomp="seccompProfile:
+            type: Unconfined"
+            pod_apparmor="appArmorProfile:
+          type: Unconfined"
+            container_apparmor="appArmorProfile:
+            type: Unconfined"
+        fi
+        
+        # Mount /dev/fuse for fuse-overlayfs
         volume_mounts="
+        volumeMounts:
         - name: dev-fuse
           mountPath: /dev/fuse"
         volumes="
+      volumes:
       - name: dev-fuse
         hostPath:
           path: /dev/fuse
@@ -289,6 +312,7 @@ spec:
     spec:
       restartPolicy: Never
       securityContext:
+        runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
@@ -313,13 +337,7 @@ spec:
           runAsUser: 1000
           runAsGroup: 1000
           ${container_seccomp}
-          ${container_apparmor}
-        volumeMounts:
-        - name: home
-          mountPath: /home/smithy${volume_mounts}
-      volumes:
-      - name: home
-        emptyDir: {}${volumes}
+          ${container_apparmor}${volume_mounts}${volumes}
 EOF
     
     echo "$yaml_file"
@@ -352,7 +370,7 @@ run_k8s_test() {
     # Create job
     echo -e "${CYAN}  Creating job...${NC}"
     if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
-        echo -e "${RED}  âœ— FAIL${NC} (Failed to create job)"
+        echo -e "${RED}  ✗ FAIL${NC} (Failed to create job)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         echo ""
@@ -365,7 +383,7 @@ run_k8s_test() {
     local pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
     
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}  âœ— FAIL${NC} (Failed to get pod name)"
+        echo -e "${RED}  ✗ FAIL${NC} (Failed to get pod name)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
@@ -387,7 +405,7 @@ run_k8s_test() {
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
-        echo -e "${GREEN}  âœ“ PASS${NC} (${duration}s)"
+        echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver})")
     else
@@ -397,7 +415,7 @@ run_k8s_test() {
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
-        echo -e "${RED}  âœ— FAIL${NC} (${duration}s)"
+        echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         
@@ -427,13 +445,14 @@ run_rootless_tests() {
     if [ "$driver" = "overlay" ]; then
         echo -e "${CYAN}Note: Overlay storage uses fuse-overlayfs (requires /dev/fuse)${NC}"
         if [ "$BUILDER" = "buildkit" ]; then
-            echo -e "${CYAN}      BuildKit needs DAC_OVERRIDE capability${NC}"
+            echo -e "${CYAN}      BuildKit needs: DAC_OVERRIDE capability + Unconfined seccomp/AppArmor${NC}"
         else
-            echo -e "${CYAN}      Buildah needs MKNOD capability${NC}"
+            echo -e "${CYAN}      Buildah needs: MKNOD capability + Unconfined seccomp/AppArmor${NC}"
         fi
         echo ""
     elif [ "$driver" = "native" ]; then
         echo -e "${CYAN}Note: Native snapshotter (BuildKit) - secure and performant${NC}"
+        echo -e "${CYAN}      Requires Unconfined seccomp + AppArmor for mount syscalls${NC}"
         echo ""
     elif [ "$driver" = "vfs" ]; then
         echo -e "${CYAN}Note: VFS storage (Buildah) - most secure but slower${NC}"
@@ -476,7 +495,7 @@ cleanup() {
         echo "Deleting namespace: ${NAMESPACE}"
         kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
         
-        echo -e "${GREEN}âœ“ Cleanup completed${NC}"
+        echo -e "${GREEN}✓ Cleanup completed${NC}"
     fi
 }
 
@@ -488,7 +507,7 @@ cleanup_on_interrupt() {
     kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
     kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
     
-    echo -e "${GREEN}âœ“ Cleanup completed${NC}"
+    echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130
 }
 
@@ -515,21 +534,37 @@ main() {
     # Describe storage mappings
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  native  â†’ Native snapshotter (default for BuildKit)"
-        echo -e "  overlay â†’ fuse-overlayfs (high performance)"
+        echo -e "  native  → Native snapshotter (default for BuildKit)"
+        echo -e "  overlay → fuse-overlayfs (high performance)"
     else
-        echo -e "  vfs     â†’ VFS storage (default for Buildah)"
-        echo -e "  overlay â†’ fuse-overlayfs (high performance)"
+        echo -e "  vfs     → VFS storage (default for Buildah)"
+        echo -e "  overlay → fuse-overlayfs (high performance)"
     fi
     echo ""
     
-    echo -e "${CYAN}STORAGE REQUIREMENTS:${NC}"
+    echo -e "${CYAN}SECURITY REQUIREMENTS:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  Native:         No dependencies (recommended for BuildKit)"
-        echo -e "  Overlay:        Requires /dev/fuse on nodes (uses fuse-overlayfs)"
+        echo -e "  Native:"
+        echo -e "    - Capabilities: SETUID, SETGID"
+        echo -e "    - Seccomp: Unconfined (for mount syscalls)"
+        echo -e "    - AppArmor: Unconfined (for mount syscalls)"
+        echo -e ""
+        echo -e "  Overlay:"
+        echo -e "    - Capabilities: SETUID, SETGID, MKNOD, DAC_OVERRIDE"
+        echo -e "    - Seccomp: Unconfined (for mount syscalls)"
+        echo -e "    - AppArmor: Unconfined (for mount syscalls)"
+        echo -e "    - Requires: /dev/fuse on nodes"
     else
-        echo -e "  VFS:            No dependencies (recommended for Buildah)"
-        echo -e "  Overlay:        Requires /dev/fuse on nodes (uses fuse-overlayfs)"
+        echo -e "  VFS:"
+        echo -e "    - Capabilities: SETUID, SETGID"
+        echo -e "    - Seccomp: RuntimeDefault (default)"
+        echo -e "    - AppArmor: RuntimeDefault (default)"
+        echo -e ""
+        echo -e "  Overlay:"
+        echo -e "    - Capabilities: SETUID, SETGID, MKNOD, DAC_OVERRIDE"
+        echo -e "    - Seccomp: Unconfined"
+        echo -e "    - AppArmor: Unconfined"
+        echo -e "    - Requires: /dev/fuse on nodes"
     fi
     echo ""
     
@@ -555,14 +590,14 @@ main() {
         # Add overlay only if FUSE is available
         if [ "$fuse_available" = true ]; then
             drivers+=("overlay")
-            echo -e "${GREEN}âœ“ Will test both ${primary_driver} and overlay storage${NC}"
+            echo -e "${GREEN}✓ Will test both ${primary_driver} and overlay storage${NC}"
         else
-            echo -e "${YELLOW}âš   Will test ${primary_driver} only (overlay skipped - FUSE not available)${NC}"
+            echo -e "${YELLOW}⚠ Will test ${primary_driver} only (overlay skipped - FUSE not available)${NC}"
         fi
     elif [ "$STORAGE_DRIVER" = "overlay" ]; then
         if [ "$fuse_available" = true ]; then
             drivers=("overlay")
-            echo -e "${GREEN}âœ“ Will test overlay storage${NC}"
+            echo -e "${GREEN}✓ Will test overlay storage${NC}"
         else
             echo -e "${RED}Error: Overlay storage requested but FUSE is not available${NC}"
             echo -e "${RED}Solution: Load FUSE module on nodes: 'sudo modprobe fuse'${NC}"
@@ -571,16 +606,16 @@ main() {
     elif [ "$STORAGE_DRIVER" = "native" ] || [ "$STORAGE_DRIVER" = "vfs" ]; then
         # Map to primary driver
         drivers=("$primary_driver")
-        echo -e "${GREEN}âœ“ Will test ${primary_driver} storage${NC}"
+        echo -e "${GREEN}✓ Will test ${primary_driver} storage${NC}"
     else
         drivers=("$STORAGE_DRIVER")
-        echo -e "${GREEN}âœ“ Will test ${STORAGE_DRIVER} storage${NC}"
+        echo -e "${GREEN}✓ Will test ${STORAGE_DRIVER} storage${NC}"
     fi
     
     echo ""
-    echo -e "${CYAN}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo -e "${CYAN}Starting tests for storage drivers: ${drivers[@]}${NC}"
-    echo -e "${CYAN}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo ""
     
     # Run tests for each storage driver (ROOTLESS ONLY)
@@ -626,7 +661,7 @@ main() {
         exit 1
     fi
     
-    echo -e "${GREEN}âœ“ All Kubernetes tests passed successfully!${NC}"
+    echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated YAML files in: ${SUITES_DIR}/${NC}"
     exit 0
