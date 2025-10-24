@@ -88,12 +88,11 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
+    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
     echo ""
 }
-
 # Get the primary storage driver name based on builder
 get_primary_driver() {
     if [ "$BUILDER" = "buildkit" ]; then
@@ -154,13 +153,13 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo ""
-echo -e "\${CYAN}╔═══════════════════════════════════════════════════════╗\${NC}"
-echo -e "\${CYAN}║  Docker Test: ${test_name}\${NC}"
-echo -e "\${CYAN}║  Builder: ${BUILDER}\${NC}"
-echo -e "\${CYAN}║  Type: ${test_type}\${NC}"
-echo -e "\${CYAN}║  Mode: ${mode}\${NC}"
-echo -e "\${CYAN}║  Driver: ${driver}\${NC}"
-echo -e "\${CYAN}╚═══════════════════════════════════════════════════════╝\${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}  Docker Test: ${test_name}\${NC}"
+echo -e "\${CYAN}  Builder: ${BUILDER}\${NC}"
+echo -e "\${CYAN}  Type: ${test_type}\${NC}"
+echo -e "\${CYAN}  Mode: ${mode}\${NC}"
+echo -e "\${CYAN}  Driver: ${driver}\${NC}"
+echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
 echo ""
 
 # Test execution
@@ -330,7 +329,6 @@ run_rootless_tests() {
     
 }
 
-# ============================================================================
 # ============================================================================
 # Cleanup
 # ============================================================================
