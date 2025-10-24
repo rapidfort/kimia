@@ -114,7 +114,7 @@ get_primary_driver() {
 # Get the actual storage flag value for smithy
 get_storage_flag() {
     local driver="$1"
-    
+
     # BuildKit uses 'native' which maps to native snapshotter
     # Buildah uses 'vfs' which maps to VFS storage
     # Both support 'overlay'
@@ -133,22 +133,22 @@ get_storage_flag() {
 
 setup_namespace() {
     echo -e "${CYAN}Setting up Kubernetes environment...${NC}"
-    
+
     # Check kubectl
     if ! command -v kubectl &> /dev/null; then
         echo -e "${RED}Error: kubectl is not installed or not in PATH${NC}"
         exit 1
     fi
-    
+
     # Check cluster connectivity
     if ! kubectl cluster-info &> /dev/null; then
         echo -e "${RED}Error: Cannot connect to Kubernetes cluster${NC}"
         exit 1
     fi
-    
+
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
-    
+
     echo -e "${GREEN}✓ Namespace ready${NC}"
 }
 
@@ -159,10 +159,10 @@ setup_namespace() {
 check_fuse_availability() {
     echo ""
     echo -e "${CYAN}Checking FUSE availability on cluster nodes...${NC}"
-    
+
     # Create a test pod to check /dev/fuse
     local test_pod="fuse-check-$$"
-    
+
     cat > /tmp/fuse-check-pod.yaml <<EOF
 apiVersion: v1
 kind: Pod
@@ -184,9 +184,9 @@ spec:
       path: /dev/fuse
       type: CharDevice
 EOF
-    
+
     kubectl apply -f /tmp/fuse-check-pod.yaml > /dev/null 2>&1
-    
+
     # Wait for pod to complete
     local wait_count=0
     while [ $wait_count -lt 30 ]; do
@@ -197,18 +197,18 @@ EOF
         sleep 1
         wait_count=$((wait_count + 1))
     done
-    
+
     # Get the result
     local result=$(kubectl logs ${test_pod} -n ${NAMESPACE} 2>/dev/null || echo "FUSE_NOT_AVAILABLE")
-    
+
     # Cleanup
     kubectl delete pod ${test_pod} -n ${NAMESPACE} --force --grace-period=0 > /dev/null 2>&1
     rm -f /tmp/fuse-check-pod.yaml
-    
+
     echo -e "${CYAN}FUSE check result:${NC}"
     echo "$result" | sed 's/^/  /'
     echo ""
-    
+
     if [[ "$result" == *"FUSE_AVAILABLE"* ]]; then
         echo -e "${GREEN}✓ /dev/fuse is available on cluster nodes${NC}"
         echo -e "${GREEN}  Overlay storage will be tested with fuse-overlayfs${NC}"
@@ -229,12 +229,12 @@ generate_job_yaml() {
     local job_name="$1"
     local driver="$2"
     local args="$3"
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     local yaml_file="${SUITES_DIR}/job-${job_name}.yaml"
-    
+
     # Set capabilities based on storage driver and builder
     local caps_add="[SETUID, SETGID]"
     local pod_seccomp=""
@@ -243,7 +243,7 @@ generate_job_yaml() {
     local container_apparmor=""
     local volume_mounts=""
     local volumes=""
-    
+
     # CRITICAL FIX: BuildKit ALWAYS needs Unconfined seccomp + AppArmor for mount syscalls
     # This applies to BOTH native and overlay storage
     if [ "$BUILDER" = "buildkit" ]; then
@@ -257,12 +257,12 @@ generate_job_yaml() {
         container_apparmor="appArmorProfile:
             type: Unconfined"
     fi
-    
+
     # Overlay storage needs additional configuration
     if [ "$driver" = "overlay" ]; then
         # Add MKNOD and DAC_OVERRIDE for overlay
         caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
-        
+
         # Buildah with overlay also needs Unconfined seccomp + AppArmor
         if [ "$BUILDER" = "buildah" ]; then
             pod_seccomp="seccompProfile:
@@ -274,7 +274,7 @@ generate_job_yaml() {
             container_apparmor="appArmorProfile:
             type: Unconfined"
         fi
-        
+
         # Mount /dev/fuse for fuse-overlayfs
         volume_mounts="
         volumeMounts:
@@ -287,7 +287,7 @@ generate_job_yaml() {
           path: /dev/fuse
           type: CharDevice"
     fi
-    
+
     cat > "$yaml_file" <<EOF
 apiVersion: batch/v1
 kind: Job
@@ -323,10 +323,6 @@ spec:
         image: ${SMITHY_IMAGE}
         args: ${args}
         env:
-        - name: SMITHY_USER
-          value: "smithy"
-        - name: HOME
-          value: "/home/smithy"
         - name: STORAGE_DRIVER
           value: "${storage_flag}"
         securityContext:
@@ -339,7 +335,7 @@ spec:
           ${container_seccomp}
           ${container_apparmor}${volume_mounts}${volumes}
 EOF
-    
+
     echo "$yaml_file"
 }
 
@@ -351,22 +347,22 @@ run_k8s_test() {
     local test_name="$1"
     local driver="$2"
     local args="$3"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, rootless, ${driver})"
-    
+
     # Generate job YAML
     local job_name="test-${BUILDER}-$(date +%s)-$$-$RANDOM"
     local yaml_file=$(generate_job_yaml "$job_name" "$driver" "$args")
-    
+
     echo -e "${CYAN}  YAML: $(basename $yaml_file)${NC}"
-    
+
     local start_time=$(date +%s)
-    
+
     # Create job
     echo -e "${CYAN}  Creating job...${NC}"
     if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
@@ -376,12 +372,12 @@ run_k8s_test() {
         echo ""
         return
     fi
-    
+
     # Wait for pod to be created
     sleep 2
-    
+
     local pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    
+
     if [ -z "$pod_name" ]; then
         echo -e "${RED}  ✗ FAIL${NC} (Failed to get pod name)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
@@ -390,43 +386,43 @@ run_k8s_test() {
         echo ""
         return
     fi
-    
+
     echo -e "${CYAN}  Pod: ${pod_name}${NC}"
     echo -e "${CYAN}  Streaming logs...${NC}"
-    
+
     # Stream logs in background
     kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' &
     local logs_pid=$!
-    
+
     # Wait for job to complete
     if kubectl wait --for=condition=complete job/${job_name} -n ${NAMESPACE} --timeout=${JOB_TIMEOUT}s &> /dev/null; then
         wait $logs_pid 2>/dev/null || true
-        
+
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        
+
         echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver})")
     else
         kill $logs_pid 2>/dev/null || true
         wait $logs_pid 2>/dev/null || true
-        
+
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        
+
         echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
-        
+
         echo -e "${RED}  Complete pod logs:${NC}"
         kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
     fi
-    
+
     # Cleanup job (but keep YAML file for debugging)
     echo -e "${CYAN}  Cleaning up job...${NC}"
     kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-    
+
     echo ""
 }
 
@@ -436,12 +432,12 @@ run_k8s_test() {
 
 run_rootless_tests() {
     local driver="$1"
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     print_section "ROOTLESS MODE TESTS - ${BUILDER^^} with ${driver^^} STORAGE"
-    
+
     if [ "$driver" = "overlay" ]; then
         echo -e "${CYAN}Note: Overlay storage uses fuse-overlayfs (requires /dev/fuse)${NC}"
         if [ "$BUILDER" = "buildkit" ]; then
@@ -458,25 +454,25 @@ run_rootless_tests() {
         echo -e "${CYAN}Note: VFS storage (Buildah) - most secure but slower${NC}"
         echo ""
     fi
-    
+
     # Test 1: Version check
     run_k8s_test \
         "Version Check" \
         "$driver" \
         "[\"--version\"]"
-    
+
     # Test 2: Environment check
     run_k8s_test \
         "Environment Check" \
         "$driver" \
         "[\"check-environment\"]"
-    
+
     # Test 3: Basic build from Git
     run_k8s_test \
         "Git Repository Build" \
         "$driver" \
         "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]"
-    
+
     # Test 4: Build with arguments from Git
     run_k8s_test \
         "Build with Arguments" \
@@ -491,10 +487,10 @@ run_rootless_tests() {
 cleanup() {
     if [ "$CLEANUP_AFTER" = true ]; then
         print_section "CLEANUP"
-        
+
         echo "Deleting namespace: ${NAMESPACE}"
         kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-        
+
         echo -e "${GREEN}✓ Cleanup completed${NC}"
     fi
 }
@@ -503,10 +499,10 @@ cleanup_on_interrupt() {
     echo ""
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Cleaning up...${NC}"
-    
+
     kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
     kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-    
+
     echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130
 }
@@ -517,7 +513,7 @@ cleanup_on_interrupt() {
 
 main() {
     print_section "KUBERNETES TEST SUITE (ROOTLESS ONLY)"
-    
+
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
@@ -530,7 +526,7 @@ main() {
     echo ""
     echo -e "${YELLOW}NOTE: Smithy runs in ROOTLESS mode only (UID 1000)${NC}"
     echo ""
-    
+
     # Describe storage mappings
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
@@ -541,7 +537,7 @@ main() {
         echo -e "  overlay → fuse-overlayfs (high performance)"
     fi
     echo ""
-    
+
     echo -e "${CYAN}SECURITY REQUIREMENTS:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
         echo -e "  Native:"
@@ -567,23 +563,23 @@ main() {
         echo -e "    - Requires: /dev/fuse on nodes"
     fi
     echo ""
-    
+
     # Start overall timer
     local overall_start=$(date +%s)
-    
+
     # Setup namespace
     setup_namespace
-    
+
     # Check FUSE availability for overlay storage
     local fuse_available=false
     if check_fuse_availability; then
         fuse_available=true
     fi
-    
+
     # Determine which drivers to test based on builder and storage selection
     local drivers=()
     local primary_driver=$(get_primary_driver)
-    
+
     if [ "$STORAGE_DRIVER" = "both" ]; then
         # Always test primary driver first
         drivers=("$primary_driver")
@@ -611,43 +607,43 @@ main() {
         drivers=("$STORAGE_DRIVER")
         echo -e "${GREEN}✓ Will test ${STORAGE_DRIVER} storage${NC}"
     fi
-    
+
     echo ""
     echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo -e "${CYAN}Starting tests for storage drivers: ${drivers[@]}${NC}"
     echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
     echo ""
-    
+
     # Run tests for each storage driver (ROOTLESS ONLY)
     for driver in "${drivers[@]}"; do
         run_rootless_tests "$driver"
     done
-    
+
     # Cleanup if requested
     cleanup
-    
+
     # Calculate total time
     local overall_end=$(date +%s)
     local overall_duration=$((overall_end - overall_start))
     local overall_minutes=$((overall_duration / 60))
     local overall_seconds=$((overall_duration % 60))
-    
+
     # Print summary
     print_section "TEST SUMMARY"
-    
+
     echo -e "Builder:      ${BUILDER}"
     echo -e "Total Tests:  ${TOTAL_TESTS}"
     echo -e "${GREEN}Passed:       ${PASSED_TESTS}${NC}"
-    
+
     if [ $FAILED_TESTS -gt 0 ]; then
         echo -e "${RED}Failed:       ${FAILED_TESTS}${NC}"
     else
         echo -e "${GREEN}Failed:       ${FAILED_TESTS}${NC}"
     fi
-    
+
     echo -e "Total Time:   ${overall_minutes}m ${overall_seconds}s"
     echo ""
-    
+
     if [ $FAILED_TESTS -gt 0 ]; then
         echo -e "${RED}Failed tests:${NC}"
         for result in "${TEST_RESULTS[@]}"; do
@@ -660,7 +656,7 @@ main() {
         echo -e "${YELLOW}  ${SUITES_DIR}/${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated YAML files in: ${SUITES_DIR}/${NC}"

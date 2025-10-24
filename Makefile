@@ -84,9 +84,7 @@ help:
 	@echo "  make test               - Run Docker tests (BuildKit)"
 	@echo "  make test-buildkit      - Test BuildKit image"
 	@echo "  make test-buildah       - Test Buildah image"
-	@echo "  make test-all-images    - Test BOTH images"
-	@echo "  make test-k8s           - Run Kubernetes tests"
-	@echo "  make test-all           - Run all tests (Docker + Kubernetes)"
+	@echo "  make test-all           - Test BuildKit Buildah"
 	@echo "  make test-clean         - Clean up test resources"
 	@echo "  make test-verbose       - Run tests in verbose mode"
 	@echo ""
@@ -247,7 +245,7 @@ test-buildkit: check-test-script
 		VERSION=latest; \
 	fi; \
 	echo "Testing BuildKit image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION"; \
-	$(TEST_SCRIPT) -m docker -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
+	$(TEST_SCRIPT) -m both -b buildkit -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
 .PHONY: test-buildah
 test-buildah: check-test-script
@@ -259,9 +257,9 @@ test-buildah: check-test-script
 		VERSION=latest; \
 	fi; \
 	echo "Testing Buildah image: $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION"; \
-	$(TEST_SCRIPT) -m docker -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION
+	$(TEST_SCRIPT) -m both -b buildah -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION
 
-.PHONY: test-all-images
+.PHONY: test-all
 test-all-images: test-buildkit test-buildah
 	@echo ""
 	@echo "[SUCCESS] Both images tested!"
@@ -269,29 +267,6 @@ test-all-images: test-buildkit test-buildah
 .PHONY: test
 test: test-buildkit
 
-.PHONY: test-k8s
-test-k8s: check-test-script
-	@echo "[TEST-K8S] Running Kubernetes test suite..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
-	else \
-		echo "[WARNING] No build found. Using latest image"; \
-		VERSION=latest; \
-	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION"; \
-	$(TEST_SCRIPT) -m kubernetes -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
-
-.PHONY: test-all
-test-all: check-test-script
-	@echo "[TEST-ALL] Running all test suites..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
-	else \
-		echo "[WARNING] No build found. Using latest image"; \
-		VERSION=latest; \
-	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION"; \
-	$(TEST_SCRIPT) -m both -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
 .PHONY: test-clean
 test-clean:
@@ -408,7 +383,7 @@ bpt: build push test
 	@echo "[SUCCESS] Build, push, and test complete!"
 
 .PHONY: full
-full: build-all push-all test-all-images
+full: build-all push-all test-all
 	@echo "[SUCCESS] Full cycle complete (all images)!"
 
 .DEFAULT_GOAL := help
