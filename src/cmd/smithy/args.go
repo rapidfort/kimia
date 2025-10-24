@@ -62,13 +62,16 @@ func parseArgs(args []string) *Config {
 			}
 
 		case "--context-sub-path":
-			if value != "" {
+			// Handle cases where --context-sub-path=""
+			// Only consume the next arg if it doesn't look like a flag
+			// Also check for literal ""
+			if value != "" && value != `""` {
 				config.SubContext = value
 			} else if i+1 < len(args) && len(args[i+1]) > 0 && args[i+1][0] != '-' {
-				// Handle case where --context-sub-path=""
-				// Only consume the next arg if it doesn't look like a flag
 				i++
-				config.SubContext = args[i]
+				if args[i] != `""` {
+					config.SubContext = args[i]
+				}
 			} else {
 				config.SubContext = ""
 			}

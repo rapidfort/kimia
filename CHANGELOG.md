@@ -9,13 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - New features here
-- Added --image-download-retry flag for controlling retry attempts when pulling base images during build
 
 ### Changed
 - Changes in existing functionality
 
 ### Fixed
 - Bug fixes
+
+## [1.0.13] - 2025-10-23
+
+### Added
+
+### Changed
+
+### Fixed
+- Fix --context-sub-path arg parsing when the context sub-path is an empty string "" for Kubernetes manifest files
+
+## [1.0.12] - 2025-10-23
+
+### Added
+- Added --image-download-retry flag for controlling retry attempts when pulling base images during build
+
+### Changed
+
+### Fixed
 
 ## [1.0.11] - 2025-10-22
 
