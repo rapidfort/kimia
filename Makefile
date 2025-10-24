@@ -24,7 +24,7 @@ DOCKERBUILD_TEMP := ./build/rapidfort
 ARCH := $(shell uname -m | sed 's/x86_64/amd64/g' | sed 's/aarch64/arm64/g')
 OS := linux
 
-# Image names - BuildKit is default, Buildah is legacy
+# Image names - BuildKit is default
 IMAGE_NAME_BUILDKIT := smithy
 IMAGE_NAME_BUILDAH := smithy-bud
 
@@ -46,7 +46,7 @@ BUILD_ARGS := \
 
 # Default target
 .PHONY: all
-all: build-all
+all: build-all push-all
 
 # Print help
 .PHONY: help
@@ -69,26 +69,34 @@ help:
 	@echo ""
 	@echo "Images:"
 	@echo "  smithy        - BuildKit-based (default, recommended)"
-	@echo "  smithy-bud    - Buildah-based (legacy, 'bud' = buildah build)"
+	@echo "  smithy-bud    - Buildah-based ('bud' = buildah build)"
 	@echo ""
-	@echo "━━━ Development Commands ━━━"
+	@echo "━━━ Main Commands ━━━"
+	@echo "  make all                - Build & push ALL images to dev registry"
+	@echo "  make full               - Build, push & test ALL images"
+	@echo ""
+	@echo "━━━ Build Commands ━━━"
 	@echo "  make build              - Build smithy image (BuildKit)"
 	@echo "  make build-buildkit     - Build BuildKit image"
 	@echo "  make build-buildah      - Build Buildah image"
 	@echo "  make build-all          - Build BOTH images"
+	@echo ""
+	@echo "━━━ Push Commands ━━━"
 	@echo "  make push               - Push to dev registry (BuildKit)"
 	@echo "  make push-buildkit      - Push BuildKit image"
 	@echo "  make push-buildah       - Push Buildah image"
 	@echo "  make push-all           - Push BOTH images"
-	@echo "  make run                - Run smithy container locally"
+	@echo ""
+	@echo "━━━ Test Commands ━━━"
 	@echo "  make test               - Run Docker tests (BuildKit)"
 	@echo "  make test-buildkit      - Test BuildKit image"
 	@echo "  make test-buildah       - Test Buildah image"
-	@echo "  make test-all           - Test BuildKit Buildah"
+	@echo "  make test-all           - Test BOTH images"
 	@echo "  make test-clean         - Clean up test resources"
 	@echo "  make test-verbose       - Run tests in verbose mode"
 	@echo ""
 	@echo "━━━ Utilities ━━━"
+	@echo "  make run                - Run smithy container locally"
 	@echo "  make version            - Show current versions"
 	@echo "  make show-images        - Show local docker images"
 	@echo "  make clean              - Clean build artifacts"
@@ -115,17 +123,15 @@ version:
 # BUILD TARGETS
 # =============================================================================
 
-# Build BuildKit image (default/recommended)
-.PHONY: build-buildkit
-build-buildkit:
+# Internal build target for BuildKit (doesn't increment version)
+.PHONY: _build-buildkit
+_build-buildkit:
 	@if [ -f $(VERSION_FILE) ]; then \
-		BUILD_NUM=`cat $(VERSION_FILE)`; \
-		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
-		NEXT_BUILD=1; \
+		echo "[ERROR] No version file found. This should not happen."; \
+		exit 1; \
 	fi; \
-	echo $$NEXT_BUILD > $(VERSION_FILE); \
-	VERSION=$(VERSION_BASE)-dev$$NEXT_BUILD; \
 	echo "[BUILD-BUILDKIT] Building BuildKit image..."; \
 	echo "Version: $$VERSION"; \
 	BUILD_DATE=`date +%s` && \
@@ -135,17 +141,15 @@ build-buildkit:
 	echo "[SUCCESS] BuildKit image complete! Version: $$VERSION" && \
 	echo "[SUCCESS] Tagged as: latest"
 
-# Build Buildah image (legacy)
-.PHONY: build-buildah
-build-buildah:
+# Internal build target for Buildah (doesn't increment version)
+.PHONY: _build-buildah
+_build-buildah:
 	@if [ -f $(VERSION_FILE) ]; then \
-		BUILD_NUM=`cat $(VERSION_FILE)`; \
-		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
-		NEXT_BUILD=1; \
+		echo "[ERROR] No version file found. This should not happen."; \
+		exit 1; \
 	fi; \
-	echo $$NEXT_BUILD > $(VERSION_FILE); \
-	VERSION=$(VERSION_BASE)-dev$$NEXT_BUILD; \
 	echo "[BUILD-BUILDAH] Building Buildah image..."; \
 	echo "Version: $$VERSION"; \
 	BUILD_DATE=`date +%s` && \
@@ -155,13 +159,47 @@ build-buildah:
 	echo "[SUCCESS] Buildah image complete! Version: $$VERSION" && \
 	echo "[SUCCESS] Tagged as: latest"
 
-# Build both images
+# Build both images (increments version once)
 .PHONY: build-all
-build-all: build-buildkit build-buildah
-	@echo ""
-	@echo "[SUCCESS] Both images built successfully!"
-	@echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest (BuildKit)"
-	@echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDAH):latest (Buildah)"
+build-all:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
+		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+	else \
+		NEXT_BUILD=1; \
+	fi; \
+	echo $$NEXT_BUILD > $(VERSION_FILE); \
+	echo "[BUILD-ALL] Building both images with version $(VERSION_BASE)-dev$$NEXT_BUILD"; \
+	$(MAKE) _build-buildkit && \
+	$(MAKE) _build-buildah && \
+	echo "" && \
+	echo "[SUCCESS] Both images built successfully!" && \
+	echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest (BuildKit)" && \
+	echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDAH):latest (Buildah)"
+
+# Build BuildKit image only (increments version)
+.PHONY: build-buildkit
+build-buildkit:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
+		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+	else \
+		NEXT_BUILD=1; \
+	fi; \
+	echo $$NEXT_BUILD > $(VERSION_FILE)
+	@$(MAKE) _build-buildkit
+
+# Build Buildah image only (increments version)
+.PHONY: build-buildah
+build-buildah:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
+		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+	else \
+		NEXT_BUILD=1; \
+	fi; \
+	echo $$NEXT_BUILD > $(VERSION_FILE)
+	@$(MAKE) _build-buildah
 
 # Default build (BuildKit)
 .PHONY: build
@@ -260,7 +298,7 @@ test-buildah: check-test-script
 	$(TEST_SCRIPT) -m both -b buildah -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION
 
 .PHONY: test-all
-test-all-images: test-buildkit test-buildah
+test-all: test-buildkit test-buildah
 	@echo ""
 	@echo "[SUCCESS] Both images tested!"
 
