@@ -34,181 +34,106 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM alpine:latest
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
+ARG ROOTLESSKIT_VERSION
 
-# Install all dependencies
+# Install minimal dependencies
 RUN apk add --no-cache \
     bash \
-    ca-certificates \
-    git \
     curl \
+    ca-certificates \
     shadow \
     shadow-uidmap \
     crun \
-    fuse-overlayfs \
-    slirp4netns \
-    && update-ca-certificates
+    git
 
-# Install RootlessKit
-ARG ROOTLESSKIT_VERSION
+# Download and install BuildKit
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" \
+    | tar xz -C /usr/local
+
+# Download and install RootlessKit
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "x86_64" ;; \
         "arm64") echo "aarch64" ;; \
         *) echo "x86_64" ;; \
     esac) && \
-    wget -q -O /tmp/rootlesskit.tar.gz \
-        "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" && \
-    tar -xzf /tmp/rootlesskit.tar.gz -C /usr/local/bin && \
-    rm /tmp/rootlesskit.tar.gz && \
-    chmod +x /usr/local/bin/rootlesskit*
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
+    | tar xz -C /usr/local/bin
 
-# Install BuildKit (buildkitd + buildctl)
-RUN ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    wget -q -O /tmp/buildkit.tar.gz \
-        "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" && \
-    tar -xzf /tmp/buildkit.tar.gz -C /usr/local && \
-    rm /tmp/buildkit.tar.gz && \
-    chmod +x /usr/local/bin/buildctl /usr/local/bin/buildkitd
+# Verify installations
+RUN buildkitd --version && \
+    buildctl --version && \
+    rootlesskit --version
 
 # Copy smithy binary
 COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
 RUN chmod +x /usr/local/bin/smithy
 
-# Create buildctl-daemonless.sh wrapper script (patched for rootless /run)
-RUN cat > /usr/local/bin/buildctl-daemonless.sh <<'EOF'
-#!/bin/sh
-# Ephemeral BuildKit: starts buildkitd (rootless-friendly) and runs buildctl.
-set -eu
-
-: ${BUILDCTL:=buildctl}
-: ${BUILDCTL_CONNECT_RETRIES_MAX:=10}
-: ${BUILDKITD:=buildkitd}
-
-# BuildKit worker defaults (rootless-friendly)
-: ${BUILDKIT_ROOT:="$HOME/.local/share/buildkit"}
-: ${BUILDKITD_FLAGS:="--oci-worker-rootless --oci-worker-snapshotter=native --oci-worker-binary=crun --root=$BUILDKIT_ROOT"}
-
-# RootlessKit with a writable /run shadow and simple user networking
-: ${ROOTLESSKIT:=rootlesskit}
-: ${ROOTLESSKIT_FLAGS:="--copy-up=/etc --copy-up=/run --net=host --disable-host-loopback"}
-
-# Ensure XDG_RUNTIME_DIR exists for rootless; do not rely on /run
-: ${XDG_RUNTIME_DIR:="$HOME/run"}
-
-tmp="$(mktemp -d /tmp/buildctl-daemonless.XXXXXX)"
-cleanup() {
-  if [ -f "$tmp/pid" ]; then
-    kill "$(cat "$tmp/pid")" 2>/dev/null || true
-    wait "$(cat "$tmp/pid")" 2>/dev/null || true
-  fi
-  rm -rf "$tmp"
-}
-trap cleanup EXIT INT TERM
-
-startBuildkitd() {
-  if [ "$(id -u)" = "0" ]; then
-    # rootful: use /run/buildkit (writable as root)
-    addr="unix:///run/buildkit/buildkitd.sock"
-    mkdir -p /run/buildkit
-    helper=""
-    exec_cmd="$BUILDKITD $BUILDKITD_FLAGS --addr=$addr"
-  else
-    # rootless: keep everything under user's dirs
-    addr="unix://$XDG_RUNTIME_DIR/buildkit/buildkitd.sock"
-    mkdir -p "$XDG_RUNTIME_DIR/buildkit"
-    mkdir -p "$BUILDKIT_ROOT"
-    # run via rootlesskit and shadow /run so buildkit never touches host /run
-    helper="$ROOTLESSKIT $ROOTLESSKIT_FLAGS"
-    exec_cmd="$helper $BUILDKITD $BUILDKITD_FLAGS --addr=$addr"
-  fi
-
-  # shellcheck disable=SC2086
-  sh -c "$exec_cmd" >"$tmp/log" 2>&1 &
-  echo $! >"$tmp/pid"
-  echo "$addr" >"$tmp/addr"
-}
-
-waitForBuildkitd() {
-  addr="$(cat "$tmp/addr")"
-  try=0
-  max="$BUILDCTL_CONNECT_RETRIES_MAX"
-  until "$BUILDCTL" --addr="$addr" debug workers >/dev/null 2>&1; do
-    if [ "$try" -gt "$max" ]; then
-      echo >&2 "could not connect to $addr after $max tries"
-      cat "$tmp/log" >&2 || true
-      exit 1
-    fi
-    sleep 1
-    try=$((try + 1))
-  done
-}
-
-startBuildkitd
-waitForBuildkitd
-"$BUILDCTL" --addr="$(cat "$tmp/addr")" "$@"
-EOF
-
-RUN chmod +x /usr/local/bin/buildctl-daemonless.sh
-
 # Install credential helpers
-RUN ECR_VERSION=$(wget -qO- https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    wget -q -O /usr/local/bin/docker-credential-ecr-login \
+    curl -fsSL -o /usr/local/bin/docker-credential-ecr-login \
         "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
     chmod +x /usr/local/bin/docker-credential-ecr-login
 
-RUN GCR_VERSION=$(wget -qO- https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    wget -qO- "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
+    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
 # Setup SETUID binaries for user namespaces
 RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Create smithy user
-RUN addgroup -g 1000 smithy && \
-    adduser -D -G smithy -u 1000 smithy
-
-# Setup subuid/subgid for rootless mode
-RUN echo "smithy:100000:65536" >> /etc/subuid && \
+# Create smithy user with proper subuid/subgid mappings
+RUN adduser -D -u 1000 smithy && \
+    echo "smithy:100000:65536" >> /etc/subuid && \
     echo "smithy:100000:65536" >> /etc/subgid
 
-# Create directories
-RUN mkdir -p /home/smithy/.local/share/buildkit && \
-    chown -R smithy:smithy /home/smithy
+# Create directories with proper permissions
+RUN mkdir -p /tmp/work /tmp/run && \
+    mkdir -p /run/buildkit /var/lib/buildkit && \
+    chmod 777 /run/buildkit /var/lib/buildkit && \
+    chown -R smithy:smithy /tmp/work /tmp/run
 
-# Environment
-ENV HOME=/home/smithy
-ENV DOCKER_CONFIG=/home/smithy/.docker
-ENV XDG_RUNTIME_DIR=/run/user/1000
-ENV BUILDKIT_HOST=unix:///run/user/1000/buildkit/buildkitd.sock
+# Configure buildkit to use crun in rootless mode
+RUN mkdir -p /home/smithy/.config/buildkit && \
+    cat > /home/smithy/.config/buildkit/buildkitd.toml <<'EOF'
+[worker.oci]
+  enabled = true
+  rootless = true
+  binary = "crun"
+  noProcessSandbox = true
+EOF
 
-# Create runtime dir with correct permissions
-RUN mkdir -p /run/user/1000 && \
-    chown -R smithy:smithy /run/user/1000
+RUN chown -R smithy:smithy /home/smithy/.config
 
 # Switch to non-root user
-USER smithy
-WORKDIR /home/smithy
+USER 1000
+WORKDIR /tmp/work
 
-ENV PATH="/home/smithy/rapidfort:${PATH}"
+# Set environment
+ENV PATH=/usr/local/bin:$PATH
+ENV XDG_RUNTIME_DIR=/tmp/run
+ENV BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
+ENV HOME=/home/smithy
+ENV DOCKER_CONFIG=/home/smithy/.docker
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
 LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
 LABEL org.opencontainers.image.builder="buildkit"
 
-# Smithy will launch rootlesskit + buildkitd internally
 ENTRYPOINT ["/usr/local/bin/smithy"]
 CMD ["--help"]

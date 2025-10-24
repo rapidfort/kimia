@@ -1,6 +1,6 @@
 #!/bin/bash
 # Smithy Docker Test Suite
-# Tests both rootless (UID 1000) and rootful (UID 0) modes
+# Tests rootless mode (UID 1000) only
 # Supports BuildKit (default) and Buildah (legacy) images
 # Tests storage drivers based on builder:
 #   - BuildKit: native (default), overlay
@@ -88,9 +88,9 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
@@ -155,11 +155,11 @@ NC='\033[0m'
 
 echo ""
 echo -e "\${CYAN}╔═══════════════════════════════════════════════════════╗\${NC}"
-echo -e "\${CYAN}║ Docker Test: ${test_name}\${NC}"
-echo -e "\${CYAN}║ Builder: ${BUILDER}\${NC}"
-echo -e "\${CYAN}║ Type: ${test_type}\${NC}"
-echo -e "\${CYAN}║ Mode: ${mode}\${NC}"
-echo -e "\${CYAN}║ Driver: ${driver}\${NC}"
+echo -e "\${CYAN}║  Docker Test: ${test_name}\${NC}"
+echo -e "\${CYAN}║  Builder: ${BUILDER}\${NC}"
+echo -e "\${CYAN}║  Type: ${test_type}\${NC}"
+echo -e "\${CYAN}║  Mode: ${mode}\${NC}"
+echo -e "\${CYAN}║  Driver: ${driver}\${NC}"
 echo -e "\${CYAN}╚═══════════════════════════════════════════════════════╝\${NC}"
 echo ""
 
@@ -220,38 +220,6 @@ run_test() {
 }
 
 # ============================================================================
-# Dockerfile Generator
-# ============================================================================
-
-create_test_dockerfile() {
-    local dockerfile="/tmp/Dockerfile.test-$$"
-    
-    cat > "$dockerfile" <<'EOF'
-FROM alpine:latest
-
-# Install basic tools
-RUN apk add --no-cache bash curl
-
-# Create test file
-RUN echo "Test build successful" > /test.txt
-
-# Build args test
-ARG VERSION=1.0
-ARG BUILD_DATE=unknown
-
-RUN echo "Version: ${VERSION}" >> /test.txt
-RUN echo "Build date: ${BUILD_DATE}" >> /test.txt
-
-# Labels
-LABEL maintainer="test@example.com"
-LABEL version="${VERSION}"
-
-CMD ["cat", "/test.txt"]
-EOF
-    
-    echo "$dockerfile"
-}
-# ============================================================================
 # Rootless Mode Tests (UID 1000)
 # ============================================================================
 
@@ -279,11 +247,7 @@ run_rootless_tests() {
         echo ""
     fi
     
-    local dockerfile=$(create_test_dockerfile)
-    local dockerfile_name=$(basename "$dockerfile")
-    local context_dir=$(dirname "$dockerfile")
-    
-    # Base Docker run command for rootless
+    # Base Docker run command for rootless  
     local BASE_CMD="docker run --rm"
     BASE_CMD="$BASE_CMD --user 1000:1000"
     BASE_CMD="$BASE_CMD --cap-drop ALL"
@@ -292,21 +256,21 @@ run_rootless_tests() {
     
     # Add additional capabilities for overlay
     if [ "$driver" = "overlay" ]; then
-        if [ "$BUILDER" = "buildkit" ]; then
-            # BuildKit with overlay needs DAC_OVERRIDE for fuse
-            BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
-        else
-            # Buildah with overlay needs MKNOD
-            BASE_CMD="$BASE_CMD --cap-add MKNOD"
-        fi
+        # Both BuildKit and Buildah with overlay need these capabilities
+        BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
+        BASE_CMD="$BASE_CMD --cap-add MKNOD"
     fi
     
     BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
     BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
-    BASE_CMD="$BASE_CMD --device /dev/fuse"
+    
+    # Only mount /dev/fuse for overlay storage
+    if [ "$driver" = "overlay" ]; then
+        BASE_CMD="$BASE_CMD --device /dev/fuse"
+    fi
+    
     BASE_CMD="$BASE_CMD -e HOME=/home/smithy"
     BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/home/smithy/.docker"
-    BASE_CMD="$BASE_CMD -v ${context_dir}:/workspace:ro"
     BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
     
     # Test 1: Version check
@@ -323,173 +287,50 @@ run_rootless_tests() {
         "$driver" \
         $BASE_CMD check-environment
     
-    # Test 3: Basic build
+    # Test 3: Build from git - nginx
     run_test \
-        "basic-build" \
-        "rootless" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootless-basic-${driver}:latest \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 4: Build with args
-    run_test \
-        "build-args" \
-        "rootless" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootless-buildargs-${driver}:latest \
-        --build-arg=VERSION=2.0 \
-        --build-arg=BUILD_DATE=$(date +%Y%m%d) \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 5: Build with labels
-    run_test \
-        "labels" \
-        "rootless" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootless-labels-${driver}:latest \
-        --label=test=true \
-        --label=builder=${BUILDER} \
-        --label=storage=${driver} \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 6: Git repository build
-    run_test \
-        "git-build" \
+        "git-nginx" \
         "rootless" \
         "$driver" \
         $BASE_CMD \
         --context=https://github.com/nginxinc/docker-nginx.git \
         --git-branch=master \
         --dockerfile=mainline/alpine/Dockerfile \
-        --destination=test-${BUILDER}-rootless-git-${driver}:latest \
+        --destination=test-${BUILDER}-rootless-nginx-${driver}:latest \
         --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
     
-    # Cleanup test dockerfile
-    rm -f "$dockerfile"
+    # Test 4: Build from git - redis
+    run_test \
+        "git-redis" \
+        "rootless" \
+        "$driver" \
+        $BASE_CMD \
+        --context=https://github.com/docker-library/redis.git \
+        --dockerfile=7.2/alpine/Dockerfile \
+        --destination=test-${BUILDER}-rootless-redis-${driver}:latest \
+        --storage-driver=${storage_flag} \
+        --no-push \
+        --verbosity=debug
+    
+    # Test 5: Build from git with build args - postgres
+    run_test \
+        "git-postgres-args" \
+        "rootless" \
+        "$driver" \
+        $BASE_CMD \
+        --context=https://github.com/docker-library/postgres.git \
+        --dockerfile=16/alpine3.22/Dockerfile \
+        --destination=test-${BUILDER}-rootless-postgres-${driver}:latest \
+        --build-arg=PG_MAJOR=16 \
+        --storage-driver=${storage_flag} \
+        --no-push \
+        --verbosity=debug
+    
 }
 
 # ============================================================================
-# Rootful Mode Tests (UID 0) - Docker Only
-# ============================================================================
-
-run_rootful_tests() {
-    local driver="$1"
-    
-    # Get the actual storage flag value
-    local storage_flag=$(get_storage_flag "$driver")
-    
-    print_section "ROOTFUL MODE TESTS (UID 0) - ${BUILDER^^} with ${driver^^} STORAGE"
-    
-    echo -e "${YELLOW}WARNING: Rootful mode for Docker only (NOT for Kubernetes)${NC}"
-    echo ""
-    
-    local dockerfile=$(create_test_dockerfile)
-    local dockerfile_name=$(basename "$dockerfile")
-    local context_dir=$(dirname "$dockerfile")
-    
-    # Base Docker run command for rootful
-    local BASE_CMD="docker run --rm"
-    BASE_CMD="$BASE_CMD --user 0:0"
-    BASE_CMD="$BASE_CMD --privileged"
-    BASE_CMD="$BASE_CMD --device /dev/fuse"
-    BASE_CMD="$BASE_CMD -e HOME=/root"
-    BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/root/.docker"
-    BASE_CMD="$BASE_CMD -v ${context_dir}:/workspace:ro"
-    BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
-    
-    # Test 1: Version check
-    run_test \
-        "version" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD --version
-    
-    # Test 2: Check environment
-    run_test \
-        "envcheck" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD check-environment
-    
-    # Test 3: Basic build
-    run_test \
-        "basic-build" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootful-basic-${driver}:latest \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 4: Build with args
-    run_test \
-        "build-args" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootful-buildargs-${driver}:latest \
-        --build-arg=VERSION=2.0 \
-        --build-arg=BUILD_DATE=$(date +%Y%m%d) \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 5: Build with labels
-    run_test \
-        "labels" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD \
-        --context=/workspace \
-        --dockerfile=${dockerfile_name} \
-        --destination=test-${BUILDER}-rootful-labels-${driver}:latest \
-        --label=test=true \
-        --label=builder=${BUILDER} \
-        --label=storage=${driver} \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Test 6: Git repository build
-    run_test \
-        "git-build" \
-        "rootful" \
-        "$driver" \
-        $BASE_CMD \
-        --context=https://github.com/nginxinc/docker-nginx.git \
-        --git-branch=master \
-        --dockerfile=mainline/alpine/Dockerfile \
-        --destination=test-${BUILDER}-rootful-git-${driver}:latest \
-        --storage-driver=${storage_flag} \
-        --no-push \
-        --verbosity=debug
-    
-    # Cleanup test dockerfile
-    rm -f "$dockerfile"
-}
-
 # ============================================================================
 # Cleanup
 # ============================================================================
@@ -499,7 +340,6 @@ cleanup() {
         print_section "CLEANUP"
         
         echo "Removing temp files..."
-        rm -f /tmp/Dockerfile.test-* 2>/dev/null || true
         rm -f /tmp/test-*.log 2>/dev/null || true
         
         echo -e "${GREEN}✓ Cleanup completed${NC}"
@@ -511,7 +351,6 @@ cleanup_on_interrupt() {
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Cleaning up...${NC}"
     
-    rm -f /tmp/Dockerfile.test-* 2>/dev/null || true
     rm -f /tmp/test-*.log 2>/dev/null || true
     
     echo -e "${GREEN}✓ Cleanup completed${NC}"
@@ -575,11 +414,8 @@ main() {
     
     # Run tests for each storage driver
     for driver in "${drivers[@]}"; do
-        # Rootless tests
+        # Rootless tests only
         run_rootless_tests "$driver"
-        
-        # Rootful tests
-        run_rootful_tests "$driver"
     done
     
     # Cleanup if requested

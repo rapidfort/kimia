@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/rapidfort/smithy/pkg/logger"
@@ -41,8 +42,21 @@ func Prepare(gitConfig GitConfig) (*Context, error) {
 	if isGitURL(gitConfig.Context) {
 		logger.Info("Detected git repository context: %s", gitConfig.Context)
 
-		// Create temporary directory for git clone
-		tempDir, err := os.MkdirTemp("", "smithy-build-*")
+		// Create directory in $HOME/workspace for git clone
+		homeDir := os.Getenv("HOME")
+		if homeDir == "" {
+			homeDir = "/home/smithy"
+		}
+
+		workspaceDir := filepath.Join(homeDir, "workspace")
+
+		// Ensure workspace directory exists
+		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
+		}
+
+		// Create temporary directory for git clone inside workspace
+		tempDir, err := os.MkdirTemp(workspaceDir, "smithy-build-*")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}

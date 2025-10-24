@@ -37,12 +37,14 @@ func main() {
 	config := parseArgs(os.Args[1:])
 
 	// Log smithy version (builder will be logged by build.Execute)
-	logger.Info("Smithy Ã¢â‚¬â€ Kubernetes-Native OCI Image Builder v%s", Version)
+	logger.Info("Smithy - Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
-	// Validate storage driver only if specified (only used by Buildah)
+	// Validate storage driver only if specified
+	// BuildKit supports: native, overlay
+	// Buildah supports: vfs, overlay
 	if config.StorageDriver != "" {
-		validDrivers := []string{"vfs", "overlay"}
+		validDrivers := []string{"vfs", "overlay", "native"}
 		storageDriver := strings.ToLower(config.StorageDriver)
 		isValid := false
 		for _, driver := range validDrivers {
@@ -53,17 +55,20 @@ func main() {
 		}
 		if !isValid {
 			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
-			fmt.Fprintf(os.Stderr, "Valid options: vfs, overlay\n\n")
+			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
 			os.Exit(1)
 		}
 
 		// Log storage driver selection
 		logger.Info("Using storage driver: %s", storageDriver)
 		if storageDriver == "overlay" {
-			logger.Info("Note: Overlay driver requires fuse-overlayfs")
+			logger.Info("Note: Overlay driver requires fuse-overlayfs and additional capabilities")
 		}
 		if storageDriver == "vfs" {
 			logger.Info("Note: VFS storage (Buildah only)")
+		}
+		if storageDriver == "native" {
+			logger.Info("Note: Native snapshotter (BuildKit only)")
 		}
 	}
 

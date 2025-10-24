@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rapidfort/smithy/pkg/logger"
 )
@@ -240,12 +241,139 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	logger.Info("Starting BuildKit build...")
 
-	// Use buildctl-daemonless.sh for daemonless mode (simpler, no daemon management)
+	// Setup environment
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/home/smithy"
+	}
+
+	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if xdgRuntimeDir == "" {
+		xdgRuntimeDir = "/tmp/run"
+	}
+
+	buildkitSocket := filepath.Join(xdgRuntimeDir, "buildkitd.sock")
+	buildkitConfig := filepath.Join(homeDir, ".config/buildkit/buildkitd.toml")
+
+	// Handle bind-mounted contexts - copy to real filesystem
+	// Bind mounts from Docker may not be accessible to buildctl/buildkitd
+	// BUT: Don't copy git-cloned directories (they're already in real filesystem)
+	buildContext := ctx.Path
+	var tempContext string
+
+	workspaceMount := filepath.Join(homeDir, "workspace")
+
+	// Only copy if it's a bind mount, not a git clone
+	// Git clones are in subdirectories like /home/smithy/workspace/smithy-build-*
+	// Bind mounts are exactly at /home/smithy/workspace
+	if ctx.Path == workspaceMount && !ctx.IsGitRepo {
+		logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
+
+		// Create cache directory
+		cacheDir := filepath.Join(homeDir, ".cache/buildkit")
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			return fmt.Errorf("failed to create cache directory: %v", err)
+		}
+
+		// Create temp directory for context copy
+		tempDir, err := os.MkdirTemp(cacheDir, "context-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp context directory: %v", err)
+		}
+		tempContext = tempDir
+
+		defer func() {
+			logger.Debug("Cleaning up temp context directory: %s", tempContext)
+			os.RemoveAll(tempContext)
+		}()
+
+		// Copy context to temp directory
+		logger.Debug("Copying context from %s to %s", ctx.Path, tempContext)
+		if err := copyDir(ctx.Path, tempContext); err != nil {
+			return fmt.Errorf("failed to copy context: %v", err)
+		}
+
+		buildContext = tempContext
+		logger.Debug("Using copied context at: %s", buildContext)
+	}
+
+	logger.Debug("BuildKit configuration:")
+	logger.Debug("  HOME: %s", homeDir)
+	logger.Debug("  XDG_RUNTIME_DIR: %s", xdgRuntimeDir)
+	logger.Debug("  BUILDKIT_HOST: unix://%s", buildkitSocket)
+	logger.Debug("  Config file: %s", buildkitConfig)
+	logger.Debug("  Build context: %s", buildContext)
+
+	// Start buildkitd with rootlesskit
+	logger.Debug("Starting buildkitd with rootlesskit...")
+	daemonCmd := exec.Command(
+		"rootlesskit",
+		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
+		"--net=host",
+		"--disable-host-loopback",
+		"buildkitd",
+		"--config="+buildkitConfig,
+		"--addr=unix://"+buildkitSocket,
+	)
+
+	// Capture buildkitd output
+	daemonCmd.Stdout = os.Stdout
+	daemonCmd.Stderr = os.Stderr
+
+	if err := daemonCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start buildkitd: %v", err)
+	}
+
+	logger.Debug("buildkitd process started (PID: %d)", daemonCmd.Process.Pid)
+
+	// Ensure daemon cleanup
+	defer func() {
+		logger.Debug("Stopping buildkitd...")
+		if daemonCmd.Process != nil {
+			daemonCmd.Process.Kill()
+		}
+	}()
+
+	// Wait for buildkitd to be ready
+	logger.Debug("Waiting for buildkitd to be ready...")
+	ready := false
+	for i := 0; i < 30; i++ {
+		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
+		output, err := checkCmd.CombinedOutput()
+
+		if err == nil {
+			ready = true
+			break
+		}
+
+		// Show progress with actual error
+		logger.Debug("Waiting for buildkitd... (%d/30) - error: %v", i+1, err)
+		if len(output) > 0 {
+			logger.Debug("  Output: %s", string(output))
+		}
+
+		// Check if daemon is still running
+		if daemonCmd.Process != nil {
+			// Process is still running
+			time.Sleep(1 * time.Second)
+		} else {
+			return fmt.Errorf("buildkitd process died")
+		}
+	}
+
+	if !ready {
+		return fmt.Errorf("buildkitd failed to become ready after 30 seconds")
+	}
+
+	logger.Debug("buildkitd is ready")
+
+	// Build with buildctl
 	args := []string{
+		"--addr=unix://" + buildkitSocket,
 		"build",
 		"--frontend", "dockerfile.v0",
-		"--local", fmt.Sprintf("context=%s", ctx.Path),
-		"--local", fmt.Sprintf("dockerfile=%s", ctx.Path),
+		"--local", fmt.Sprintf("context=%s", buildContext),
+		"--local", fmt.Sprintf("dockerfile=%s", buildContext),
 	}
 
 	// Add dockerfile path if not default
@@ -304,13 +432,16 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	}
 
 	// Log the command
-	logger.Debug("BuildKit command: buildctl-daemonless.sh %s", strings.Join(args, " "))
+	logger.Debug("BuildKit command: buildctl %s", strings.Join(args, " "))
 
-	// Execute buildctl-daemonless.sh
-	cmd := exec.Command("buildctl-daemonless.sh", args...)
+	// Execute buildctl
+	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
+
+	// Set BUILDKIT_HOST
+	cmd.Env = append(cmd.Env, fmt.Sprintf("BUILDKIT_HOST=unix://%s", buildkitSocket))
 
 	// Enhanced environment setup for auth
 	if authFile != "" {
@@ -468,6 +599,69 @@ func saveDigestInfo(config Config) error {
 			return fmt.Errorf("failed to write image name tag with digest file: %v", err)
 		}
 		logger.Info("Image name tag with digest saved to: %s", config.ImageNameTagWithDigestFile)
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst
+// This is needed for BuildKit rootless mode where external bind mounts
+// are not accessible within the rootlesskit namespace
+func copyDir(src, dst string) error {
+	// Get source directory info
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat source: %v", err)
+	}
+
+	// Create destination directory
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to create destination: %v", err)
+	}
+
+	// Read directory entries
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Recursively copy subdirectory
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	// Get source file info for permissions
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat source file: %v", err)
+	}
+
+	// Read source file
+	srcData, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("failed to read source: %v", err)
+	}
+
+	// Write to destination with same permissions
+	if err := os.WriteFile(dst, srcData, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to write destination: %v", err)
 	}
 
 	return nil
