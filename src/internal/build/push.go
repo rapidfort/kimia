@@ -20,6 +20,7 @@ type PushConfig struct {
 	SkipTLSVerify       bool
 	RegistryCertificate string
 	PushRetry           int
+	StorageDriver       string
 }
 
 // Push pushes built images to registries with authentication
@@ -34,6 +35,19 @@ func Push(config PushConfig, authFile string) error {
 
 	for _, dest := range config.Destinations {
 		logger.Info("Pushing image: %s", dest)
+
+		// List images to verify the image exists before pushing
+		listCmd := exec.Command("buildah", "images", "--format", "{{.Name}}:{{.Tag}}")
+		listCmd.Env = os.Environ()
+		if config.StorageDriver != "" {
+			listCmd.Env = append(listCmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+		}
+		if listOutput, err := listCmd.Output(); err == nil {
+			logger.Debug("Available images in storage before push:")
+			logger.Debug("%s", string(listOutput))
+		} else {
+			logger.Debug("Failed to list images: %v", err)
+		}
 
 		// Extract and normalize registry
 		registry := auth.ExtractRegistry(dest)
@@ -97,8 +111,10 @@ func Push(config PushConfig, authFile string) error {
 				cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
 			}
 
-			if storageDriver := os.Getenv("STORAGE_DRIVER"); storageDriver != "" {
-				cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
+			// Use storage driver from config for buildah
+			if config.StorageDriver != "" {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+				logger.Debug("Set STORAGE_DRIVER=%s for push", config.StorageDriver)
 			}
 
 			err := cmd.Run()
@@ -223,7 +239,22 @@ func PushSingle(image string, config PushConfig, authFile string) error {
 		if authFile != "" {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
 		}
-		cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+
+		// Use storage driver from config for buildah
+		if config.StorageDriver != "" {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+			logger.Debug("Set STORAGE_DRIVER=%s for push", config.StorageDriver)
+		}
+
+		// Log full command for debugging
+		logger.Debug("Buildah push command: buildah %s", strings.Join(args, " "))
+		logger.Debug("Push command environment:")
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
+				strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") {
+				logger.Debug("  %s", env)
+			}
+		}
 
 		err := cmd.Run()
 

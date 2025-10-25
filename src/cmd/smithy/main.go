@@ -171,6 +171,7 @@ func main() {
 			SkipTLSVerify:       config.SkipTLSVerify,
 			RegistryCertificate: config.RegistryCertificate,
 			PushRetry:           config.PushRetry,
+			StorageDriver:       config.StorageDriver,
 		}
 
 		if err := build.Push(pushConfig, authFile); err != nil {
