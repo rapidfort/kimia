@@ -370,6 +370,62 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	logger.Debug("  Config file: %s", buildkitConfig)
 	logger.Debug("  Build context: %s", buildContext)
 
+	// Add insecure registry configurations to buildkit config when --insecure flag is passed
+	if config.Insecure {
+		// Create buildkit config directory if needed
+		configDir := filepath.Dir(buildkitConfig)
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return fmt.Errorf("failed to create buildkit config directory: %v", err)
+		}
+
+		// Read existing config if it exists
+		var existingConfig string
+		if data, err := os.ReadFile(buildkitConfig); err == nil {
+			existingConfig = string(data)
+			logger.Debug("Read existing buildkit config")
+		} else {
+			// Create default config if file doesn't exist
+			existingConfig = `[worker.oci]
+  enabled = true
+[worker.containerd]
+  enabled = false
+
+[registry."docker.io"]
+  mirrors = ["mirror.gcr.io"]
+`
+			logger.Debug("Creating new buildkit config")
+		}
+
+		// Extract registries from destinations
+		registries := make(map[string]bool)
+		for _, dest := range config.Destination {
+			if idx := strings.Index(dest, "/"); idx > 0 {
+				registry := dest[:idx]
+				registries[registry] = true
+			}
+		}
+
+		// Append insecure config for each registry
+		configContent := existingConfig
+		for registry := range registries {
+			// Check if this registry is already configured
+			if !strings.Contains(existingConfig, fmt.Sprintf(`[registry."%s"]`, registry)) {
+				configContent += fmt.Sprintf(`
+[registry."%s"]
+  http = true
+  insecure = true
+`, registry)
+				logger.Debug("Adding insecure registry to buildkit config: %s", registry)
+			} else {
+				logger.Debug("Registry already configured in buildkit config: %s", registry)
+			}
+		}
+
+		if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+			return fmt.Errorf("failed to write buildkit config: %v", err)
+		}
+	}
+
 	// Start buildkitd with rootlesskit
 	logger.Debug("Starting buildkitd with rootlesskit...")
 	daemonCmd := exec.Command(

@@ -5,6 +5,11 @@
 *.so
 *.dylib
 
+# Secret files - DO NOT COMMIT
+.env
+.env.local
+.env.*.local
+
 # Test binary, built with `go test -c`
 *.test
 

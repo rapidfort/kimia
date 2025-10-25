@@ -24,6 +24,14 @@ type PushConfig struct {
 
 // Push pushes built images to registries with authentication
 func Push(config PushConfig, authFile string) error {
+	// BuildKit pushes during build (via --output with push=true)
+	// Only buildah needs a separate push step
+	builder := detectBuilder()
+	if builder == "buildkit" {
+		logger.Debug("Skipping separate push step (BuildKit pushes during build)")
+		return nil
+	}
+
 	for _, dest := range config.Destinations {
 		logger.Info("Pushing image: %s", dest)
 
@@ -162,6 +170,14 @@ func Push(config PushConfig, authFile string) error {
 
 // PushSingle pushes a single image with retries (used by hardening)
 func PushSingle(image string, config PushConfig, authFile string) error {
+	// BuildKit pushes during build (via --output with push=true)
+	// Only buildah needs a separate push step
+	builder := detectBuilder()
+	if builder == "buildkit" {
+		logger.Debug("Skipping separate push step for %s (BuildKit pushes during build)", image)
+		return nil
+	}
+
 	// Build push command
 	args := []string{"push"}
 
