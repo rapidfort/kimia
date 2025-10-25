@@ -10,6 +10,10 @@
 
 set -e
 
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+export LANG="${LANG:-en_US.UTF-8}"
+export LANGUAGE="${LANGUAGE:-en_US.UTF-8}"
+
 # Default configuration - handle internal vs external registry
 if [ -z "${RF_APP_HOST}" ]; then
     REGISTRY=${REGISTRY:-"ghcr.io"}
@@ -114,7 +118,7 @@ get_primary_driver() {
 # Get the actual storage flag value for smithy
 get_storage_flag() {
     local driver="$1"
-    
+
     # BuildKit uses 'native' which maps to native snapshotter
     # Buildah uses 'vfs' which maps to VFS storage
     # Both support 'overlay'
@@ -133,22 +137,22 @@ get_storage_flag() {
 
 setup_namespace() {
     echo -e "${CYAN}Setting up Kubernetes environment...${NC}"
-    
+
     # Check kubectl
     if ! command -v kubectl &> /dev/null; then
         echo -e "${RED}Error: kubectl is not installed or not in PATH${NC}"
         exit 1
     fi
-    
+
     # Check cluster connectivity
     if ! kubectl cluster-info &> /dev/null; then
         echo -e "${RED}Error: Cannot connect to Kubernetes cluster${NC}"
         exit 1
     fi
-    
+
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
-    
+
     echo -e "${GREEN}✓ Namespace ready${NC}"
 }
 
@@ -160,13 +164,13 @@ generate_job_yaml() {
     local job_name="$1"
     local driver="$2"
     local args="$3"
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     # Use job name for YAML file: buildah-overlay-git-build-1234567890.yaml
     local yaml_file="${SUITES_DIR}/${job_name}.yaml"
-    
+
     # Set capabilities based on storage driver and builder
     local caps_add="[SETUID, SETGID]"
     local pod_seccomp=""
@@ -176,7 +180,7 @@ generate_job_yaml() {
     local volume_mounts=""
     local volumes=""
     local has_volumes=false
-    
+
     # CRITICAL FIX: BuildKit ALWAYS needs Unconfined seccomp + AppArmor for mount syscalls
     # This applies to BOTH native and overlay storage
     if [ "$BUILDER" = "buildkit" ]; then
@@ -190,12 +194,12 @@ generate_job_yaml() {
         container_apparmor="appArmorProfile:
             type: Unconfined"
     fi
-    
+
     # Overlay storage needs additional configuration
     if [ "$driver" = "overlay" ]; then
         # Add MKNOD and DAC_OVERRIDE for overlay
         caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
-        
+
         # Buildah with overlay also needs Unconfined seccomp + AppArmor
         if [ "$BUILDER" = "buildah" ]; then
             pod_seccomp="seccompProfile:
@@ -206,7 +210,7 @@ generate_job_yaml() {
           type: Unconfined"
             container_apparmor="appArmorProfile:
             type: Unconfined"
-            
+
             # CRITICAL: Buildah overlay needs emptyDir at /home/smithy/.local
             # Why: Cannot nest kernel overlayfs on top of kernel overlayfs (container root)
             # Container root = kernel overlayfs, storage needs kernel overlayfs = NESTED = FAILS
@@ -223,7 +227,7 @@ generate_job_yaml() {
         fi
         # Note: BuildKit overlay doesn't need any volumes (no nesting issue)
     fi
-    
+
     # Build the YAML - conditionally include volumeMounts and volumes
     if [ "$has_volumes" = true ]; then
         cat > "$yaml_file" <<EOF
@@ -328,7 +332,7 @@ spec:
           ${container_apparmor}
 EOF
     fi
-    
+
     echo "$yaml_file"
 }
 
@@ -341,84 +345,84 @@ run_k8s_test() {
     local driver="$2"
     local args="$3"
     local test_slug="$4"  # Short identifier for the test type
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, rootless, ${driver})"
-    
+
     # Generate meaningful job name: buildah-overlay-git-build-1234567890
     local timestamp=$(date +%s)
     local job_name="${BUILDER}-${driver}-${test_slug}-${timestamp}"
     local yaml_file=$(generate_job_yaml "$job_name" "$driver" "$args")
-    
+
     echo -e "${CYAN}  Job: ${job_name}${NC}"
     echo -e "${CYAN}  YAML: $(basename $yaml_file)${NC}"
-    
+
     local start_time=$(date +%s)
-    
+
     # Create job
     echo -e "${CYAN}  Creating job...${NC}"
     if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
-        echo -e "${RED}  ✗ FAIL${NC} (Failed to create job)"
+        echo -e "${RED}✗ FAIL${NC} (Failed to create job)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         echo ""
         return
     fi
-    
+
     # Wait for pod to be created
     sleep 2
-    
+
     local pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-    
+
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}  ✗ FAIL${NC} (Failed to get pod name)"
+        echo -e "${RED}✗ FAIL${NC} (Failed to get pod name)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
         echo ""
         return
     fi
-    
+
     echo -e "${CYAN}  Pod: ${pod_name}${NC}"
     echo -e "${CYAN}  Streaming logs...${NC}"
-    
+
     # Stream logs in background
     kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' &
     local logs_pid=$!
-    
+
     # Wait for job to complete
     if kubectl wait --for=condition=complete job/${job_name} -n ${NAMESPACE} --timeout=${JOB_TIMEOUT}s &> /dev/null; then
         wait $logs_pid 2>/dev/null || true
-        
+
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        
-        echo -e "${GREEN}  ✓ PASS${NC} (${duration}s)"
+
+        echo -e "${GREEN}✓ PASS${NC} (${duration}s)"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver})")
     else
         kill $logs_pid 2>/dev/null || true
         wait $logs_pid 2>/dev/null || true
-        
+
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
-        
-        echo -e "${RED}  ✗ FAIL${NC} (${duration}s)"
+
+        echo -e "${RED}✗ FAIL${NC} (${duration}s)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
-        
+
         echo -e "${RED}  Complete pod logs:${NC}"
         kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
     fi
-    
+
     # Cleanup job (but keep YAML file for debugging)
     echo -e "${CYAN}  Cleaning up job...${NC}"
     kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-    
+
     echo ""
 }
 
@@ -428,12 +432,12 @@ run_k8s_test() {
 
 run_rootless_tests() {
     local driver="$1"
-    
+
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
-    
+
     print_section "ROOTLESS MODE TESTS - ${BUILDER^^} with ${driver^^} STORAGE"
-    
+
     if [ "$driver" = "overlay" ]; then
         echo -e "${CYAN}Note: Overlay storage uses native kernel overlayfs (via user namespaces)${NC}"
         if [ "$BUILDER" = "buildkit" ]; then
@@ -451,28 +455,28 @@ run_rootless_tests() {
         echo -e "${CYAN}Note: VFS storage (Buildah) - most secure but slower${NC}"
         echo ""
     fi
-    
+
     # Test 1: Version check
     run_k8s_test \
         "Version Check" \
         "$driver" \
         "[\"--version\"]" \
         "version"
-    
+
     # Test 2: Environment check
     run_k8s_test \
         "Environment Check" \
         "$driver" \
         "[\"check-environment\"]" \
         "envcheck"
-    
+
     # Test 3: Basic build from Git
     run_k8s_test \
         "Git Repository Build" \
         "$driver" \
         "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
         "git-build"
-    
+
     # Test 4: Build with arguments from Git
     run_k8s_test \
         "Build with Arguments" \
@@ -488,10 +492,10 @@ run_rootless_tests() {
 cleanup() {
     if [ "$CLEANUP_AFTER" = true ]; then
         print_section "CLEANUP"
-        
+
         echo "Deleting namespace: ${NAMESPACE}"
         kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-        
+
         echo -e "${GREEN}✓ Cleanup completed${NC}"
     fi
 }
@@ -500,10 +504,10 @@ cleanup_on_interrupt() {
     echo ""
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Cleaning up...${NC}"
-    
+
     kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
     kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-    
+
     echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130
 }
@@ -514,7 +518,7 @@ cleanup_on_interrupt() {
 
 main() {
     print_section "KUBERNETES TEST SUITE (ROOTLESS ONLY)"
-    
+
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
@@ -527,7 +531,7 @@ main() {
     echo ""
     echo -e "${YELLOW}NOTE: Smithy runs in ROOTLESS mode only (UID 1000)${NC}"
     echo ""
-    
+
     # Describe storage mappings
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
@@ -538,7 +542,7 @@ main() {
         echo -e "  overlay → Kernel overlayfs (high performance, requires emptyDir)"
     fi
     echo ""
-    
+
     echo -e "${CYAN}SECURITY REQUIREMENTS:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
         echo -e "  Native:"
@@ -568,17 +572,17 @@ main() {
         echo -e "    - Note: Uses native kernel overlayfs via user namespaces"
     fi
     echo ""
-    
+
     # Start overall timer
     local overall_start=$(date +%s)
-    
+
     # Setup namespace
     setup_namespace
-    
+
     # Determine which drivers to test based on builder and storage selection
     local drivers=()
     local primary_driver=$(get_primary_driver)
-    
+
     if [ "$STORAGE_DRIVER" = "both" ]; then
         # Test both primary driver and overlay
         drivers=("$primary_driver" "overlay")
@@ -594,43 +598,43 @@ main() {
         drivers=("$STORAGE_DRIVER")
         echo -e "${GREEN}✓ Will test ${STORAGE_DRIVER} storage${NC}"
     fi
-    
+
     echo ""
-    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
     echo -e "${CYAN}Starting tests for storage drivers: ${drivers[@]}${NC}"
-    echo -e "${CYAN}••••••••••••••••••••••••••••••••••••••••••••••••••••••••••${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
     echo ""
-    
+
     # Run tests for each storage driver (ROOTLESS ONLY)
     for driver in "${drivers[@]}"; do
         run_rootless_tests "$driver"
     done
-    
+
     # Cleanup if requested
     cleanup
-    
+
     # Calculate total time
     local overall_end=$(date +%s)
     local overall_duration=$((overall_end - overall_start))
     local overall_minutes=$((overall_duration / 60))
     local overall_seconds=$((overall_duration % 60))
-    
+
     # Print summary
     print_section "TEST SUMMARY"
-    
+
     echo -e "Builder:      ${BUILDER}"
     echo -e "Total Tests:  ${TOTAL_TESTS}"
     echo -e "${GREEN}Passed:       ${PASSED_TESTS}${NC}"
-    
+
     if [ $FAILED_TESTS -gt 0 ]; then
         echo -e "${RED}Failed:       ${FAILED_TESTS}${NC}"
     else
         echo -e "${GREEN}Failed:       ${FAILED_TESTS}${NC}"
     fi
-    
+
     echo -e "Total Time:   ${overall_minutes}m ${overall_seconds}s"
     echo ""
-    
+
     if [ $FAILED_TESTS -gt 0 ]; then
         echo -e "${RED}Failed tests:${NC}"
         for result in "${TEST_RESULTS[@]}"; do
@@ -643,7 +647,7 @@ main() {
         echo -e "${YELLOW}  ${SUITES_DIR}/${NC}"
         exit 1
     fi
-    
+
     echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated YAML files in: ${SUITES_DIR}/${NC}"
