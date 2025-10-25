@@ -43,7 +43,7 @@ ARG TARGETARCH
 
 RUN apk update && apk add gnutls
 
-# Install runtime dependencies including fuse-overlayfs
+# Install runtime dependencies
 RUN apk add --no-cache \
     bash \
     ca-certificates \
@@ -61,7 +61,6 @@ RUN apk add --no-cache \
     slirp4netns \
     netavark \
     aardvark-dns \
-    fuse-overlayfs \
     xz \
     buildah && \
     update-ca-certificates && \
@@ -79,76 +78,17 @@ RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
 RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
     echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
 
-# System-wide policy (for root - UID 0)
-RUN mkdir -p /etc/containers && \
-    cat > /etc/containers/policy.json <<'EOF'
-{
-    "default": [{"type": "insecureAcceptAnything"}]
-}
-EOF
-
-# Also create for root's home directory
-RUN mkdir -p /root/.config/containers && \
-    cat > /root/.config/containers/policy.json <<'EOF'
-{
-    "default": [{"type": "insecureAcceptAnything"}]
-}
-EOF
-
-# System-wide registries config (for root - UID 0)  
-RUN cat > /etc/containers/registries.conf <<'EOF'
-unqualified-search-registries = ['docker.io', 'quay.io']
-
-[[registry]]
-location = "docker.io"
-
-[[registry]]
-location = "quay.io"
-EOF
-
 # ============================================================================
-# Storage and Configuration Setup for BOTH root and rootless modes
+# Rootless-Only Configuration (UID 1000 only)
 # ============================================================================
 
-# Create root storage directories (for rootful mode)
-RUN mkdir -p /var/lib/containers/storage \
-    /var/run/containers/storage \
-    /etc/containers \
-    /tmp/lock && \
-    chmod 1777 /tmp/lock
-
-# System-wide storage config (for root - UID 0)
-RUN cat > /etc/containers/storage.conf <<'EOF'
-[storage]
-driver="vfs"
-runroot="/var/run/containers/storage"
-graphroot="/var/lib/containers/storage"
-
-[storage.options]
-vfs.ignore_chown_errors="false"
-
-[storage.options.overlay]
-mount_program="/usr/bin/fuse-overlayfs"
-mountopt="nodev,metacopy=on"
-EOF
-
-# System-wide containers config
-RUN cat > /etc/containers/containers.conf <<'EOF'
-[engine]
-events_logger="file"
-network_backend="netavark"
-
-[engine.runtimes]
-runc = ["/usr/bin/runc"]
-crun = ["/usr/bin/crun"]
-EOF
-
-# Create user directories for smithy (for rootless mode)
+# Create user directories for smithy
 RUN mkdir -p /home/${SMITHY_USER}/.local/share/containers/storage && \
     mkdir -p /home/${SMITHY_USER}/.config/containers && \
-    mkdir -p /home/${SMITHY_USER}/.docker
+    mkdir -p /home/${SMITHY_USER}/.docker && \
+    mkdir -p /tmp/lock
 
-# User-specific storage config (for rootless - UID 1000)
+# User-specific storage config - Native kernel overlayfs
 RUN cat > /home/${SMITHY_USER}/.config/containers/storage.conf <<'EOF'
 [storage]
 driver="vfs"
@@ -159,7 +99,8 @@ graphroot="/home/smithy/.local/share/containers/storage"
 vfs.ignore_chown_errors="true"
 
 [storage.options.overlay]
-mount_program="/usr/bin/fuse-overlayfs"
+# Use native kernel overlayfs (empty mount_program)
+mount_program=""
 mountopt="nodev,metacopy=on"
 EOF
 
@@ -179,6 +120,17 @@ RUN cat > /home/${SMITHY_USER}/.config/containers/policy.json <<'EOF'
 {
     "default": [{"type": "insecureAcceptAnything"}]
 }
+EOF
+
+# Containers config (user-specific)
+RUN cat > /home/${SMITHY_USER}/.config/containers/containers.conf <<'EOF'
+[engine]
+events_logger="file"
+network_backend="netavark"
+
+[engine.runtimes]
+runc = ["/usr/bin/runc"]
+crun = ["/usr/bin/crun"]
 EOF
 
 # ECR helper
@@ -203,8 +155,6 @@ RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docke
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-
-
 # Environment variables
 ENV BUILDAH_LOG_LEVEL=error
 ENV HOME=/home/smithy
@@ -213,18 +163,19 @@ ENV XDG_RUNTIME_DIR=/run/user/${SMITHY_UID}
 ENV NETAVARK_LOCK_PATH=/tmp/lock/netavark.lock
 
 # Set ownership for smithy user directories
-RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER}
-RUN mkdir -p "${XDG_RUNTIME_DIR}" && \
-    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}"
+RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER} && \
+    mkdir -p "${XDG_RUNTIME_DIR}" && \
+    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}" && \
+    chmod 1777 /tmp/lock
 
-# Default to non-root user (rootless mode - recommended)
+# Run as non-root user (rootless mode only)
 USER ${SMITHY_UID}:${SMITHY_UID}
 WORKDIR /home/${SMITHY_USER}
 
 ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
-LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder"
+LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (Buildah)"
 
 # Set smithy as the entrypoint
 ENTRYPOINT ["/usr/local/bin/smithy"]

@@ -38,7 +38,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	isK8s := IsInKubernetes()
 
 	checkmark := getCheckmark(true)
-	logger.Info("  User ID:                 %d (%s) %s", uid, getUIDDescription(isRoot), checkmark)
+	logger.Info("  User ID:                 %d %s", uid, checkmark)
 	logger.Info("  Environment:             %s", getEnvironment(isK8s))
 	logger.Info("  Storage Driver:          %s", storageDriver)
 
@@ -177,41 +177,8 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		if isRoot {
 			logger.Info("  Overlay (native):        Available %s", getCheckmark(true))
 		} else {
-			logger.Info("  Overlay (native):        Not available (non-root)")
-		}
-
-		if !isRoot {
-			if storage.OverlayAvailable {
-				logger.Info("  Overlay (fuse):          Testing...")
-				logger.Info("    - /dev/fuse:           %s %s", getPresence(storage.FuseAvailable), getCheckmark(storage.FuseAvailable))
-
-				if storage.FuseOverlayFS != "" {
-					logger.Info("    - fuse-overlayfs:      %s %s", storage.FuseOverlayFS, getCheckmark(true))
-				} else {
-					logger.Info("    - fuse-overlayfs:      Not found %s", getCheckmark(false))
-				}
-
-				// Perform mount test
-				testResult := TestOverlayMount(isRoot)
-				if testResult.Success {
-					logger.Info("    - Mount test:          Success %s", getCheckmark(true))
-					logger.Info("    - Write test:          Success %s", getCheckmark(true))
-				} else {
-					logger.Info("    - Mount test:          Failed %s", getCheckmark(false))
-					logger.Error("      Error: %s", testResult.ErrorMessage)
-				}
-			} else {
-				logger.Info("  Overlay (fuse):          Not available %s", getCheckmark(false))
-				if !storage.FuseAvailable {
-					logger.Info("    - /dev/fuse missing")
-				}
-				if storage.FuseOverlayFS == "" {
-					logger.Info("    - fuse-overlayfs not installed")
-				}
-				if storageDriver == "overlay" && caps != nil && !caps.HasCapability("CAP_MKNOD") {
-					logger.Info("    - CAP_MKNOD missing (required for overlay)")
-				}
-			}
+			logger.Info("  Overlay (native):        Not available (rootless mode)")
+			logger.Info("    Note: Overlay requires root privileges")
 		}
 	}
 	logger.Info("")
@@ -312,10 +279,10 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 			logger.Warning("   Consider rootless mode for production")
 		} else {
 			logger.Info("✓ %s", buildModeMethod)
-			if storage != nil && storage.OverlayAvailable {
+			if storage != nil && storage.OverlayAvailable && isRoot {
 				logger.Info("✓ Overlay storage available for better performance")
 			} else {
-				logger.Info("✓ VFS storage available (overlay recommended for speed)")
+				logger.Info("✓ VFS storage available (recommended for rootless)")
 			}
 		}
 

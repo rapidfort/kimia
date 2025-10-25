@@ -62,7 +62,7 @@ func main() {
 		// Log storage driver selection
 		logger.Info("Using storage driver: %s", storageDriver)
 		if storageDriver == "overlay" {
-			logger.Info("Note: Overlay driver requires fuse-overlayfs and additional capabilities")
+			logger.Info("Note: Overlay driver requires additional capabilities")
 		}
 		if storageDriver == "vfs" {
 			logger.Info("Note: VFS storage (Buildah only)")
@@ -114,7 +114,7 @@ func main() {
 		TokenFile: config.GitTokenFile,
 		TokenUser: config.GitTokenUser,
 	}
-	
+
 	ctx, err := build.Prepare(gitConfig)
 	if err != nil {
 		logger.Fatal("Failed to prepare build context: %v", err)

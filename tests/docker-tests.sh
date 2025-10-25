@@ -5,7 +5,7 @@
 # Tests storage drivers based on builder:
 #   - BuildKit: native (default), overlay
 #   - Buildah: vfs (default), overlay
-# Note: Overlay requires appropriate capabilities in rootless mode
+# Note: Uses native kernel overlayfs via user namespaces
 
 set -e
 
@@ -93,6 +93,7 @@ print_section() {
     echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
     echo ""
 }
+
 # Get the primary storage driver name based on builder
 get_primary_driver() {
     if [ "$BUILDER" = "buildkit" ]; then
@@ -123,22 +124,18 @@ get_storage_flag() {
 # ============================================================================
 
 create_test_script() {
-    local test_type="$1"  # "happy" or "unhappy"
-    local test_name="$2"
-    local mode="$3"
-    local driver="$4"
-    local test_command="$5"
+    local test_name="$1"
+    local mode="$2"
+    local driver="$3"
+    local test_command="$4"
     
-    # Sanitize test name for filename: replace spaces with dashes, lowercase
-    local safe_name=$(echo "$test_name" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')
-    
-    local script_file="${SUITES_DIR}/${test_type}-${BUILDER}-${mode}-${driver}-${safe_name}.sh"
+    # Generate meaningful filename: buildkit-rootless-native-version.sh
+    local script_file="${SUITES_DIR}/${BUILDER}-${mode}-${driver}-${test_name}.sh"
     
     cat > "$script_file" <<TESTSCRIPT
 #!/bin/bash
 # Auto-generated Docker test script
 # Builder: ${BUILDER}
-# Type: ${test_type}
 # Test: ${test_name}
 # Mode: ${mode}
 # Driver: ${driver}
@@ -156,7 +153,6 @@ echo ""
 echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
 echo -e "\${CYAN}  Docker Test: ${test_name}\${NC}"
 echo -e "\${CYAN}  Builder: ${BUILDER}\${NC}"
-echo -e "\${CYAN}  Type: ${test_type}\${NC}"
 echo -e "\${CYAN}  Mode: ${mode}\${NC}"
 echo -e "\${CYAN}  Driver: ${driver}\${NC}"
 echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
@@ -195,8 +191,8 @@ run_test() {
     
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     
-    # CREATE the happy case test script file
-    local script_file=$(create_test_script "happy" "$test_name" "$mode" "$driver" "$test_cmd")
+    # CREATE the test script file
+    local script_file=$(create_test_script "$test_name" "$mode" "$driver" "$test_cmd")
     
     echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, ${mode}, ${driver})"
     echo -e "${CYAN}  Script: $(basename $script_file)${NC}"
@@ -231,18 +227,18 @@ run_rootless_tests() {
     print_section "ROOTLESS MODE TESTS (UID 1000) - ${BUILDER^^} with ${driver^^} STORAGE"
     
     if [ "$driver" = "overlay" ]; then
-        echo -e "${YELLOW}Note: Overlay storage requires additional capabilities in rootless mode${NC}"
+        echo -e "${CYAN}Note: Overlay storage uses native kernel overlayfs (via user namespaces)${NC}"
         if [ "$BUILDER" = "buildkit" ]; then
-            echo -e "${YELLOW}      BuildKit overlay uses fuse-overlayfs${NC}"
+            echo -e "${CYAN}      BuildKit: DAC_OVERRIDE + Unconfined seccomp/AppArmor${NC}"
         else
-            echo -e "${YELLOW}      Buildah overlay requires CAP_MKNOD${NC}"
+            echo -e "${CYAN}      Buildah: MKNOD + DAC_OVERRIDE + Unconfined seccomp/AppArmor${NC}"
         fi
         echo ""
     elif [ "$driver" = "native" ]; then
-        echo -e "${CYAN}Note: Native snapshotter (BuildKit) provides security with good performance${NC}"
+        echo -e "${CYAN}Note: Native snapshotter (BuildKit) - secure and performant${NC}"
         echo ""
     elif [ "$driver" = "vfs" ]; then
-        echo -e "${CYAN}Note: VFS storage (Buildah) is the most secure but slower${NC}"
+        echo -e "${CYAN}Note: VFS storage (Buildah) - most secure but slower${NC}"
         echo ""
     fi
     
@@ -253,23 +249,18 @@ run_rootless_tests() {
     BASE_CMD="$BASE_CMD --cap-add SETUID"
     BASE_CMD="$BASE_CMD --cap-add SETGID"
     
-    # Add additional capabilities for overlay
+    # Add additional capabilities for overlay (both BuildKit and Buildah)
     if [ "$driver" = "overlay" ]; then
-        # Both BuildKit and Buildah with overlay need these capabilities
         BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
         BASE_CMD="$BASE_CMD --cap-add MKNOD"
     fi
     
-    BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
-    BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
-    
-    # Only mount /dev/fuse for overlay storage
-    if [ "$driver" = "overlay" ]; then
-        BASE_CMD="$BASE_CMD --device /dev/fuse"
+    # Always unconfined for overlay, but also needed for BuildKit native
+    if [ "$driver" = "overlay" ] || [ "$BUILDER" = "buildkit" ]; then
+        BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
+        BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
     fi
     
-    BASE_CMD="$BASE_CMD -e HOME=/home/smithy"
-    BASE_CMD="$BASE_CMD -e DOCKER_CONFIG=/home/smithy/.docker"
     BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
     
     # Test 1: Version check
@@ -326,7 +317,6 @@ run_rootless_tests() {
         --storage-driver=${storage_flag} \
         --no-push \
         --verbosity=debug
-    
 }
 
 # ============================================================================
@@ -354,6 +344,7 @@ cleanup_on_interrupt() {
     echo -e "${GREEN}✓ Cleanup completed${NC}"
     exit 130
 }
+
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -380,11 +371,14 @@ main() {
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
         echo -e "  native  → Native snapshotter (default for BuildKit)"
-        echo -e "  overlay → fuse-overlayfs (high performance)"
+        echo -e "  overlay → Kernel overlayfs (high performance)"
     else
         echo -e "  vfs     → VFS storage (default for Buildah)"
-        echo -e "  overlay → fuse-overlayfs (high performance)"
+        echo -e "  overlay → Kernel overlayfs (high performance)"
     fi
+    echo ""
+    
+    echo -e "${CYAN}Note: All storage drivers use native kernel overlayfs via user namespaces${NC}"
     echo ""
     
     # Start overall timer
@@ -457,7 +451,7 @@ main() {
     echo -e "${GREEN}✓ All Docker tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated test scripts in: ${SUITES_DIR}/${NC}"
-    echo -e "${CYAN}Example: bash ${SUITES_DIR}/happy-${BUILDER}-rootless-${primary_driver}-version.sh${NC}"
+    echo -e "${CYAN}Example: bash ${SUITES_DIR}/${BUILDER}-rootless-${primary_driver}-version.sh${NC}"
     exit 0
 }
 

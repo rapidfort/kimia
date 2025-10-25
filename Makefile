@@ -93,7 +93,6 @@ help:
 	@echo "  make test-buildah       - Test Buildah image"
 	@echo "  make test-all           - Test BOTH images"
 	@echo "  make test-clean         - Clean up test resources"
-	@echo "  make test-verbose       - Run tests in verbose mode"
 	@echo ""
 	@echo "━━━ Utilities ━━━"
 	@echo "  make run                - Run smithy container locally"
@@ -321,16 +320,6 @@ test-clean:
 		kubectl delete namespace smithy-tests --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true; \
 	fi
 	@echo "[TEST-CLEAN] Cleanup complete"
-
-.PHONY: test-verbose
-test-verbose: check-test-script
-	@echo "[TEST-VERBOSE] Running tests in verbose mode..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
-	else \
-		VERSION=latest; \
-	fi; \
-	$(TEST_SCRIPT) -m both -v -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
 .PHONY: test-debug-auth
 test-debug-auth: check-test-script

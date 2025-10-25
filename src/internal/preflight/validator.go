@@ -63,7 +63,7 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 	result.UID = os.Getuid()
 	result.IsRoot = result.UID == 0
 
-	logger.Info("Current UID: %d (%s)", result.UID, getUIDDescription(result.IsRoot))
+	logger.Info("Current UID: %d", result.UID)
 
 	// 2. Check capabilities
 	caps, err := CheckCapabilities()
@@ -305,14 +305,6 @@ func validateStorageDriver(result *ValidationResult) ValidationStatus {
 	}
 
 	return StatusSuccess
-}
-
-// getUIDDescription returns a human-readable description of UID
-func getUIDDescription(isRoot bool) string {
-	if isRoot {
-		return "root"
-	}
-	return "non-root"
 }
 
 // PrintValidationResult prints the validation result to console

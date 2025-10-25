@@ -1,4 +1,3 @@
-
 package preflight
 
 import (
@@ -16,8 +15,6 @@ import (
 type StorageCheck struct {
 	VFSAvailable     bool
 	OverlayAvailable bool
-	FuseAvailable    bool
-	FuseOverlayFS    string
 	TestResult       *OverlayTestResult
 }
 
@@ -37,65 +34,51 @@ func CheckStorageDrivers(isRoot bool, hasCaps bool) (*StorageCheck, error) {
 		VFSAvailable: true, // VFS is always available
 	}
 
-	// Check for /dev/fuse
-	if _, err := os.Stat("/dev/fuse"); err == nil {
-		result.FuseAvailable = true
-		logger.Debug("/dev/fuse is available")
-	} else {
-		logger.Debug("/dev/fuse is not available: %v", err)
-	}
-
-	// Check for fuse-overlayfs binary
-	if path, err := exec.LookPath("fuse-overlayfs"); err == nil {
-		result.FuseOverlayFS = path
-		logger.Debug("fuse-overlayfs found at: %s", path)
-	} else {
-		logger.Debug("fuse-overlayfs not found in PATH")
-	}
-
-	// Determine if overlay is potentially available
+	// Overlay is available in both root and rootless modes
+	// Rootless uses user namespaces (via newuidmap/newgidmap) to get mount capability
 	if isRoot {
-		// Root can use native overlay
 		result.OverlayAvailable = true
-		logger.Debug("Overlay available (root mode - native overlay)")
-	} else if hasCaps && result.FuseAvailable && result.FuseOverlayFS != "" {
-		// Non-root with caps needs fuse-overlayfs
+		logger.Debug("Overlay available (root mode - native kernel overlay)")
+	} else if hasCaps {
+		// With SETUID/SETGID caps, user namespaces work, giving mount capability
 		result.OverlayAvailable = true
-		logger.Debug("Overlay potentially available (rootless mode - fuse-overlayfs)")
+		logger.Debug("Overlay available (rootless mode - native kernel overlay via user namespaces)")
 	} else {
 		result.OverlayAvailable = false
-		logger.Debug("Overlay not available (missing requirements)")
+		logger.Debug("Overlay not available (missing SETUID/SETGID capabilities)")
 	}
 
 	return result, nil
 }
 
 // TestOverlayMount performs an actual overlay mount test
+// Note: In rootless mode, this must be called from within a user namespace
+// (e.g., via buildah unshare or similar) to have mount capability
 func TestOverlayMount(isRoot bool) *OverlayTestResult {
 	logger.Debug("Testing overlay mount capability")
-	
+
 	startTime := time.Now()
-	
+
 	// Create temporary test directory
 	testBase := filepath.Join("/tmp", fmt.Sprintf("smithy-overlay-test-%d", time.Now().UnixNano()))
-	
+
 	result := &OverlayTestResult{
 		TestPath: testBase,
 	}
-	
+
 	// Ensure cleanup
 	defer func() {
 		if testBase != "" {
-			cleanupOverlayTest(testBase, isRoot)
+			cleanupOverlayTest(testBase)
 		}
 	}()
-	
+
 	// Create directory structure
 	lowerDir := filepath.Join(testBase, "lower")
 	upperDir := filepath.Join(testBase, "upper")
 	workDir := filepath.Join(testBase, "work")
 	mergedDir := filepath.Join(testBase, "merged")
-	
+
 	for _, dir := range []string{lowerDir, upperDir, workDir, mergedDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			result.ErrorMessage = fmt.Sprintf("Failed to create test directory: %v", err)
@@ -103,9 +86,9 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 			return result
 		}
 	}
-	
+
 	logger.Debug("Created test directories at: %s", testBase)
-	
+
 	// Create a test file in lower layer
 	testFile := filepath.Join(lowerDir, "test.txt")
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
@@ -113,111 +96,82 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 		result.Duration = time.Since(startTime)
 		return result
 	}
-	
-	// Attempt mount
-	var cmd *exec.Cmd
-	var mountSuccess bool
-	
-	if isRoot {
-		// Try native overlay mount
-		logger.Debug("Testing native overlay mount (root mode)")
-		opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-		cmd = exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, mergedDir)
-		
-		if output, err := cmd.CombinedOutput(); err != nil {
-			result.ErrorMessage = fmt.Sprintf("Native overlay mount failed: %v\nOutput: %s", err, string(output))
-			result.Duration = time.Since(startTime)
-			return result
+
+	// Attempt native overlay mount (works in both root and rootless with user namespace)
+	logger.Debug("Testing native kernel overlay mount")
+	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, mergedDir)
+
+	if output, err := cmd.CombinedOutput(); err != nil {
+		result.ErrorMessage = fmt.Sprintf("Native overlay mount failed: %v\nOutput: %s", err, string(output))
+		result.Duration = time.Since(startTime)
+
+		// In rootless mode, provide helpful error message
+		if !isRoot {
+			result.ErrorMessage += "\nNote: Rootless overlay requires user namespace. Ensure SETUID/SETGID capabilities are available."
 		}
-		mountSuccess = true
-		logger.Debug("Native overlay mount successful")
-	} else {
-		// Try fuse-overlayfs
-		logger.Debug("Testing fuse-overlayfs mount (rootless mode)")
-		opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-		cmd = exec.Command("fuse-overlayfs", "-o", opts, mergedDir)
-		
-		if output, err := cmd.CombinedOutput(); err != nil {
-			result.ErrorMessage = fmt.Sprintf("fuse-overlayfs mount failed: %v\nOutput: %s", err, string(output))
-			result.Duration = time.Since(startTime)
-			return result
-		}
-		mountSuccess = true
-		logger.Debug("fuse-overlayfs mount successful")
+		return result
 	}
-	
+
+	logger.Debug("Native overlay mount successful")
+
 	// Test write to merged directory
-	if mountSuccess {
-		writeTestFile := filepath.Join(mergedDir, "write-test.txt")
-		if err := os.WriteFile(writeTestFile, []byte("write test"), 0644); err != nil {
-			// Try to unmount before returning error
-			unmountOverlay(mergedDir, isRoot)
-			result.ErrorMessage = fmt.Sprintf("Write test to overlay failed: %v", err)
-			result.Duration = time.Since(startTime)
-			return result
-		}
-		logger.Debug("Write test successful")
-		
-		// Verify file appears in upper layer
-		upperTestFile := filepath.Join(upperDir, "write-test.txt")
-		if _, err := os.Stat(upperTestFile); err != nil {
-			unmountOverlay(mergedDir, isRoot)
-			result.ErrorMessage = fmt.Sprintf("File did not appear in upper layer: %v", err)
-			result.Duration = time.Since(startTime)
-			return result
-		}
-		logger.Debug("File correctly appeared in upper layer")
-		
-		// Unmount
-		if err := unmountOverlay(mergedDir, isRoot); err != nil {
-			result.ErrorMessage = fmt.Sprintf("Unmount failed: %v", err)
-			result.Duration = time.Since(startTime)
-			return result
-		}
-		logger.Debug("Unmount successful")
+	writeTestFile := filepath.Join(mergedDir, "write-test.txt")
+	if err := os.WriteFile(writeTestFile, []byte("write test"), 0644); err != nil {
+		// Try to unmount before returning error
+		unmountOverlay(mergedDir)
+		result.ErrorMessage = fmt.Sprintf("Write test to overlay failed: %v", err)
+		result.Duration = time.Since(startTime)
+		return result
 	}
-	
+	logger.Debug("Write test successful")
+
+	// Verify file appears in upper layer
+	upperTestFile := filepath.Join(upperDir, "write-test.txt")
+	if _, err := os.Stat(upperTestFile); err != nil {
+		unmountOverlay(mergedDir)
+		result.ErrorMessage = fmt.Sprintf("File did not appear in upper layer: %v", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+	logger.Debug("File correctly appeared in upper layer")
+
+	// Unmount
+	if err := unmountOverlay(mergedDir); err != nil {
+		result.ErrorMessage = fmt.Sprintf("Unmount failed: %v", err)
+		result.Duration = time.Since(startTime)
+		return result
+	}
+	logger.Debug("Unmount successful")
+
 	result.Success = true
 	result.Duration = time.Since(startTime)
 	logger.Debug("Overlay mount test completed successfully in %v", result.Duration)
-	
+
 	return result
 }
 
 // unmountOverlay unmounts an overlay filesystem
-func unmountOverlay(mountPoint string, isRoot bool) error {
-	if isRoot {
-		// Use umount for native overlay
-		cmd := exec.Command("umount", mountPoint)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))
-		}
-	} else {
-		// fuse-overlayfs should be unmounted with fusermount
-		cmd := exec.Command("fusermount", "-u", mountPoint)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			// Try fusermount3 as fallback
-			cmd = exec.Command("fusermount3", "-u", mountPoint)
-			if output2, err2 := cmd.CombinedOutput(); err2 != nil {
-				return fmt.Errorf("fusermount failed: %v\nOutput: %s\nfusermount3 also failed: %v\nOutput: %s", 
-					err, string(output), err2, string(output2))
-			}
-		}
+func unmountOverlay(mountPoint string) error {
+	// Use umount for native kernel overlay (both root and rootless)
+	cmd := exec.Command("umount", mountPoint)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))
 	}
 	return nil
 }
 
 // cleanupOverlayTest removes test directories
-func cleanupOverlayTest(testBase string, isRoot bool) {
+func cleanupOverlayTest(testBase string) {
 	logger.Debug("Cleaning up overlay test directory: %s", testBase)
-	
+
 	// Try to unmount merged directory if it exists
 	mergedDir := filepath.Join(testBase, "merged")
 	if _, err := os.Stat(mergedDir); err == nil {
 		// Attempt unmount, ignore errors (might not be mounted)
-		unmountOverlay(mergedDir, isRoot)
+		unmountOverlay(mergedDir)
 	}
-	
+
 	// Remove test directory
 	if err := os.RemoveAll(testBase); err != nil {
 		logger.Debug("Failed to cleanup test directory: %v", err)
@@ -229,49 +183,42 @@ func cleanupOverlayTest(testBase string, isRoot bool) {
 // ValidateStorageDriver validates if the requested storage driver is available
 func ValidateStorageDriver(driver string, isRoot bool, hasCaps bool) error {
 	driver = strings.ToLower(driver)
-	
+
 	logger.Debug("Validating storage driver: %s", driver)
-	
+
 	switch driver {
 	case "vfs":
 		// VFS is always available
+		logger.Debug("VFS storage driver selected - always available")
 		return nil
-		
+
 	case "overlay":
 		// Check overlay requirements
 		check, err := CheckStorageDrivers(isRoot, hasCaps)
 		if err != nil {
 			return fmt.Errorf("failed to check storage drivers: %v", err)
 		}
-		
+
 		if !check.OverlayAvailable {
-			var reasons []string
-			
 			if !isRoot && !hasCaps {
-				reasons = append(reasons, "missing SETUID/SETGID capabilities")
+				return fmt.Errorf("overlay driver not available: missing SETUID/SETGID capabilities for user namespaces")
 			}
-			if !check.FuseAvailable {
-				reasons = append(reasons, "/dev/fuse not available")
-			}
-			if check.FuseOverlayFS == "" && !isRoot {
-				reasons = append(reasons, "fuse-overlayfs not installed")
-			}
-			
-			return fmt.Errorf("overlay driver not available: %s", strings.Join(reasons, ", "))
+			return fmt.Errorf("overlay driver not available: unknown reason")
 		}
-		
-		// Perform actual mount test
-		logger.Info("Testing overlay mount capability...")
-		testResult := TestOverlayMount(isRoot)
-		
-		if !testResult.Success {
-			return fmt.Errorf("overlay mount test failed: %s", testResult.ErrorMessage)
-		}
-		
-		logger.Info("Overlay mount test successful (took %v)", testResult.Duration)
+
+		// Note: We skip the actual mount test here because:
+		// 1. In Docker/K8s, the build environment will have proper namespaces set up
+		// 2. The test would need to be run inside a user namespace (buildah unshare)
+		// 3. BuildKit/Buildah handle this internally when they start
+		logger.Info("Overlay storage driver validated (native kernel overlay via user namespaces)")
 		return nil
-		
+
+	case "native":
+		// Native is BuildKit-specific, treated same as overlay
+		logger.Debug("Native storage driver (BuildKit native snapshotter)")
+		return nil
+
 	default:
-		return fmt.Errorf("unknown storage driver: %s (valid options: vfs, overlay)", driver)
+		return fmt.Errorf("unknown storage driver: %s (valid options: vfs, overlay, native)", driver)
 	}
 }

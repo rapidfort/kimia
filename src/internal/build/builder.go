@@ -100,9 +100,10 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	if config.StorageDriver != "" {
 		storageDriver := strings.ToLower(config.StorageDriver)
 		logger.Info("Using storage driver: %s", storageDriver)
-		if storageDriver == "overlay" {
-			logger.Info("Note: Overlay driver requires fuse-overlayfs")
-		} else if storageDriver == "vfs" {
+		switch storageDriver {
+		case "overlay":
+			logger.Info("Note: Overlay storage driver selected")
+		case "vfs":
 			logger.Info("Note: VFS storage driver selected")
 		}
 	}
@@ -229,7 +230,11 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		}
 	}
 
-	// Save digest information
+	if config.NoPush {
+		logger.Info("No push requested, skipping image push to registries")
+		return nil
+	}
+
 	if err := saveDigestInfo(config); err != nil {
 		logger.Warning("Failed to save digest information: %v", err)
 	}
