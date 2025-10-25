@@ -97,8 +97,9 @@ func Push(config PushConfig, authFile string) error {
 				cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
 			}
 
-			// Add container runtime environment variables
-			cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+			if storageDriver := os.Getenv("STORAGE_DRIVER"); storageDriver != "" {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
+			}
 
 			err := cmd.Run()
 
