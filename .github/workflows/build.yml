@@ -43,19 +43,36 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=sha,prefix={{branch}}-
+            # Use a fixed prefix for SHA-based tags to avoid producing an
+            # invalid tag when the branch template is empty (which can
+            # generate a leading '-' like ":-df2dc06"). This produces
+            # tags like 'sha-df2dc06' which are valid.
+            type=sha,prefix=sha-
 
-      - name: Build multi-arch image
+      - name: Build multi-arch image (with cache & push)
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+      - name: Build multi-arch image (PR — no registry cache)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          # Do not push on PRs and avoid accessing GHCR for cache (avoids 403)
+          push: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
       - name: Run tests
         run: |

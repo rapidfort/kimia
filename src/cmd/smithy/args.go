@@ -63,12 +63,20 @@ func parseArgs(args []string) *Config {
 			}
 
 		case "--context-sub-path":
-			if value != "" {
+			// Handle cases where --context-sub-path=""
+			// Only consume the next arg if it doesn't look like a flag
+			// Also check for literal ""
+			if value != "" && value != `""` {
 				config.SubContext = value
-			} else if i+1 < len(args) {
+			} else if i+1 < len(args) && len(args[i+1]) > 0 && args[i+1][0] != '-' {
 				i++
-				config.SubContext = args[i]
+				if args[i] != `""` {
+					config.SubContext = args[i]
+				}
+			} else {
+				config.SubContext = ""
 			}
+
 		case "-d", "--destination":
 			dest := value
 			if dest == "" && i+1 < len(args) {
@@ -169,6 +177,14 @@ func parseArgs(args []string) *Config {
 				config.PushRetry = parseInt(args[i])
 			}
 
+		case "--image-download-retry":
+			if value != "" {
+				config.ImageDownloadRetry = parseInt(value)
+			} else if i+1 < len(args) {
+				i++
+				config.ImageDownloadRetry = parseInt(args[i])
+			}
+
 		case "-v", "--verbosity":
 			if value != "" {
 				config.Verbosity = value
@@ -245,6 +261,9 @@ func parseArgs(args []string) *Config {
 				i++
 				config.RegistryCertificate = args[i]
 			}
+
+		case "--reproducible":
+			config.Reproducible = true
 
 		// Enterprise flags (will error out)
 		case "--scan":

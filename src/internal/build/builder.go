@@ -39,6 +39,7 @@ type Config struct {
 	InsecureRegistry    []string
 	SkipTLSVerify       bool
 	RegistryCertificate string
+	ImageDownloadRetry  int
 
 	// Output options
 	NoPush                     bool
@@ -46,6 +47,9 @@ type Config struct {
 	DigestFile                 string
 	ImageNameWithDigestFile    string
 	ImageNameTagWithDigestFile string
+
+	// Reproducible builds
+	Reproducible bool
 }
 
 // detectBuilder determines which builder is available
@@ -160,7 +164,8 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	}
 
 	// Add cache options
-	if config.Cache {
+	// Note: For reproducible builds, we must run with --no-cache
+	if config.Cache && !config.Reproducible {
 		if config.CacheDir != "" {
 			// Buildah doesn't have direct cache-dir equivalent, but we can use layers
 			args = append(args, "--layers")
@@ -169,6 +174,12 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		}
 	} else {
 		args = append(args, "--no-cache")
+	}
+
+	// Add retry option for image downloads
+	if config.ImageDownloadRetry > 0 {
+		args = append(args, "--retry", fmt.Sprintf("%d", config.ImageDownloadRetry))
+		logger.Info("Image download retry set to %d attempts", config.ImageDownloadRetry)
 	}
 
 	// Add insecure registry options for build
@@ -215,6 +226,11 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	if storageDriver != "" {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
 		logger.Debug("Set STORAGE_DRIVER=%s", storageDriver)
+	}
+
+	// Reproducible builds: set SOURCE_DATE_EPOCH=0 for reproducible timestamps
+	if config.Reproducible {
+		cmd.Env = append(cmd.Env, "SOURCE_DATE_EPOCH=0")
 	}
 
 	if err := cmd.Run(); err != nil {

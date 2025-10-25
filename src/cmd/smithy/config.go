@@ -29,6 +29,7 @@ type Config struct {
 	SkipTLSVerify       bool
 	RegistryCertificate string
 	PushRetry           int
+	ImageDownloadRetry  int
 
 	// Logging options
 	Verbosity    string
@@ -38,6 +39,7 @@ type Config struct {
 	CustomPlatform string
 	Target         string
 	StorageDriver  string // Storage driver selection (vfs, overlay)
+	Reproducible   bool
 
 	// Labels and metadata
 	Labels      map[string]string
