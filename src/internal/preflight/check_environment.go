@@ -67,7 +67,8 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		logger.Info("  CAP_SETGID:              %s %s", getPresence(caps.HasSetGID), getCheckmark(caps.HasSetGID))
 
 		// MKNOD only needed for overlay storage
-		if storageDriver == "overlay" {
+		switch storageDriver {
+		case "overlay":
 			hasMknod := caps.HasCapability("CAP_MKNOD")
 			logger.Info("  CAP_MKNOD:               %s %s (required for overlay)",
 				getPresence(hasMknod), getCheckmark(hasMknod))
@@ -77,7 +78,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 					allGood = false
 				}
 			}
-		} else if storageDriver == "vfs" {
+		case "vfs":
 			logger.Info("  CAP_MKNOD:               Not required (vfs storage)")
 		}
 
