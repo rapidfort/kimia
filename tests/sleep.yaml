@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smithy-sleep-build
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: Unconfined
+      containers:
+      - name: smithy
+        image: 100.92.16.57:5000/rapidfort/smithy
+        command: [ "sleep", "inf" ]
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: true
+          appArmorProfile:
+            type: Unconfined
+          seccompProfile:
+            type: Unconfined
+

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/rapidfort/smithy/pkg/logger"
 )
@@ -29,6 +30,9 @@ type Config struct {
 	Cache    bool
 	CacheDir string
 
+	// Storage driver
+	StorageDriver string
+
 	// Security options
 	Insecure            bool
 	InsecurePull        bool
@@ -48,9 +52,65 @@ type Config struct {
 	Reproducible bool
 }
 
-// Execute executes a buildah build with authentication
+// detectBuilder determines which builder is available
+func detectBuilder() string {
+	// Check for BuildKit first (preferred/default)
+	if _, err := exec.LookPath("buildkitd"); err == nil {
+		if _, err := exec.LookPath("buildctl"); err == nil {
+			return "buildkit"
+		}
+	}
+
+	// Check for Buildah (legacy)
+	if _, err := exec.LookPath("buildah"); err == nil {
+		return "buildah"
+	}
+
+	return "unknown"
+}
+
+// Execute executes a build using the detected builder (buildah or buildkit)
 func Execute(config Config, ctx *Context, authFile string) error {
+	builder := detectBuilder()
+
+	if builder == "unknown" {
+		return fmt.Errorf("no builder found (expected buildkitd or buildah)")
+	}
+
+	logger.Info("Using builder: %s", strings.ToUpper(builder))
+
+	if builder == "buildkit" {
+		return executeBuildKit(config, ctx, authFile)
+	}
+
+	return executeBuildah(config, ctx, authFile)
+}
+
+// executeBuildah executes a buildah build with authentication
+func executeBuildah(config Config, ctx *Context, authFile string) error {
+	// Detect if running as root
+	isRoot := os.Getuid() == 0
+
+	if isRoot {
+		logger.Warning("Running as root (UID 0) - using chroot isolation")
+		logger.Warning("For production, use rootless configuration (UID 1000) with SETUID/SETGID capabilities")
+	} else {
+		logger.Debug("Running as non-root (UID %d) - using chroot isolation with user namespaces", os.Getuid())
+	}
+
 	logger.Info("Starting buildah build...")
+
+	// Log storage driver if specified
+	if config.StorageDriver != "" {
+		storageDriver := strings.ToLower(config.StorageDriver)
+		logger.Info("Using storage driver: %s", storageDriver)
+		switch storageDriver {
+		case "overlay":
+			logger.Info("Note: Overlay storage driver selected")
+		case "vfs":
+			logger.Info("Note: VFS storage driver selected")
+		}
+	}
 
 	// Construct buildah command
 	args := []string{"bud"}
@@ -144,14 +204,16 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 
-	// Set BUILDAH_ISOLATION if not already set
+	// Always use chroot isolation for both root and rootless
 	if os.Getenv("BUILDAH_ISOLATION") == "" {
 		cmd.Env = append(cmd.Env, "BUILDAH_ISOLATION=chroot")
+		logger.Debug("Set BUILDAH_ISOLATION=chroot (default for all modes)")
+	} else {
+		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
 
 	// Enhanced environment setup for auth
 	if authFile != "" {
-		// Set multiple env vars that different tools might look for
 		cmd.Env = append(cmd.Env,
 			fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile),
 			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
@@ -159,8 +221,12 @@ func Execute(config Config, ctx *Context, authFile string) error {
 		)
 	}
 
-	// Add storage driver
-	cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+	// Storage driver configuration
+	storageDriver := config.StorageDriver
+	if storageDriver != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", storageDriver))
+		logger.Debug("Set STORAGE_DRIVER=%s", storageDriver)
+	}
 
 	// Reproducible builds: set SOURCE_DATE_EPOCH=0 for reproducible timestamps
 	if config.Reproducible {
@@ -168,56 +234,348 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	}
 
 	if err := cmd.Run(); err != nil {
-		// Enhanced error reporting
-		if strings.Contains(err.Error(), "authentication") ||
-			strings.Contains(err.Error(), "unauthorized") {
-			return fmt.Errorf("buildah build failed (authentication issue): %v", err)
-		}
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
 
 	logger.Info("Build completed successfully")
 
-	// Handle special output options
+	// Handle TAR export if requested
 	if config.TarPath != "" {
 		if err := exportToTar(config); err != nil {
-			return fmt.Errorf("failed to export to tar: %v", err)
+			return err
 		}
 	}
 
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		if err := saveDigestInfo(config); err != nil {
-			return fmt.Errorf("failed to save digest info: %v", err)
-		}
+	if config.NoPush {
+		logger.Info("No push requested, skipping image push to registries")
+		return nil
+	}
+
+	if err := saveDigestInfo(config); err != nil {
+		logger.Warning("Failed to save digest information: %v", err)
 	}
 
 	return nil
 }
 
-// exportToTar exports the built image to a tar archive
-func exportToTar(config Config) error {
-	if len(config.Destination) == 0 {
-		return fmt.Errorf("no destination image to export")
+// executeBuildKit executes a buildkit build
+func executeBuildKit(config Config, ctx *Context, authFile string) error {
+	logger.Info("Starting BuildKit build...")
+
+	// Setup environment
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/home/smithy"
 	}
 
-	logger.Info("Exporting image to tar: %s", config.TarPath)
+	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if xdgRuntimeDir == "" {
+		xdgRuntimeDir = "/tmp/run"
+	}
 
-	// Use the first destination as the image to export
-	image := config.Destination[0]
+	buildkitSocket := filepath.Join(xdgRuntimeDir, "buildkitd.sock")
+	buildkitConfig := filepath.Join(homeDir, ".config/buildkit/buildkitd.toml")
 
-	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
+	// Handle bind-mounted contexts - copy to real filesystem
+	// Bind mounts from Docker may not be accessible to buildctl/buildkitd
+	// BUT: Don't copy git-cloned directories (they're already in real filesystem)
+	buildContext := ctx.Path
+	var tempContext string
+
+	workspaceMount := filepath.Join(homeDir, "workspace")
+
+	// Only copy if it's a bind mount, not a git clone
+	// Git clones are in subdirectories like /home/smithy/workspace/smithy-build-*
+	// Bind mounts are exactly at /home/smithy/workspace
+	if ctx.Path == workspaceMount && !ctx.IsGitRepo {
+		logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
+
+		// Create cache directory
+		cacheDir := filepath.Join(homeDir, ".cache/buildkit")
+		if err := os.MkdirAll(cacheDir, 0755); err != nil {
+			return fmt.Errorf("failed to create cache directory: %v", err)
+		}
+
+		// Create temp directory for context copy
+		tempDir, err := os.MkdirTemp(cacheDir, "context-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp context directory: %v", err)
+		}
+		tempContext = tempDir
+
+		defer func() {
+			logger.Debug("Cleaning up temp context directory: %s", tempContext)
+			os.RemoveAll(tempContext)
+		}()
+
+		// Copy context to temp directory
+		logger.Debug("Copying context from %s to %s", ctx.Path, tempContext)
+		if err := copyDir(ctx.Path, tempContext); err != nil {
+			return fmt.Errorf("failed to copy context: %v", err)
+		}
+
+		buildContext = tempContext
+		logger.Debug("Using copied context at: %s", buildContext)
+	}
+
+	logger.Debug("BuildKit configuration:")
+	logger.Debug("  HOME: %s", homeDir)
+	logger.Debug("  XDG_RUNTIME_DIR: %s", xdgRuntimeDir)
+	logger.Debug("  BUILDKIT_HOST: unix://%s", buildkitSocket)
+	logger.Debug("  Config file: %s", buildkitConfig)
+	logger.Debug("  Build context: %s", buildContext)
+
+	// Start buildkitd with rootlesskit
+	logger.Debug("Starting buildkitd with rootlesskit...")
+	daemonCmd := exec.Command(
+		"rootlesskit",
+		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
+		"--net=host",
+		"--disable-host-loopback",
+		"buildkitd",
+		"--config="+buildkitConfig,
+		"--addr=unix://"+buildkitSocket,
+	)
+
+	// Capture buildkitd output
+	daemonCmd.Stdout = os.Stdout
+	daemonCmd.Stderr = os.Stderr
+
+	if err := daemonCmd.Start(); err != nil {
+		return fmt.Errorf("failed to start buildkitd: %v", err)
+	}
+
+	logger.Debug("buildkitd process started (PID: %d)", daemonCmd.Process.Pid)
+
+	// Ensure daemon cleanup
+	defer func() {
+		logger.Debug("Stopping buildkitd...")
+		if daemonCmd.Process != nil {
+			daemonCmd.Process.Kill()
+		}
+	}()
+
+	// Wait for buildkitd to be ready
+	logger.Debug("Waiting for buildkitd to be ready...")
+	ready := false
+	for i := 0; i < 30; i++ {
+		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
+		output, err := checkCmd.CombinedOutput()
+
+		if err == nil {
+			ready = true
+			break
+		}
+
+		// Show progress with actual error
+		logger.Debug("Waiting for buildkitd... (%d/30) - error: %v", i+1, err)
+		if len(output) > 0 {
+			logger.Debug("  Output: %s", string(output))
+		}
+
+		// Check if daemon is still running
+		if daemonCmd.Process != nil {
+			// Process is still running
+			time.Sleep(1 * time.Second)
+		} else {
+			return fmt.Errorf("buildkitd process died")
+		}
+	}
+
+	if !ready {
+		return fmt.Errorf("buildkitd failed to become ready after 30 seconds")
+	}
+
+	logger.Debug("buildkitd is ready")
+
+	// Build with buildctl
+	args := []string{
+		"--addr=unix://" + buildkitSocket,
+		"build",
+		"--frontend", "dockerfile.v0",
+		"--local", fmt.Sprintf("context=%s", buildContext),
+		"--local", fmt.Sprintf("dockerfile=%s", buildContext),
+	}
+
+	// Add dockerfile path if not default
+	dockerfilePath := config.Dockerfile
+	if dockerfilePath == "" {
+		dockerfilePath = "Dockerfile"
+	}
+	if dockerfilePath != "Dockerfile" {
+		args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
+	}
+
+	// Add build arguments
+	for key, value := range config.BuildArgs {
+		if value != "" {
+			args = append(args, "--opt", fmt.Sprintf("build-arg:%s=%s", key, value))
+		} else {
+			// Use environment variable
+			args = append(args, "--opt", fmt.Sprintf("build-arg:%s", key))
+		}
+	}
+
+	// Add labels
+	for key, value := range config.Labels {
+		args = append(args, "--opt", fmt.Sprintf("label:%s=%s", key, value))
+	}
+
+	// Add target if specified
+	if config.Target != "" {
+		args = append(args, "--opt", fmt.Sprintf("target=%s", config.Target))
+	}
+
+	// Add platform if specified
+	if config.CustomPlatform != "" {
+		args = append(args, "--opt", fmt.Sprintf("platform=%s", config.CustomPlatform))
+	}
+
+	// Add cache options
+	if !config.Cache {
+		args = append(args, "--no-cache")
+	}
+
+	// Handle outputs (destinations)
+	if config.TarPath != "" {
+		// Export to tar
+		args = append(args, "--output", fmt.Sprintf("type=docker,dest=%s", config.TarPath))
+	} else if !config.NoPush {
+		// Push to registries
+		for _, dest := range config.Destination {
+			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=true", dest))
+		}
+	} else {
+		// Build only, no push (store in local image store)
+		for _, dest := range config.Destination {
+			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=false", dest))
+		}
+	}
+
+	// Log the command
+	logger.Debug("BuildKit command: buildctl %s", strings.Join(args, " "))
+
+	// Execute buildctl
+	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to export to tar: %v", err)
+	// Set BUILDKIT_HOST
+	cmd.Env = append(cmd.Env, fmt.Sprintf("BUILDKIT_HOST=unix://%s", buildkitSocket))
+
+	// Enhanced environment setup for auth
+	if authFile != "" {
+		cmd.Env = append(cmd.Env,
+			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
+		)
 	}
 
-	logger.Info("Image exported to: %s", config.TarPath)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("buildkit build failed: %v", err)
+	}
+
+	logger.Info("Build completed successfully")
+
+	// Note: BuildKit handles push as part of the build, so no separate push step needed
+	// Digest files are not yet implemented for BuildKit (TODO)
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
+		logger.Warning("Digest file export not yet implemented for BuildKit")
+	}
+
 	return nil
 }
 
-// saveDigestInfo saves image digest information to files
+// exportToTar exports the built image to a tar file (Buildah only)
+func exportToTar(config Config) error {
+	logger.Info("Exporting image to TAR: %s", config.TarPath)
+
+	if len(config.Destination) == 0 {
+		return fmt.Errorf("no destination specified for TAR export")
+	}
+
+	image := config.Destination[0]
+
+	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
+	logger.Debug("Attempting TAR export with buildah push...")
+	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
+
+	var stderr strings.Builder
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		logger.Debug("Direct buildah push failed: %v", err)
+		logger.Debug("Stderr: %s", stderr.String())
+
+		// Method 2: Try with image ID instead of name (most reliable for overlay)
+		logger.Debug("Attempting with image ID...")
+		getIDCmd := exec.Command("buildah", "images", "--format", "{{.ID}}", "--filter", fmt.Sprintf("reference=%s", image))
+		idOutput, idErr := getIDCmd.Output()
+
+		if idErr == nil && len(strings.TrimSpace(string(idOutput))) > 0 {
+			imageID := strings.TrimSpace(string(idOutput))
+			logger.Debug("Found image ID: %s", imageID)
+
+			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+			cmd2.Stdout = os.Stdout
+			cmd2.Stderr = os.Stderr
+
+			if err2 := cmd2.Run(); err2 != nil {
+				return fmt.Errorf("TAR export failed with both name and ID:\n  by name: %v\n  by ID: %v", err, err2)
+			}
+			logger.Info("Successfully exported using image ID")
+		} else {
+			// Method 3: List all images and find a match
+			logger.Debug("Image ID lookup failed, searching all images...")
+			listCmd := exec.Command("buildah", "images", "--format", "{{.ID}}:{{.Names}}")
+			listOutput, listErr := listCmd.Output()
+
+			if listErr == nil {
+				lines := strings.Split(string(listOutput), "\n")
+				for _, line := range lines {
+					if strings.Contains(line, image) {
+						parts := strings.Split(line, ":")
+						if len(parts) >= 2 {
+							foundID := strings.TrimSpace(parts[0])
+							logger.Debug("Found matching image ID from list: %s", foundID)
+
+							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+							cmd3.Stdout = os.Stdout
+							cmd3.Stderr = os.Stderr
+
+							if err3 := cmd3.Run(); err3 != nil {
+								return fmt.Errorf("TAR export failed with all methods:\n  by name: %v\n  by ID lookup: %v\n  by search: %v", err, idErr, err3)
+							}
+							logger.Info("Successfully exported using searched image ID")
+							goto success
+						}
+					}
+				}
+			}
+
+			return fmt.Errorf("failed to export to tar: could not find image %s\n  direct push error: %v\n  ID lookup error: %v", image, err, idErr)
+		}
+	} else {
+		logger.Info("Successfully exported using direct buildah push")
+	}
+
+success:
+	logger.Info("Image exported to: %s", config.TarPath)
+
+	// Verify the tar file was created and is not empty
+	if info, err := os.Stat(config.TarPath); err != nil {
+		return fmt.Errorf("TAR file was not created: %v", err)
+	} else if info.Size() == 0 {
+		return fmt.Errorf("TAR file is empty")
+	} else {
+		logger.Debug("TAR file size: %d bytes", info.Size())
+	}
+
+	return nil
+}
+
+// saveDigestInfo saves image digest information to files (Buildah only)
 func saveDigestInfo(config Config) error {
 	if len(config.Destination) == 0 {
 		return nil
@@ -262,6 +620,69 @@ func saveDigestInfo(config Config) error {
 			return fmt.Errorf("failed to write image name tag with digest file: %v", err)
 		}
 		logger.Info("Image name tag with digest saved to: %s", config.ImageNameTagWithDigestFile)
+	}
+
+	return nil
+}
+
+// copyDir recursively copies a directory from src to dst
+// This is needed for BuildKit rootless mode where external bind mounts
+// are not accessible within the rootlesskit namespace
+func copyDir(src, dst string) error {
+	// Get source directory info
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat source: %v", err)
+	}
+
+	// Create destination directory
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to create destination: %v", err)
+	}
+
+	// Read directory entries
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %v", err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Recursively copy subdirectory
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// copyFile copies a single file from src to dst
+func copyFile(src, dst string) error {
+	// Get source file info for permissions
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("failed to stat source file: %v", err)
+	}
+
+	// Read source file
+	srcData, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("failed to read source: %v", err)
+	}
+
+	// Write to destination with same permissions
+	if err := os.WriteFile(dst, srcData, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("failed to write destination: %v", err)
 	}
 
 	return nil

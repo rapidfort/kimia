@@ -3,10 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/rapidfort/smithy/internal/auth"
 	"github.com/rapidfort/smithy/internal/build"
+	"github.com/rapidfort/smithy/internal/preflight"
 	"github.com/rapidfort/smithy/pkg/logger"
 )
 
@@ -23,19 +24,56 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Handle check-environment command
+	if len(os.Args) > 1 && os.Args[1] == "check-environment" {
+		exitCode := preflight.CheckEnvironment()
+		os.Exit(exitCode)
+	}
+
+	// Detect which builder is available (moved to build.Execute)
+	// No need to detect here anymore - build.Execute handles it
+
 	// Parse configuration
 	config := parseArgs(os.Args[1:])
 
-	// Set up logging
-	logger.Setup(config.Verbosity, config.LogTimestamp)
-
-	// Log smithy version
-	logger.Info("Smithy Container Build System v%s (OSS)", Version)
+	// Log smithy version (builder will be logged by build.Execute)
+	logger.Info("Smithy - Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
-	// OSS only supports build mode
+	// Validate storage driver only if specified
+	// BuildKit supports: native, overlay
+	// Buildah supports: vfs, overlay
+	if config.StorageDriver != "" {
+		validDrivers := []string{"vfs", "overlay", "native"}
+		storageDriver := strings.ToLower(config.StorageDriver)
+		isValid := false
+		for _, driver := range validDrivers {
+			if storageDriver == driver {
+				isValid = true
+				break
+			}
+		}
+		if !isValid {
+			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
+			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
+			os.Exit(1)
+		}
+
+		// Log storage driver selection
+		logger.Info("Using storage driver: %s", storageDriver)
+		if storageDriver == "overlay" {
+			logger.Info("Note: Overlay driver requires additional capabilities")
+		}
+		if storageDriver == "vfs" {
+			logger.Info("Note: VFS storage (Buildah only)")
+		}
+		if storageDriver == "native" {
+			logger.Info("Note: Native snapshotter (BuildKit only)")
+		}
+	}
+
 	if config.Context == "" {
-		fmt.Fprintf(os.Stderr, "Error: Smithy OSS only supports BUILD mode\n\n")
+		fmt.Fprintf(os.Stderr, "Error: Smithy only supports BUILD mode\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\n")
 		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
 		fmt.Fprintf(os.Stderr, "Run 'smithy --help' for more information.\n")
@@ -61,33 +99,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  --context: Build context (directory or Git URL)\n")
 		fmt.Fprintf(os.Stderr, "  --destination: Target image name\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=myregistry.io/myimage:latest\n")
+		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
 		os.Exit(1)
 	}
 
-	logger.Info("Operating in BUILD-ONLY mode")
-
-	// Setup authentication for pushing built images
-	authSetupConfig := auth.SetupConfig{
-		Destinations:     config.Destination,
-		InsecureRegistry: config.InsecureRegistry,
-	}
-
-	authFile, err := auth.Setup(authSetupConfig)
-	if err != nil {
-		logger.Warning("Failed to setup authentication: %v", err)
-		authFile, err = auth.CreateMinimal(authSetupConfig)
-		if err != nil {
-			logger.Error("Failed to create minimal auth config: %v", err)
-		}
-	} else if authFile != "" {
-		logger.Info("Authentication configured: %s", authFile)
-		if err := auth.EnsurePermissions(authFile); err != nil {
-			logger.Warning("Failed to set auth file permissions: %v", err)
-		}
-		os.Setenv("REGISTRY_AUTH_FILE", authFile)
-		os.Setenv("DOCKER_CONFIG", filepath.Dir(authFile))
-	}
+	// Setup logging
+	logger.Setup(config.Verbosity, config.LogTimestamp)
 
 	// Prepare build context
 	gitConfig := build.GitConfig{
@@ -102,26 +119,20 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to prepare build context: %v", err)
 	}
-
 	defer ctx.Cleanup()
 
-	if config.SubContext != "" {
-		logger.Debug("Applying sub-context path: %s", config.SubContext)
-
-		// Join the sub-path to the prepared context
-		newContextPath := filepath.Join(ctx.Path, config.SubContext)
-
-		// Verify the sub-context exists
-		if _, err := os.Stat(newContextPath); os.IsNotExist(err) {
-			logger.Fatal("Sub-context path does not exist: %s (full path: %s)", config.SubContext, newContextPath)
-		}
-
-		// Update the context path
-		ctx.Path = newContextPath
-		logger.Info("Using sub-context: %s", ctx.Path)
+	// Setup authentication
+	authSetup := auth.SetupConfig{
+		Destinations:     config.Destination,
+		InsecureRegistry: config.InsecureRegistry,
 	}
 
-	// Execute build
+	authFile, err := auth.Setup(authSetup)
+	if err != nil {
+		logger.Fatal("Failed to setup authentication: %v", err)
+	}
+
+	// Execute build based on detected builder
 	buildConfig := build.Config{
 		Dockerfile:                 config.Dockerfile,
 		Destination:                config.Destination,
@@ -131,6 +142,7 @@ func main() {
 		CustomPlatform:             config.CustomPlatform,
 		Cache:                      config.Cache,
 		CacheDir:                   config.CacheDir,
+		StorageDriver:              config.StorageDriver,
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,
 		InsecureRegistry:           config.InsecureRegistry,
@@ -145,12 +157,13 @@ func main() {
 		Reproducible:               config.Reproducible,
 	}
 
+	// Execute build
 	if err := build.Execute(buildConfig, ctx, authFile); err != nil {
 		logger.Fatal("Build failed: %v", err)
 	}
 
-	// Push built images
-	if !config.NoPush && len(config.Destination) > 0 {
+	// Push images if not disabled
+	if !config.NoPush && config.TarPath == "" {
 		pushConfig := build.PushConfig{
 			Destinations:        config.Destination,
 			Insecure:            config.Insecure,
@@ -165,5 +178,5 @@ func main() {
 		}
 	}
 
-	logger.Info("Build operation completed successfully!")
+	logger.Info("Build completed successfully!")
 }

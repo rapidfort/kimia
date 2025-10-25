@@ -1,4 +1,4 @@
-# Smithy Makefile - Container Build System
+# Smithy Makefile - Dual Image Build System (BuildKit + Buildah)
 # Variables
 REGISTRY ?= $(if $(RF_APP_HOST),$(RF_APP_HOST):5000/rapidfort,rapidfort)
 NAMESPACE ?= default
@@ -24,8 +24,9 @@ DOCKERBUILD_TEMP := ./build/rapidfort
 ARCH := $(shell uname -m | sed 's/x86_64/amd64/g' | sed 's/aarch64/arm64/g')
 OS := linux
 
-# Image name
-IMAGE_NAME := smithy
+# Image names - BuildKit is default
+IMAGE_NAME_BUILDKIT := smithy
+IMAGE_NAME_BUILDAH := smithy-bud
 
 # Smithy user configuration
 SMITHY_USER := smithy
@@ -34,7 +35,7 @@ SMITHY_UID := 1000
 # Test script location
 TEST_SCRIPT := tests/master.sh
 
-# Build arguments
+# Build arguments (shared by both)
 BUILD_ARGS := \
               --build-arg BUILD_DATE=$(BUILD_DATE) \
               --build-arg COMMIT=$(COMMIT) \
@@ -45,7 +46,7 @@ BUILD_ARGS := \
 
 # Default target
 .PHONY: all
-all: build
+all: build-all push-all
 
 # Print help
 .PHONY: help
@@ -58,7 +59,7 @@ help:
 	@echo "  Git Tag: $(GIT_TAG)"
 	@echo "  Base Version: $(VERSION_BASE)"
 	@if [ -f $(VERSION_FILE) ]; then \
-		LAST=$$(cat $(VERSION_FILE)); \
+		LAST=`cat $(VERSION_FILE)`; \
 		NEXT=$$((LAST + 1)); \
 		echo "  Last Build: $(VERSION_BASE)-dev$$LAST"; \
 		echo "  Next Build: $(VERSION_BASE)-dev$$NEXT"; \
@@ -66,18 +67,35 @@ help:
 		echo "  Next Build: $(VERSION_BASE)-dev1"; \
 	fi
 	@echo ""
-	@echo "━━━ Development Commands ━━━"
-	@echo "  make build              - Build smithy image"
-	@echo "  make push               - Push to dev registry"
-	@echo "  make run                - Run smithy container locally"
-	@echo "  make test               - Run Docker tests"
-	@echo "  make test-k8s           - Run Kubernetes tests"
-	@echo "  make test-all           - Run all tests (Docker + Kubernetes)"
+	@echo "Images:"
+	@echo "  smithy        - BuildKit-based (default, recommended)"
+	@echo "  smithy-bud    - Buildah-based ('bud' = buildah build)"
+	@echo ""
+	@echo "━━━ Main Commands ━━━"
+	@echo "  make all                - Build & push ALL images to dev registry"
+	@echo "  make full               - Build, push & test ALL images"
+	@echo ""
+	@echo "━━━ Build Commands ━━━"
+	@echo "  make build              - Build smithy image (BuildKit)"
+	@echo "  make build-buildkit     - Build BuildKit image"
+	@echo "  make build-buildah      - Build Buildah image"
+	@echo "  make build-all          - Build BOTH images"
+	@echo ""
+	@echo "━━━ Push Commands ━━━"
+	@echo "  make push               - Push to dev registry (BuildKit)"
+	@echo "  make push-buildkit      - Push BuildKit image"
+	@echo "  make push-buildah       - Push Buildah image"
+	@echo "  make push-all           - Push BOTH images"
+	@echo ""
+	@echo "━━━ Test Commands ━━━"
+	@echo "  make test               - Run Docker tests (BuildKit)"
+	@echo "  make test-buildkit      - Test BuildKit image"
+	@echo "  make test-buildah       - Test Buildah image"
+	@echo "  make test-all           - Test BOTH images"
 	@echo "  make test-clean         - Clean up test resources"
-	@echo "  make test-verbose       - Run tests in verbose mode"
-	@echo "  make test-debug-auth    - Debug authentication setup"
 	@echo ""
 	@echo "━━━ Utilities ━━━"
+	@echo "  make run                - Run smithy container locally"
 	@echo "  make version            - Show current versions"
 	@echo "  make show-images        - Show local docker images"
 	@echo "  make clean              - Clean build artifacts"
@@ -95,120 +113,198 @@ version:
 	@echo "Commit:       $(COMMIT)"
 	@echo "Branch:       $(BRANCH)"
 	@if [ -f $(VERSION_FILE) ]; then \
-		echo "Last Dev Build: $(VERSION_BASE)-dev$$(cat $(VERSION_FILE))"; \
+		echo "Last Dev Build: $(VERSION_BASE)-dev`cat $(VERSION_FILE)`"; \
 	else \
 		echo "No dev builds yet"; \
 	fi
 
-# Main build target
-.PHONY: build
-build:
+# =============================================================================
+# BUILD TARGETS
+# =============================================================================
+
+# Internal build target for BuildKit (doesn't increment version)
+.PHONY: _build-buildkit
+_build-buildkit:
 	@if [ -f $(VERSION_FILE) ]; then \
-		BUILD_NUM=$$(cat $(VERSION_FILE)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+	else \
+		echo "[ERROR] No version file found. This should not happen."; \
+		exit 1; \
+	fi; \
+	echo "[BUILD-BUILDKIT] Building BuildKit image..."; \
+	echo "Version: $$VERSION"; \
+	BUILD_DATE=`date +%s` && \
+	echo "Building $(IMAGE_NAME_BUILDKIT) Image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION ..." && \
+	docker build -t $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) -f Dockerfile.buildkit . && \
+	docker tag $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest && \
+	echo "[SUCCESS] BuildKit image complete! Version: $$VERSION" && \
+	echo "[SUCCESS] Tagged as: latest"
+
+# Internal build target for Buildah (doesn't increment version)
+.PHONY: _build-buildah
+_build-buildah:
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+	else \
+		echo "[ERROR] No version file found. This should not happen."; \
+		exit 1; \
+	fi; \
+	echo "[BUILD-BUILDAH] Building Buildah image..."; \
+	echo "Version: $$VERSION"; \
+	BUILD_DATE=`date +%s` && \
+	echo "Building $(IMAGE_NAME_BUILDAH) Image: $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION ..." && \
+	docker build -t $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) -f Dockerfile.buildah . && \
+	docker tag $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION $(REGISTRY)/$(IMAGE_NAME_BUILDAH):latest && \
+	echo "[SUCCESS] Buildah image complete! Version: $$VERSION" && \
+	echo "[SUCCESS] Tagged as: latest"
+
+# Build both images (increments version once)
+.PHONY: build-all
+build-all:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
 		NEXT_BUILD=$$((BUILD_NUM + 1)); \
 	else \
 		NEXT_BUILD=1; \
 	fi; \
 	echo $$NEXT_BUILD > $(VERSION_FILE); \
-	VERSION=$(VERSION_BASE)-dev$$NEXT_BUILD; \
-	echo "[BUILD] Building development image..."; \
-	echo "Version: $$VERSION"; \
-	BUILD_DATE=$$(date +%s) && \
-	echo "Building $(IMAGE_NAME) Image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION ..." && \
-	docker build -t $(REGISTRY)/$(IMAGE_NAME):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) -f Dockerfile . && \
-	docker tag $(REGISTRY)/$(IMAGE_NAME):$$VERSION $(REGISTRY)/$(IMAGE_NAME):latest && \
-	echo "[SUCCESS] Build complete! Version: $$VERSION" && \
-	echo "[SUCCESS] Tagged as: latest"
+	echo "[BUILD-ALL] Building both images with version $(VERSION_BASE)-dev$$NEXT_BUILD"; \
+	$(MAKE) _build-buildkit && \
+	$(MAKE) _build-buildah && \
+	echo "" && \
+	echo "[SUCCESS] Both images built successfully!" && \
+	echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest (BuildKit)" && \
+	echo "  - $(REGISTRY)/$(IMAGE_NAME_BUILDAH):latest (Buildah)"
 
-# Push image to dev registry
-.PHONY: push
-push:
+# Build BuildKit image only (increments version)
+.PHONY: build-buildkit
+build-buildkit:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
+		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+	else \
+		NEXT_BUILD=1; \
+	fi; \
+	echo $$NEXT_BUILD > $(VERSION_FILE)
+	@$(MAKE) _build-buildkit
+
+# Build Buildah image only (increments version)
+.PHONY: build-buildah
+build-buildah:
+	@if [ -f $(VERSION_FILE) ]; then \
+		BUILD_NUM=`cat $(VERSION_FILE)`; \
+		NEXT_BUILD=$$((BUILD_NUM + 1)); \
+	else \
+		NEXT_BUILD=1; \
+	fi; \
+	echo $$NEXT_BUILD > $(VERSION_FILE)
+	@$(MAKE) _build-buildah
+
+# Default build (BuildKit)
+.PHONY: build
+build: build-buildkit
+
+# =============================================================================
+# PUSH TARGETS
+# =============================================================================
+
+# Push BuildKit image
+.PHONY: push-buildkit
+push-buildkit:
 	@if [ "$(RELEASE_BUILD)" = "true" ]; then \
 		VERSION=$(VERSION_BASE); \
 	else \
 		if [ -f $(VERSION_FILE) ]; then \
-			VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+			VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 		else \
-			echo "[ERROR] No build found. Run 'make build' first"; \
+			echo "[ERROR] No build found. Run 'make build-buildkit' first"; \
 			exit 1; \
 		fi; \
 	fi; \
-	echo "[PUSH] Pushing image version $$VERSION ..." && \
-	if ! docker image inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION > /dev/null 2>&1; then \
-		echo "[ERROR] Image $(REGISTRY)/$(IMAGE_NAME):$$VERSION not found. Run 'make build' first"; \
+	echo "[PUSH-BUILDKIT] Pushing BuildKit image version $$VERSION ..." && \
+	if ! docker image inspect $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION > /dev/null 2>&1; then \
+		echo "[ERROR] Image $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION not found. Run 'make build-buildkit' first"; \
 		exit 1; \
 	fi && \
-	docker push $(REGISTRY)/$(IMAGE_NAME):$$VERSION && \
+	docker push $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION && \
 	if [ "$(RELEASE_BUILD)" != "true" ]; then \
-		echo "[PUSH] Pushing latest tag..." && \
-		docker push $(REGISTRY)/$(IMAGE_NAME):latest; \
+		echo "[PUSH-BUILDKIT] Pushing latest tag..." && \
+		docker push $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest; \
 	fi && \
-	echo "[SUCCESS] Push complete!"
+	echo "[SUCCESS] BuildKit image push complete!"
 
-# Run smithy container locally for testing
-.PHONY: run
-run:
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+# Push Buildah image
+.PHONY: push-buildah
+push-buildah:
+	@if [ "$(RELEASE_BUILD)" = "true" ]; then \
+		VERSION=$(VERSION_BASE); \
 	else \
-		echo "[ERROR] No build found. Run 'make build' first"; \
+		if [ -f $(VERSION_FILE) ]; then \
+			VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+		else \
+			echo "[ERROR] No build found. Run 'make build-buildah' first"; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "[PUSH-BUILDAH] Pushing Buildah image version $$VERSION ..." && \
+	if ! docker image inspect $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION > /dev/null 2>&1; then \
+		echo "[ERROR] Image $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION not found. Run 'make build-buildah' first"; \
 		exit 1; \
-	fi; \
-	echo "[RUN] Running smithy container version $$VERSION..."; \
-	docker run --rm -it \
-		--security-opt seccomp=unconfined \
-		--security-opt apparmor=unconfined \
-		--user $(SMITHY_UID):$(SMITHY_UID) \
-		-e GIT_REPO="https://github.com/nginxinc/docker-nginx.git" \
-		-e GIT_BRANCH="master" \
-		-e DOCKERFILE_PATH="mainline/alpine/Dockerfile" \
-		-e IMAGE_NAME="test-nginx" \
-		-e IMAGE_TAG="test-$$(date +%s)" \
-		-e PUSH_IMAGE="false" \
-		-e HOME=/home/$(SMITHY_USER) \
-		-e DOCKER_CONFIG=/home/$(SMITHY_USER)/.docker \
-		$(REGISTRY)/$(IMAGE_NAME):$$VERSION
+	fi && \
+	docker push $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION && \
+	if [ "$(RELEASE_BUILD)" != "true" ]; then \
+		echo "[PUSH-BUILDAH] Pushing latest tag..." && \
+		docker push $(REGISTRY)/$(IMAGE_NAME_BUILDAH):latest; \
+	fi && \
+	echo "[SUCCESS] Buildah image push complete!"
 
-# Test the build with Docker tests
-.PHONY: test
-test: check-test-script
-	@echo "[TEST] Running Docker tests..."
+# Push both images
+.PHONY: push-all
+push-all: push-buildkit push-buildah
+	@echo ""
+	@echo "[SUCCESS] Both images pushed successfully!"
+
+# Default push (BuildKit)
+.PHONY: push
+push: push-buildkit
+
+# =============================================================================
+# TEST TARGETS (using original test script)
+# =============================================================================
+
+.PHONY: test-buildkit
+test-buildkit: check-test-script
+	@echo "[TEST-BUILDKIT] Testing BuildKit image..."
 	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
 		echo "[WARNING] No build found. Using latest image"; \
 		VERSION=latest; \
 	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
-	$(TEST_SCRIPT) -m docker -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+	echo "Testing BuildKit image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION"; \
+	$(TEST_SCRIPT) -m both -b buildkit -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
-# Kubernetes tests
-.PHONY: test-k8s
-test-k8s: check-test-script
-	@echo "[TEST-K8S] Running Kubernetes test suite..."
+.PHONY: test-buildah
+test-buildah: check-test-script
+	@echo "[TEST-BUILDAH] Testing Buildah image..."
 	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
 		echo "[WARNING] No build found. Using latest image"; \
 		VERSION=latest; \
 	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
-	$(TEST_SCRIPT) -m kubernetes -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+	echo "Testing Buildah image: $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION"; \
+	$(TEST_SCRIPT) -m both -b buildah -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION
 
-# Run all tests (Docker + Kubernetes)
 .PHONY: test-all
-test-all: check-test-script
-	@echo "[TEST-ALL] Running all test suites..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
-	else \
-		echo "[WARNING] No build found. Using latest image"; \
-		VERSION=latest; \
-	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
-	$(TEST_SCRIPT) -m both -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+test-all: test-buildkit test-buildah
+	@echo ""
+	@echo "[SUCCESS] Both images tested!"
 
-# Clean up test resources
+.PHONY: test
+test: test-buildkit
+
+
 .PHONY: test-clean
 test-clean:
 	@echo "[TEST-CLEAN] Cleaning up test resources..."
@@ -225,29 +321,16 @@ test-clean:
 	fi
 	@echo "[TEST-CLEAN] Cleanup complete"
 
-# Run tests in verbose mode
-.PHONY: test-verbose
-test-verbose: check-test-script
-	@echo "[TEST-VERBOSE] Running tests in verbose mode..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
-	else \
-		VERSION=latest; \
-	fi; \
-	$(TEST_SCRIPT) -m both -v -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
-
-# Debug authentication setup
 .PHONY: test-debug-auth
 test-debug-auth: check-test-script
 	@echo "[TEST-DEBUG-AUTH] Debugging authentication..."
 	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
 		VERSION=latest; \
 	fi; \
-	$(TEST_SCRIPT) --debug-auth -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME):$$VERSION
+	$(TEST_SCRIPT) --debug-auth -r $(REGISTRY) -i $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
-# Check if test script exists
 .PHONY: check-test-script
 check-test-script:
 	@if [ ! -f $(TEST_SCRIPT) ]; then \
@@ -260,65 +343,50 @@ check-test-script:
 		chmod +x $(TEST_SCRIPT); \
 	fi
 
-# Quick test after build
-.PHONY: test-quick
-test-quick: build
-	@echo "[TEST-QUICK] Running quick version test..."
-	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
-	else \
-		VERSION=$(VERSION_BASE)-dev1; \
-	fi; \
-	echo "Testing with image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
-	docker run --rm \
-		--security-opt seccomp=unconfined \
-		--security-opt apparmor=unconfined \
-		--user $(SMITHY_UID):$(SMITHY_UID) \
-		$(REGISTRY)/$(IMAGE_NAME):$$VERSION --version || \
-	docker run --rm \
-		--security-opt seccomp=unconfined \
-		--security-opt apparmor=unconfined \
-		--user $(SMITHY_UID):$(SMITHY_UID) \
-		$(REGISTRY)/$(IMAGE_NAME):$$VERSION buildah version
+# =============================================================================
+# RUN & UTILITY TARGETS
+# =============================================================================
 
-# Inspect the latest built image
-.PHONY: inspect
-inspect:
+.PHONY: run
+run:
 	@if [ -f $(VERSION_FILE) ]; then \
-		VERSION=$(VERSION_BASE)-dev$$(cat $(VERSION_FILE)); \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
 		echo "[ERROR] No build found. Run 'make build' first"; \
 		exit 1; \
 	fi; \
-	echo "[INSPECT] Inspecting image: $(REGISTRY)/$(IMAGE_NAME):$$VERSION"; \
-	echo ""; \
-	echo "=== Image Details ==="; \
-	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config}}' | jq '.Labels, .Env' ; \
-	echo ""; \
-	echo "=== Entrypoint ==="; \
-	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config.Entrypoint}}' | jq . ; \
-	echo ""; \
-	echo "=== CMD ==="; \
-	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{json .Config.Cmd}}' | jq . ; \
-	echo ""; \
-	echo "=== Working Directory ==="; \
-	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{.Config.WorkingDir}}' ; \
-	echo ""; \
-	echo "=== User ==="; \
-	docker inspect $(REGISTRY)/$(IMAGE_NAME):$$VERSION --format '{{.Config.User}}'
+	echo "[RUN] Running smithy container version $$VERSION..."; \
+	docker run --rm -it \
+		--security-opt seccomp=unconfined \
+		--security-opt apparmor=unconfined \
+		--user $(SMITHY_UID):$(SMITHY_UID) \
+		-e HOME=/home/$(SMITHY_USER) \
+		-e DOCKER_CONFIG=/home/$(SMITHY_USER)/.docker \
+		$(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
-# Show images
 .PHONY: show-images
 show-images:
 	@echo "[IMAGES] Local Smithy images:"
-	@docker images | grep -E "$(REGISTRY)/$(IMAGE_NAME)" | head -10 || echo "No images found"
+	@docker images | grep -E "$(REGISTRY)/($(IMAGE_NAME_BUILDKIT)|$(IMAGE_NAME_BUILDAH))" | head -20 || echo "No images found"
 
-# Clean
+.PHONY: inspect
+inspect:
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+	else \
+		echo "[ERROR] No build found. Run 'make build' first"; \
+		exit 1; \
+	fi; \
+	echo "[INSPECT] Inspecting BuildKit image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION"; \
+	echo ""; \
+	echo "=== Image Details ==="; \
+	docker inspect $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION --format '{{json .Config}}' | jq '.Labels, .Env'
+
 .PHONY: clean
 clean:
 	@echo "[CLEAN] Cleaning..."
 	@if [ -f $(VERSION_FILE) ]; then \
-		echo "  Removing version file (was at build $$(cat $(VERSION_FILE)))"; \
+		echo "  Removing version file (was at build `cat $(VERSION_FILE)`)"; \
 		rm -f $(VERSION_FILE); \
 	fi
 	@rm -rf $(DOCKERBUILD_TEMP)
@@ -326,22 +394,23 @@ clean:
 	@echo "[CLEAN] Done"
 
 # =============================================================================
-# SHORTCUTS & CONVENIENCE TARGETS
+# SHORTCUTS
 # =============================================================================
 
-# Build and push in one command
 .PHONY: bp
-bp: build push
-	@echo "[SUCCESS] Build and push complete!"
+bp: build-buildkit push-buildkit
+	@echo "[SUCCESS] Build and push complete (BuildKit)!"
 
-# Build, push, and test
+.PHONY: bp-all
+bp-all: build-all push-all
+	@echo "[SUCCESS] Build and push complete (both images)!"
+
 .PHONY: bpt
 bpt: build push test
 	@echo "[SUCCESS] Build, push, and test complete!"
 
-# Full cycle: build, push, test all
 .PHONY: full
-full: build push test-all
-	@echo "[SUCCESS] Full cycle complete!"
+full: build-all push-all test-all
+	@echo "[SUCCESS] Full cycle complete (all images)!"
 
 .DEFAULT_GOAL := help

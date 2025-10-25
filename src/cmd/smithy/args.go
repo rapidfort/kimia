@@ -15,6 +15,7 @@ func parseArgs(args []string) *Config {
 		Verbosity:        "info",
 		InsecureRegistry: []string{},
 		Destination:      []string{},
+		StorageDriver:    "", // Empty by default, only used by Buildah
 	}
 
 	// If no arguments provided, show help
@@ -102,6 +103,14 @@ func parseArgs(args []string) *Config {
 			} else if i+1 < len(args) {
 				i++
 				config.CacheDir = args[i]
+			}
+
+		case "--storage-driver":
+			if value != "" {
+				config.StorageDriver = value
+			} else if i+1 < len(args) {
+				i++
+				config.StorageDriver = args[i]
 			}
 
 		case "--build-arg":

@@ -1,0 +1,139 @@
+# Dockerfile.buildkit - Self-contained Smithy with BuildKit
+# Smithy launches its own rootlesskit + buildkitd
+
+ARG VERSION="0.0.0-dev"
+ARG BUILD_DATE="0"
+ARG COMMIT="unknown"
+ARG BRANCH="unknown"
+ARG GOLANG_VERSION=1.25.3
+ARG BUILDKIT_VERSION=v0.25.1
+ARG ROOTLESSKIT_VERSION=v2.3.5
+ARG TARGETARCH
+
+# Stage 1: Build smithy binary
+FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
+ARG VERSION
+ARG BUILD_DATE
+ARG COMMIT
+ARG BRANCH
+
+WORKDIR /app
+COPY src/ .
+RUN go mod tidy
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w \
+        -X main.Version=${VERSION} \
+        -X main.BuildDate=${BUILD_DATE} \
+        -X main.CommitSHA=${COMMIT} \
+        -X main.Branch=${BRANCH}" \
+    -o smithy ./cmd/smithy
+
+# Stage 2: Runtime image with BuildKit + rootlesskit + crun
+FROM alpine:latest
+ARG TARGETARCH
+ARG BUILDKIT_VERSION
+ARG ROOTLESSKIT_VERSION
+
+# Install minimal dependencies
+RUN apk add --no-cache \
+    bash \
+    curl \
+    ca-certificates \
+    shadow \
+    shadow-uidmap \
+    crun \
+    git
+
+# Download and install BuildKit
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" \
+    | tar xz -C /usr/local
+
+# Download and install RootlessKit
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "x86_64" ;; \
+        "arm64") echo "aarch64" ;; \
+        *) echo "x86_64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
+    | tar xz -C /usr/local/bin
+
+# Verify installations
+RUN buildkitd --version && \
+    buildctl --version && \
+    rootlesskit --version
+
+# Copy smithy binary
+COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
+RUN chmod +x /usr/local/bin/smithy
+
+# Install credential helpers
+RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL -o /usr/local/bin/docker-credential-ecr-login \
+        "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login
+
+RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+    ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
+    | tar xz -C /usr/local/bin/ docker-credential-gcr && \
+    chmod +x /usr/local/bin/docker-credential-gcr
+
+# Setup SETUID binaries for user namespaces
+RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+
+# Create smithy user with proper subuid/subgid mappings
+RUN adduser -D -u 1000 smithy && \
+    echo "smithy:100000:65536" >> /etc/subuid && \
+    echo "smithy:100000:65536" >> /etc/subgid
+
+# Create directories with proper permissions
+RUN mkdir -p /tmp/work /tmp/run && \
+    mkdir -p /run/buildkit /var/lib/buildkit && \
+    chmod 777 /run/buildkit /var/lib/buildkit && \
+    chown -R smithy:smithy /tmp/work /tmp/run
+
+# Configure buildkit to use crun in rootless mode
+RUN mkdir -p /home/smithy/.config/buildkit && \
+    cat > /home/smithy/.config/buildkit/buildkitd.toml <<'EOF'
+[worker.oci]
+  enabled = true
+  rootless = true
+  binary = "crun"
+  noProcessSandbox = true
+EOF
+
+RUN chown -R smithy:smithy /home/smithy/.config
+
+# Switch to non-root user
+USER 1000
+WORKDIR /tmp/work
+
+# Set environment
+ENV PATH=/usr/local/bin:$PATH
+ENV XDG_RUNTIME_DIR=/tmp/run
+ENV BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
+ENV HOME=/home/smithy
+ENV DOCKER_CONFIG=/home/smithy/.docker
+
+LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
+LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
+LABEL org.opencontainers.image.builder="buildkit"
+
+ENTRYPOINT ["/usr/local/bin/smithy"]
+CMD ["--help"]
