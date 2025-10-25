@@ -92,6 +92,7 @@ help:
 	@echo "  make test-buildkit      - Test BuildKit image"
 	@echo "  make test-buildah       - Test Buildah image"
 	@echo "  make test-all           - Test BOTH images"
+	@echo "  make test-reproducible  - test reproducible builds"
 	@echo "  make test-clean         - Clean up test resources"
 	@echo ""
 	@echo "━━━ Utilities ━━━"
@@ -392,6 +393,52 @@ clean:
 	@rm -rf $(DOCKERBUILD_TEMP)
 	@rm -rf build buildtmp
 	@echo "[CLEAN] Done"
+
+# =============================================================================
+# REPRODUCIBLE BUILD TESTS
+# =============================================================================
+
+# Test reproducible builds with local registry
+.PHONY: test-reproducible
+test-reproducible: test-reproducible-buildkit test-reproducible-buildah
+	@echo ""
+	@echo "[SUCCESS] Both builders produce reproducible builds!"
+
+# Test BuildKit reproducible builds
+.PHONY: test-reproducible-buildkit
+test-reproducible-buildkit:
+	@echo "[TEST-REPRODUCIBLE] Testing BuildKit reproducible builds..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+	else \
+		VERSION=latest; \
+	fi; \
+	echo "Using Smithy version: $$VERSION"; \
+	./tests/reproducible.sh buildkit $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
+
+# Test Buildah reproducible builds
+.PHONY: test-reproducible-buildah
+test-reproducible-buildah:
+	@echo "[TEST-REPRODUCIBLE] Testing Buildah reproducible builds..."
+	@if [ -f $(VERSION_FILE) ]; then \
+		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
+	else \
+		VERSION=latest; \
+	fi; \
+	echo "Using Smithy version: $$VERSION"; \
+	./tests/reproducible.sh buildah $(REGISTRY)/$(IMAGE_NAME_BUILDAH):$$VERSION
+
+# Quick reproducible build verification
+.PHONY: verify-reproducible
+verify-reproducible:
+	@echo "[VERIFY] Quick reproducible build check..."
+	@./tests/verify-reproducible-quick.sh
+
+# Full reproducible build test suite
+.PHONY: test-reproducible-full
+test-reproducible-full: registry-start test-reproducible registry-stop
+	@echo ""
+	@echo "[SUCCESS] Full reproducible build test suite completed!"
 
 # =============================================================================
 # SHORTCUTS
