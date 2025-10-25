@@ -88,9 +88,9 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•${NC}"
     echo ""
 }
 
@@ -150,12 +150,12 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 echo ""
-echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\${NC}"
 echo -e "\${CYAN}  Docker Test: ${test_name}\${NC}"
 echo -e "\${CYAN}  Builder: ${BUILDER}\${NC}"
 echo -e "\${CYAN}  Mode: ${mode}\${NC}"
 echo -e "\${CYAN}  Driver: ${driver}\${NC}"
-echo -e "\${CYAN}═══════════════════════════════════════════════════════\${NC}"
+echo -e "\${CYAN}â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\${NC}"
 echo ""
 
 # Test execution
@@ -164,12 +164,12 @@ echo ""
 
 if ${test_command}; then
     echo ""
-    echo -e "\${GREEN}✓ Test PASSED\${NC}"
+    echo -e "\${GREEN}âœ“ Test PASSED\${NC}"
     exit 0
 else
     exit_code=\$?
     echo ""
-    echo -e "\${RED}✗ Test FAILED (exit code: \${exit_code})\${NC}"
+    echo -e "\${RED}âœ— Test FAILED (exit code: \${exit_code})\${NC}"
     exit \$exit_code
 fi
 TESTSCRIPT
@@ -199,11 +199,11 @@ run_test() {
     
     # EXECUTE the test script
     if bash "$script_file" > /tmp/test-$$.log 2>&1; then
-        echo -e "${GREEN}  ✓ PASS${NC}"
+        echo -e "${GREEN}  âœ“ PASS${NC}"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, ${mode}, ${driver})")
     else
-        echo -e "${RED}  ✗ FAIL${NC}"
+        echo -e "${RED}  âœ— FAIL${NC}"
         echo -e "${YELLOW}  To re-run: bash $script_file${NC}"
         cat /tmp/test-$$.log | sed 's/^/    /'
         FAILED_TESTS=$((FAILED_TESTS + 1))
@@ -232,6 +232,7 @@ run_rootless_tests() {
             echo -e "${CYAN}      BuildKit: DAC_OVERRIDE + Unconfined seccomp/AppArmor${NC}"
         else
             echo -e "${CYAN}      Buildah: MKNOD + DAC_OVERRIDE + Unconfined seccomp/AppArmor${NC}"
+            echo -e "${CYAN}      Buildah: tmpfs mount at ~/.local/share/containers (avoids overlay-on-overlay)${NC}"
         fi
         echo ""
     elif [ "$driver" = "native" ]; then
@@ -253,10 +254,17 @@ run_rootless_tests() {
     if [ "$driver" = "overlay" ]; then
         BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
         BASE_CMD="$BASE_CMD --cap-add MKNOD"
+        
+        # For Buildah overlay: mount tmpfs to rootless storage path to avoid overlay-on-overlay
+        if [ "$BUILDER" = "buildah" ]; then
+            BASE_CMD="$BASE_CMD --tmpfs /home/smithy/.local/share/containers:rw,exec,uid=1000,gid=1000"
+        fi
     fi
     
-    # Always unconfined for overlay, but also needed for BuildKit native
-    if [ "$driver" = "overlay" ] || [ "$BUILDER" = "buildkit" ]; then
+    # Security options for seccomp/apparmor
+    # - BuildKit: Always needs unconfined (for all storage drivers)
+    # - Buildah: Always needs unconfined (newuidmap/newgidmap are blocked by default seccomp)
+    if [ "$BUILDER" = "buildkit" ] || [ "$BUILDER" = "buildah" ]; then
         BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
         BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
     fi
@@ -330,7 +338,7 @@ cleanup() {
         echo "Removing temp files..."
         rm -f /tmp/test-*.log 2>/dev/null || true
         
-        echo -e "${GREEN}✓ Cleanup completed${NC}"
+        echo -e "${GREEN}âœ“ Cleanup completed${NC}"
     fi
 }
 
@@ -341,7 +349,7 @@ cleanup_on_interrupt() {
     
     rm -f /tmp/test-*.log 2>/dev/null || true
     
-    echo -e "${GREEN}✓ Cleanup completed${NC}"
+    echo -e "${GREEN}âœ“ Cleanup completed${NC}"
     exit 130
 }
 
@@ -370,11 +378,11 @@ main() {
     # Describe storage mappings
     echo -e "${CYAN}Storage Driver Mappings:${NC}"
     if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  native  → Native snapshotter (default for BuildKit)"
-        echo -e "  overlay → Kernel overlayfs (high performance)"
+        echo -e "  native  â†’ Native snapshotter (default for BuildKit)"
+        echo -e "  overlay â†’ Kernel overlayfs (high performance)"
     else
-        echo -e "  vfs     → VFS storage (default for Buildah)"
-        echo -e "  overlay → Kernel overlayfs (high performance)"
+        echo -e "  vfs     â†’ VFS storage (default for Buildah)"
+        echo -e "  overlay â†’ Kernel overlayfs (high performance)"
     fi
     echo ""
     
@@ -448,7 +456,7 @@ main() {
         exit 1
     fi
     
-    echo -e "${GREEN}✓ All Docker tests passed successfully!${NC}"
+    echo -e "${GREEN}âœ“ All Docker tests passed successfully!${NC}"
     echo ""
     echo -e "${CYAN}Generated test scripts in: ${SUITES_DIR}/${NC}"
     echo -e "${CYAN}Example: bash ${SUITES_DIR}/${BUILDER}-rootless-${primary_driver}-version.sh${NC}"
