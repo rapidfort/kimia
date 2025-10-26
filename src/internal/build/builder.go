@@ -304,11 +304,6 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	if config.NoPush {
 		logger.Info("No push requested, skipping image push to registries")
-		return nil
-	}
-
-	if err := saveDigestInfo(config); err != nil {
-		logger.Warning("Failed to save digest information: %v", err)
 	}
 
 	return nil
@@ -744,49 +739,22 @@ success:
 	return nil
 }
 
-// saveDigestInfo saves image digest information to files (Buildah only)
-func saveDigestInfo(config Config) error {
-	if len(config.Destination) == 0 {
+// SaveDigestInfo saves image digest information to files (Buildah only)
+// The digest should be obtained from the push operation output
+func SaveDigestInfo(config Config, digestMap map[string]string) error {
+	if len(config.Destination) == 0 || len(digestMap) == 0 {
 		return nil
 	}
 
-	// Get image digest
+	// Use the first destination's digest
 	image := config.Destination[0]
-
-	// List images to verify image exists
-	listCmd := exec.Command("buildah", "images", "--format", "{{.Name}}:{{.Tag}}")
-	listCmd.Env = os.Environ()
-	if config.StorageDriver != "" {
-		listCmd.Env = append(listCmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
-	}
-	if listOutput, err := listCmd.Output(); err == nil {
-		logger.Debug("Available images in storage:")
-		logger.Debug("%s", string(listOutput))
+	digest, ok := digestMap[image]
+	if !ok {
+		logger.Debug("No digest available for %s", image)
+		return nil
 	}
 
-	// Use --type image to inspect the image (not builder/container)
-	cmd := exec.Command("buildah", "inspect", "--type", "image", "--format", "{{.Digest}}", image)
-	cmd.Env = os.Environ()
-
-	// Set STORAGE_DRIVER to match the build
-	if config.StorageDriver != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
-		logger.Debug("Set STORAGE_DRIVER=%s for inspect", config.StorageDriver)
-	}
-
-	logger.Debug("Buildah inspect command: buildah inspect --type image --format {{.Digest}} %s", image)
-
-	output, err := cmd.Output()
-	if err != nil {
-		// Log error but don't fail - digest may not be available yet
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			logger.Debug("Inspect stderr: %s", string(exitErr.Stderr))
-		}
-		logger.Debug("Skipping digest save (expected for buildah with overlay): %v", err)
-		return nil // Non-fatal
-	}
-
-	digest := strings.TrimSpace(string(output))
+	logger.Debug("Using digest from push output: %s", digest)
 
 	// Save digest file
 	if config.DigestFile != "" {

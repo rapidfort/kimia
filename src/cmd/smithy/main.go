@@ -174,8 +174,14 @@ func main() {
 			StorageDriver:       config.StorageDriver,
 		}
 
-		if err := build.Push(pushConfig, authFile); err != nil {
+		digestMap, err := build.Push(pushConfig, authFile)
+		if err != nil {
 			logger.Fatal("Push failed: %v", err)
+		}
+
+		// Save digest information after successful push
+		if err := build.SaveDigestInfo(buildConfig, digestMap); err != nil {
+			logger.Warning("Failed to save digest information: %v", err)
 		}
 	}
 
