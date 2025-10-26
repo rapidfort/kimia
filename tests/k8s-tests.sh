@@ -339,7 +339,6 @@ EOF
 # ============================================================================
 # Run Kubernetes Test
 # ============================================================================
-
 run_k8s_test() {
     local test_name="$1"
     local driver="$2"
@@ -364,7 +363,6 @@ run_k8s_test() {
     local start_time=$(date +%s)
 
     # Create job
-    echo -e "${CYAN}  Creating job...${NC}"
     if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
         echo -e "${RED}✗ FAIL${NC} (Failed to create job)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
@@ -374,20 +372,107 @@ run_k8s_test() {
     fi
 
     # Wait for pod to be created
-    sleep 2
+    local pod_name=""
+    local max_wait=30
+    local elapsed=0
 
-    local pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+    while [ -z "$pod_name" ] && [ $elapsed -lt $max_wait ]; do
+        pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+        if [ -z "$pod_name" ]; then
+            sleep 1
+            elapsed=$((elapsed + 1))
+        fi
+    done
 
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}✗ FAIL${NC} (Failed to get pod name)"
+        echo -e "${RED}✗ FAIL${NC} (Pod not created after ${max_wait}s)"
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Pod creation timeout")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
         echo ""
         return
     fi
 
     echo -e "${CYAN}  Pod: ${pod_name}${NC}"
+
+    # Wait for pod to be in a state where we can get logs
+    # Either Running, Succeeded, or Failed
+    echo -e "${CYAN}  Waiting for container...${NC}"
+    local ready=false
+    for i in {1..60}; do
+        local phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
+        local container_state=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null)
+        
+        # Check if we can get logs
+        if [[ "$phase" == "Running" ]] || [[ "$phase" == "Succeeded" ]] || [[ "$phase" == "Failed" ]]; then
+            ready=true
+            echo -e "${CYAN}  Container ready (phase: ${phase}, ${i}s)${NC}"
+            break
+        fi
+        
+        # Check for immediate failure conditions
+        if [[ "$container_state" == *"waiting"* ]]; then
+            local reason=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
+            local message=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.message}' 2>/dev/null)
+            
+            # Fail immediately on these errors
+            case "$reason" in
+                ErrImagePull|ImagePullBackOff)
+                    echo ""
+                    echo -e "${RED}✗ FAIL${NC} (Image pull failed: ${reason})"
+                    echo -e "${RED}  Error: ${message}${NC}"
+                    echo -e "${RED}  Pod events:${NC}"
+                    kubectl get events -n ${NAMESPACE} --field-selector involvedObject.name=${pod_name} --sort-by='.lastTimestamp' | tail -5 | sed 's/^/    /'
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
+                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+                    echo ""
+                    return
+                    ;;
+                CrashLoopBackOff)
+                    echo ""
+                    echo -e "${RED}✗ FAIL${NC} (Container crash loop: ${reason})"
+                    echo -e "${RED}  Error: ${message}${NC}"
+                    echo -e "${RED}  Pod logs:${NC}"
+                    kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
+                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+                    echo ""
+                    return
+                    ;;
+                CreateContainerConfigError|CreateContainerError|InvalidImageName)
+                    echo ""
+                    echo -e "${RED}✗ FAIL${NC} (Container config error: ${reason})"
+                    echo -e "${RED}  Error: ${message}${NC}"
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
+                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+                    echo ""
+                    return
+                    ;;
+                ContainerCreating|PodInitializing)
+                    # Normal startup - show progress
+                    echo -ne "\r${CYAN}  ${reason}... (${i}s)${NC}"
+                    ;;
+            esac
+        fi
+        
+        sleep 1
+    done
+    echo ""  # New line after progress
+
+    if [ "$ready" = false ]; then
+        echo -e "${RED}✗ FAIL${NC} (Container not ready after 60s)"
+        echo -e "${RED}  Pod description:${NC}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} | sed 's/^/    /'
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Container start timeout")
+        kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+        echo ""
+        return
+    fi
+
     echo -e "${CYAN}  Streaming logs...${NC}"
 
     # Stream logs in background
@@ -483,6 +568,35 @@ run_rootless_tests() {
         "$driver" \
         "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
         "buildargs"
+
+
+    # Test 5: Git build WITH push to registry
+    run_k8s_test \
+        "Git Repository Build (Push)" \
+        "$driver" \
+        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \
+        \"--git-branch=master\", \
+        \"--dockerfile=mainline/alpine/Dockerfile\", \
+        \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-git-${driver}:latest\", \
+        \"--storage-driver=${storage_flag}\", \
+        \"--insecure\", \
+        \"--verbosity=debug\"]" \
+        "git-build-push"
+
+    # Test 6: Build with args AND push to registry
+    run_k8s_test \
+        "Build with Arguments (Push)" \
+        "$driver" \
+        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \
+        \"--git-branch=master\", \
+        \"--dockerfile=mainline/alpine/Dockerfile\", \
+        \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \
+        \"--build-arg=NGINX_VERSION=1.25\", \
+        \"--storage-driver=${storage_flag}\", \
+        \"--insecure\", \
+        \"--verbosity=debug\"]" \
+        "buildargs-push"
+
 }
 
 # ============================================================================
