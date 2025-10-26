@@ -1,7 +1,7 @@
 #!/bin/bash
 # reproducible.sh - Test reproducible builds with registry
 #
-# Usage: 
+# Usage:
 #   ./reproducible.sh buildkit [smithy-image]
 #   ./reproducible.sh buildah [smithy-image]
 set -e
@@ -41,7 +41,7 @@ if [ -z "$SMITHY_IMAGE" ]; then
     else
         REGISTRY="${RF_APP_HOST}:5000"
     fi
-    
+
     # Get version if available
     if [ -f "$PROJECT_ROOT/.version" ]; then
         VERSION=$(cat "$PROJECT_ROOT/.version")
@@ -51,7 +51,7 @@ if [ -z "$SMITHY_IMAGE" ]; then
     else
         FULL_VERSION="latest"
     fi
-    
+
     if [ "$BUILDER" = "buildah" ]; then
         SMITHY_IMAGE="${REGISTRY}/rapidfort/smithy-bud:${FULL_VERSION}"
     else
@@ -96,7 +96,7 @@ WORKDIR /app
 RUN echo "reproducible test" > file.txt
 
 # Final step: Fix ALL timestamps in the entire filesystem
-RUN find / -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + 2>/dev/null || true
+#RUN find / -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + 2>/dev/null || true
 
 CMD ["sh"]
 DOCKERFILE
@@ -129,7 +129,7 @@ BASE_CMD="$BASE_CMD --cap-add SETGID"
 if [ "$STORAGE_FLAG" = "overlay" ]; then
     BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
     BASE_CMD="$BASE_CMD --cap-add MKNOD"
-    
+
     # For Buildah overlay: mount tmpfs to avoid overlay-on-overlay
     if [ "$BUILDER" = "buildah" ]; then
         BASE_CMD="$BASE_CMD --tmpfs /home/smithy/.local/share/containers:rw,exec,uid=1000,gid=1000"
@@ -140,15 +140,15 @@ fi
 BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
 BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
 BASE_CMD="$BASE_CMD -v $TEST_DIR:/workspace"
-BASE_CMD="$BASE_CMD -e SOURCE_DATE_EPOCH=$EPOCH"
+#BASE_CMD="$BASE_CMD -e SOURCE_DATE_EPOCH=$EPOCH"
 BASE_CMD="$BASE_CMD $SMITHY_IMAGE"
 
 # Function to build and get digest from registry
 build_and_get_digest() {
     local build_num=$1
-    
+
     log "Build #$build_num: Building with Smithy ($BUILDER)..." >&2
-    
+
     # Build command following docker-tests.sh pattern
     # WITH PUSH (not --no-push) to get digest from registry
     BUILD_CMD="$BASE_CMD"
@@ -156,57 +156,57 @@ build_and_get_digest() {
     BUILD_CMD="$BUILD_CMD --dockerfile=/workspace/Dockerfile"
     BUILD_CMD="$BUILD_CMD --destination=$TEST_IMAGE:v1"
     BUILD_CMD="$BUILD_CMD --storage-driver=$STORAGE_FLAG"
-    BUILD_CMD="$BUILD_CMD --build-arg=BUILD_DATE=$EPOCH"
+    #BUILD_CMD="$BUILD_CMD --build-arg=BUILD_DATE=$EPOCH"
     BUILD_CMD="$BUILD_CMD --label=version=1.0.0"
-    BUILD_CMD="$BUILD_CMD --label=build.date=$EPOCH"
+    #BUILD_CMD="$BUILD_CMD --label=build.date=$EPOCH"
     BUILD_CMD="$BUILD_CMD --insecure"
     BUILD_CMD="$BUILD_CMD --reproducible"
     BUILD_CMD="$BUILD_CMD --verbosity=debug"
-    
+
     debug "Build command: $BUILD_CMD" >&2
-    
+
     echo "" >&2
     log "Executing build command:" >&2
     echo "$BUILD_CMD" >&2
     echo "" >&2
-    
+
     # Capture build output to extract digest
     local build_output=$(mktemp)
     trap "rm -f $build_output" RETURN
-    
+
     # Run build and capture all output
     set +e
     eval $BUILD_CMD > "$build_output" 2>&1
     local build_status=$?
     set -e
-    
+
     # Show the output
     cat "$build_output" >&2
-        
+
     if [ $build_status -ne 0 ]; then
         rm -f "$build_output"
         error "Build #$build_num failed"
     fi
-    
+
     # Extract digest from Smithy's output (try multiple patterns)
     local digest=$(grep "Using digest from push output:" "$build_output" | awk '{print $NF}' | head -1)
-    
+
     # If not found, try alternate pattern
     if [ -z "$digest" ]; then
         digest=$(grep "Extracted digest for" "$build_output" | awk '{print $NF}' | head -1)
     fi
-    
+
     if [ -z "$digest" ]; then
         warn "Could not extract digest from build output, trying registry query..." >&2
         # Fall back to registry query
         sleep 2
-        
+
         log "Retrieving manifest digest from registry..." >&2
-        
+
         # Extract registry path for curl
         local registry_path=$(echo "$TEST_IMAGE" | sed "s|${REGISTRY}/||")
         local registry_url="https://${REGISTRY}"
-        
+
         # Get manifest digest from Docker-Content-Digest header
         debug "Fetching manifest from: ${registry_url}/v2/${registry_path}/manifests/v1" >&2
         digest=$(curl -fIk \
@@ -215,7 +215,7 @@ build_and_get_digest() {
             grep -i "docker-content-digest:" | \
             awk '{print $2}' | \
             tr -d '\r')
-        
+
         if [ -z "$digest" ]; then
             # Try without -s flag to see error
             debug "Retrying without silent mode to see errors..." >&2
@@ -225,7 +225,7 @@ build_and_get_digest() {
             error "Failed to get manifest digest for build #$build_num"
         fi
     fi
-    
+
     log "Build #$build_num manifest digest: $digest" >&2
     echo $digest
 }

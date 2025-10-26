@@ -155,6 +155,7 @@ func main() {
 		ImageNameWithDigestFile:    config.ImageNameWithDigestFile,
 		ImageNameTagWithDigestFile: config.ImageNameTagWithDigestFile,
 		Reproducible:               config.Reproducible,
+		Timestamp:                  config.Timestamp,
 	}
 
 	// Execute build

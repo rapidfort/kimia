@@ -53,6 +53,7 @@ type Config struct {
 
 	// Reproducible builds
 	Reproducible bool
+	Timestamp    string
 }
 
 // DetectBuilder determines which builder is available
