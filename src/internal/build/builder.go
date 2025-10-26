@@ -215,10 +215,13 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	var sourceEpoch string
 	if config.Reproducible && config.Timestamp != "" {
 		sourceEpoch = config.Timestamp
-		// Don't add --timestamp flag - buildah will read SOURCE_DATE_EPOCH from environment
-		// Adding both causes "timestamp and source-date-epoch would be ambiguous" error
-		// We pass it via environment variable instead (set below at line ~288)
-		logger.Debug("Using timestamp=%s for reproducible build (will pass via environment)", sourceEpoch)
+    
+    	// 1. Set timestamp for image metadata
+    	args = append(args, "--timestamp", sourceEpoch)
+    
+    	// 2. Pass as build arg so Dockerfile can use it
+    	//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+    
 	}
 
 	// Add insecure registry options for build
@@ -273,21 +276,12 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		logger.Debug("Set STORAGE_DRIVER=%s", storageDriver)
 	}
 
-	// ========================================
-	// REPRODUCIBLE BUILDS: Set SOURCE_DATE_EPOCH environment
-	// ========================================
-	// This affects file timestamps in layers
-	if sourceEpoch != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
-	}
-
 	// Print environment AFTER all variables are set
 	logger.Info("Buildah build environment:")
 	for _, env := range cmd.Env {
 		if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
 			strings.HasPrefix(env, "BUILDAH_") ||
 			strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") ||
-			strings.HasPrefix(env, "SOURCE_DATE_EPOCH=") ||
 			strings.HasPrefix(env, "DOCKER_CONFIG=") {
 			logger.Info("  %s", env)
 		}

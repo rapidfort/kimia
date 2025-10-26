@@ -95,9 +95,6 @@ WORKDIR /app
 
 RUN echo "reproducible test" > file.txt
 
-# Final step: Fix ALL timestamps in the entire filesystem
-#RUN find / -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + 2>/dev/null || true
-
 CMD ["sh"]
 DOCKERFILE
 
