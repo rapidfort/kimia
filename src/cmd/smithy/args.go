@@ -265,6 +265,16 @@ func parseArgs(args []string) *Config {
 		case "--reproducible":
 			config.Reproducible = true
 
+		case "--timestamp":
+			if value != "" {
+				config.Timestamp = value
+			} else if i+1 < len(args) {
+				i++
+				config.Timestamp = args[i]
+			}
+			// Auto-enable reproducible mode when timestamp is set
+			config.Reproducible = true
+
 		// Enterprise flags (will error out)
 		case "--scan":
 			config.Scan = true
@@ -278,6 +288,29 @@ func parseArgs(args []string) *Config {
 			} else {
 				logger.Warning("Unknown option: %s", arg)
 			}
+		}
+	}
+
+	// ========================================
+	// REPRODUCIBLE BUILDS: Timestamp precedence logic
+	// ========================================
+	// Priority (highest to lowest):
+	// 1. --timestamp flag (explicit)
+	// 2. SOURCE_DATE_EPOCH env var (if --reproducible is set)
+	// 3. Default to "0" (if --reproducible is set)
+	if config.Reproducible {
+		if config.Timestamp == "" {
+			// No explicit timestamp, check environment variable
+			if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
+				config.Timestamp = epoch
+				logger.Debug("Using timestamp from SOURCE_DATE_EPOCH environment variable: %s", epoch)
+			} else {
+				// Default to epoch 0 for reproducible builds
+				config.Timestamp = "0"
+				logger.Debug("Using default timestamp 0 for reproducible build")
+			}
+		} else {
+			logger.Debug("Using explicit timestamp from --timestamp flag: %s", config.Timestamp)
 		}
 	}
 
