@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+
+	"github.com/rapidfort/smithy/internal/build"
 )
 
 func printHelp() {
@@ -28,7 +30,11 @@ func printHelp() {
 	fmt.Println("  --cache                               Enable layer caching")
 	fmt.Println("  --cache-dir PATH                      Cache directory path")
 	fmt.Println("  --custom-platform PLATFORM            Target platform (e.g., linux/amd64)")
-	fmt.Println("  --storage-driver DRIVER               Storage driver: vfs or overlay (default: vfs)")
+	if build.DetectBuilder() == "buildah" {
+		fmt.Println("  --storage-driver DRIVER               Storage driver: vfs or overlay (default: vfs)")
+	} else {
+		fmt.Println("  --storage-driver DRIVER               Storage driver: native or overlay (default: native)")
+	}
 	fmt.Println("  --reproducible                        Enable reproducible builds by setting consistent timestamps and disabling layer caching")
 	fmt.Println()
 	fmt.Println("GIT OPTIONS:")
@@ -59,9 +65,15 @@ func printHelp() {
 	fmt.Println("  -h, --help                            Show this help message")
 	fmt.Println()
 	fmt.Println("STORAGE DRIVERS:")
-	fmt.Println("  vfs       - Virtual File System (default, most compatible)")
-	fmt.Println("              Works everywhere, no special requirements")
-	fmt.Println("              Best for: TAR exports, maximum compatibility")
+	if build.DetectBuilder() == "buildah" {
+		fmt.Println("  vfs       - Virtual File System (default, most compatible)")
+		fmt.Println("              Works everywhere, no special requirements")
+		fmt.Println("              Best for: TAR exports, maximum compatibility")
+	} else {
+		fmt.Println("  native    - Native snapshotter (default, most compatible)")
+		fmt.Println("              Works everywhere, no special requirements")
+		fmt.Println("              Best for: TAR exports, maximum compatibility")
+	}
 	fmt.Println()
 	fmt.Println("  overlay   - Overlay filesystem (faster)")
 	fmt.Println("              Best for: Performance, production builds")
@@ -99,7 +111,7 @@ func printHelp() {
 	fmt.Println("         --destination=registry.io/myapp:latest \\")
 	fmt.Println("         --custom-platform=linux/arm64")
 	fmt.Println()
-	fmt.Println("  # Export to TAR (use VFS for reliability)")
+	fmt.Println("  # Export to TAR (use vfs/native for reliability)")
 	fmt.Println("  smithy --context=. \\")
 	fmt.Println("         --destination=myapp:latest \\")
 	fmt.Println("         --tar-path=/output/myapp.tar \\")
@@ -114,7 +126,7 @@ func printHelp() {
 	fmt.Println("  • Minimal caps   - Only SETUID & SETGID capabilities")
 	fmt.Println()
 	fmt.Println("ENVIRONMENT VARIABLES:")
-	fmt.Println("  STORAGE_DRIVER   - Override storage driver (vfs or overlay)")
+	fmt.Println("  STORAGE_DRIVER   - Override storage driver (vfs/native or overlay)")
 	fmt.Println("  BUILDAH_FORMAT   - Image format (oci or docker)")
 	fmt.Println("  DOCKER_CONFIG    - Docker config directory")
 	fmt.Println()

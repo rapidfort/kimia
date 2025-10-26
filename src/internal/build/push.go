@@ -28,7 +28,7 @@ type PushConfig struct {
 func Push(config PushConfig, authFile string) (map[string]string, error) {
 	// BuildKit pushes during build (via --output with push=true)
 	// Only buildah needs a separate push step
-	builder := detectBuilder()
+	builder := DetectBuilder()
 	if builder == "buildkit" {
 		logger.Debug("Skipping separate push step (BuildKit pushes during build)")
 		return make(map[string]string), nil
@@ -201,7 +201,7 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 func PushSingle(image string, config PushConfig, authFile string) (string, error) {
 	// BuildKit pushes during build (via --output with push=true)
 	// Only buildah needs a separate push step
-	builder := detectBuilder()
+	builder := DetectBuilder()
 	if builder == "buildkit" {
 		logger.Debug("Skipping separate push step for %s (BuildKit pushes during build)", image)
 		return "", nil

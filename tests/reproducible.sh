@@ -1,10 +1,9 @@
 #!/bin/bash
-# test-reproducible.sh - Test reproducible builds with registry
+# reproducible.sh - Test reproducible builds with registry
 #
 # Usage: 
-#   ./test-reproducible.sh buildkit [smithy-image]
-#   ./test-reproducible.sh buildah [smithy-image]
-
+#   ./reproducible.sh buildkit [smithy-image]
+#   ./reproducible.sh buildah [smithy-image]
 set -e
 
 # Configuration
@@ -78,7 +77,6 @@ for cmd in docker curl jq; do
     fi
 done
 
-
 # Create temporary directory for test files
 TEST_DIR=$(mktemp -d)
 chown -R 1000:1000 "$TEST_DIR"
@@ -119,6 +117,19 @@ BASE_CMD="$BASE_CMD --user 1000:1000"
 BASE_CMD="$BASE_CMD --cap-drop ALL"
 BASE_CMD="$BASE_CMD --cap-add SETUID"
 BASE_CMD="$BASE_CMD --cap-add SETGID"
+
+# Add additional capabilities for overlay storage (following docker-tests.sh)
+if [ "$STORAGE_FLAG" = "overlay" ]; then
+    BASE_CMD="$BASE_CMD --cap-add DAC_OVERRIDE"
+    BASE_CMD="$BASE_CMD --cap-add MKNOD"
+    
+    # For Buildah overlay: mount tmpfs to avoid overlay-on-overlay
+    if [ "$BUILDER" = "buildah" ]; then
+        BASE_CMD="$BASE_CMD --tmpfs /home/smithy/.local/share/containers:rw,exec,uid=1000,gid=1000"
+    fi
+fi
+
+# Security options - both builders need unconfined
 BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
 BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
 BASE_CMD="$BASE_CMD -v $TEST_DIR:/workspace"
@@ -133,7 +144,7 @@ build_and_get_digest() {
     log "Build #$build_num: Building with Smithy ($BUILDER)..." >&2
     
     # Build command following docker-tests.sh pattern
-    # BUT WITH PUSH (not --no-push) to get digest from registry
+    # WITH PUSH (not --no-push) to get digest from registry
     BUILD_CMD="$BASE_CMD"
     BUILD_CMD="$BUILD_CMD --context /workspace"
     BUILD_CMD="$BUILD_CMD --dockerfile /workspace/Dockerfile"
@@ -156,22 +167,26 @@ build_and_get_digest() {
         error "Build #$build_num failed"
     fi
     
-    # Get digest from registry
-    log "Retrieving digest from registry..." >&2
+    # Get manifest digest from registry (not config digest!)
+    log "Retrieving manifest digest from registry..." >&2
     
     # Extract registry path for curl
     local registry_path=$(echo "$TEST_IMAGE" | sed "s|${REGISTRY}/||")
     local registry_url="http://${REGISTRY}"
     
-    local digest=$(curl -sf -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+    # Get manifest digest from Docker-Content-Digest header
+    local digest=$(curl -sfI \
+        -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${registry_url}/v2/${registry_path}/manifests/v1" | \
-        jq -r '.config.digest')
+        grep -i "docker-content-digest:" | \
+        awk '{print $2}' | \
+        tr -d '\r')
     
-    if [ -z "$digest" ] || [ "$digest" = "null" ]; then
-        error "Failed to get digest for build #$build_num"
+    if [ -z "$digest" ]; then
+        error "Failed to get manifest digest for build #$build_num"
     fi
     
-    log "Build #$build_num digest: $digest" >&2
+    log "Build #$build_num manifest digest: $digest" >&2
     echo $digest
 }
 
@@ -192,14 +207,14 @@ echo ""
 echo "================================================================"
 echo "  RESULTS"
 echo "================================================================"
-echo "  Build #1 digest: $DIGEST1"
-echo "  Build #2 digest: $DIGEST2"
+echo "  Build #1 manifest digest: $DIGEST1"
+echo "  Build #2 manifest digest: $DIGEST2"
 echo "================================================================"
 echo ""
 
 if [ "$DIGEST1" = "$DIGEST2" ]; then
     log "✅ SUCCESS: Builds are reproducible!"
-    log "Both builds produced identical digest: $DIGEST1"
+    log "Both builds produced identical manifest digest: $DIGEST1"
     exit 0
 else
     error "❌ FAILURE: Builds are NOT reproducible!"

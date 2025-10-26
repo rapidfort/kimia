@@ -53,8 +53,8 @@ type Config struct {
 	Reproducible bool
 }
 
-// detectBuilder determines which builder is available
-func detectBuilder() string {
+// DetectBuilder determines which builder is available
+func DetectBuilder() string {
 	// Check for BuildKit first (preferred/default)
 	if _, err := exec.LookPath("buildkitd"); err == nil {
 		if _, err := exec.LookPath("buildctl"); err == nil {
@@ -62,7 +62,7 @@ func detectBuilder() string {
 		}
 	}
 
-	// Check for Buildah (legacy)
+	// Check for Buildah
 	if _, err := exec.LookPath("buildah"); err == nil {
 		return "buildah"
 	}
@@ -72,7 +72,7 @@ func detectBuilder() string {
 
 // Execute executes a build using the detected builder (buildah or buildkit)
 func Execute(config Config, ctx *Context, authFile string) error {
-	builder := detectBuilder()
+	builder := DetectBuilder()
 
 	if builder == "unknown" {
 		return fmt.Errorf("no builder found (expected buildkitd or buildah)")
