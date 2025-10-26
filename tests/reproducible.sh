@@ -170,27 +170,60 @@ build_and_get_digest() {
     echo "$BUILD_CMD" >&2
     echo "" >&2
     
-    if ! eval $BUILD_CMD; then
+    # Capture build output to extract digest
+    local build_output=$(mktemp)
+    trap "rm -f $build_output" RETURN
+    
+    # Run build and capture all output
+    set +e
+    eval $BUILD_CMD > "$build_output" 2>&1
+    local build_status=$?
+    set -e
+    
+    # Show the output
+    cat "$build_output" >&2
+        
+    if [ $build_status -ne 0 ]; then
+        rm -f "$build_output"
         error "Build #$build_num failed"
     fi
     
-    # Get manifest digest from registry (not config digest!)
-    log "Retrieving manifest digest from registry..." >&2
+    # Extract digest from Smithy's output (try multiple patterns)
+    local digest=$(grep "Using digest from push output:" "$build_output" | awk '{print $NF}' | head -1)
     
-    # Extract registry path for curl
-    local registry_path=$(echo "$TEST_IMAGE" | sed "s|${REGISTRY}/||")
-    local registry_url="https://${REGISTRY}"
-    
-    # Get manifest digest from Docker-Content-Digest header
-    local digest=$(curl -sfIk \
-        -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-        "${registry_url}/v2/${registry_path}/manifests/v1" | \
-        grep -i "docker-content-digest:" | \
-        awk '{print $2}' | \
-        tr -d '\r')
+    # If not found, try alternate pattern
+    if [ -z "$digest" ]; then
+        digest=$(grep "Extracted digest for" "$build_output" | awk '{print $NF}' | head -1)
+    fi
     
     if [ -z "$digest" ]; then
-        error "Failed to get manifest digest for build #$build_num"
+        warn "Could not extract digest from build output, trying registry query..." >&2
+        # Fall back to registry query
+        sleep 2
+        
+        log "Retrieving manifest digest from registry..." >&2
+        
+        # Extract registry path for curl
+        local registry_path=$(echo "$TEST_IMAGE" | sed "s|${REGISTRY}/||")
+        local registry_url="https://${REGISTRY}"
+        
+        # Get manifest digest from Docker-Content-Digest header
+        debug "Fetching manifest from: ${registry_url}/v2/${registry_path}/manifests/v1" >&2
+        digest=$(curl -fIk \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "${registry_url}/v2/${registry_path}/manifests/v1" | \
+            grep -i "docker-content-digest:" | \
+            awk '{print $2}' | \
+            tr -d '\r')
+        
+        if [ -z "$digest" ]; then
+            # Try without -s flag to see error
+            debug "Retrying without silent mode to see errors..." >&2
+            curl -fIk \
+                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                "${registry_url}/v2/${registry_path}/manifests/v1" >&2 || true
+            error "Failed to get manifest digest for build #$build_num"
+        fi
     fi
     
     log "Build #$build_num manifest digest: $digest" >&2
@@ -220,9 +253,9 @@ echo "================================================================"
 echo ""
 
 if [ "$DIGEST1" = "$DIGEST2" ]; then
-    log "✅ SUCCESS: Builds are reproducible!"
+    log "âœ… SUCCESS: Builds are reproducible!"
     log "Both builds produced identical manifest digest: $DIGEST1"
     exit 0
 else
-    error "❌ FAILURE: Builds are NOT reproducible!"
+    error "âŒ FAILURE: Builds are NOT reproducible!"
 fi

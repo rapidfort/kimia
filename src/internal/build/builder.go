@@ -1,8 +1,10 @@
 package build
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -204,15 +206,19 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	}
 
 	// ========================================
-	// REPRODUCIBLE BUILDS: Add --timestamp flag
+	// REPRODUCIBLE BUILDS: Handle timestamp
 	// ========================================
 	// This sets the image creation timestamp to a deterministic value
+	// Note: Buildah will use SOURCE_DATE_EPOCH from environment directly
+	// We only add --timestamp flag when SOURCE_DATE_EPOCH is NOT set
 	var sourceEpoch string
 	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
 		sourceEpoch = epoch
-		args = append(args, "--timestamp", epoch)
-		logger.Debug("Using SOURCE_DATE_EPOCH=%s from environment", epoch)
+		// Don't add --timestamp flag - buildah will read SOURCE_DATE_EPOCH from environment
+		// Adding both causes "timestamp and source-date-epoch would be ambiguous" error
+		logger.Debug("Using SOURCE_DATE_EPOCH=%s from environment (buildah will read directly)", epoch)
 	} else if config.Reproducible {
+		// Only add --timestamp when SOURCE_DATE_EPOCH is not set
 		sourceEpoch = "0"
 		args = append(args, "--timestamp", "0")
 		logger.Debug("Setting timestamp=0 for reproducible build")
@@ -580,6 +586,9 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// ========================================
 	// REPRODUCIBLE BUILDS: Add source-date-epoch
 	// ========================================
+	// BuildKit requires TWO settings for reproducible builds:
+	// 1. source-date-epoch: Sets the image creation timestamp
+	// 2. rewrite-timestamp=true: Rewrites all file timestamps in layers (added to output below)
 	var sourceEpoch string
 	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
 		sourceEpoch = epoch
@@ -613,26 +622,42 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// Handle outputs (destinations)
 	if config.TarPath != "" {
 		// Export to tar
-		args = append(args, "--output", fmt.Sprintf("type=docker,dest=%s", config.TarPath))
+		outputOpts := fmt.Sprintf("type=docker,dest=%s", config.TarPath)
+		if config.Reproducible && sourceEpoch != "" {
+			outputOpts += ",rewrite-timestamp=true"
+			logger.Debug("Added rewrite-timestamp=true for reproducible tar export")
+		}
+		args = append(args, "--output", outputOpts)
 	} else if !config.NoPush {
 		// Push to registries
 		for _, dest := range sortedDests {
-			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=true", dest))
+			outputOpts := fmt.Sprintf("type=image,name=%s,push=true", dest)
+			if config.Reproducible && sourceEpoch != "" {
+				outputOpts += ",rewrite-timestamp=true"
+				logger.Debug("Added rewrite-timestamp=true for reproducible push: %s", dest)
+			}
+			args = append(args, "--output", outputOpts)
 		}
 	} else {
 		// Build only, no push (store in local image store)
 		for _, dest := range sortedDests {
-			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=false", dest))
+			outputOpts := fmt.Sprintf("type=image,name=%s,push=false", dest)
+			if config.Reproducible && sourceEpoch != "" {
+				outputOpts += ",rewrite-timestamp=true"
+				logger.Debug("Added rewrite-timestamp=true for reproducible build: %s", dest)
+			}
+			args = append(args, "--output", outputOpts)
 		}
 	}
 
 	// Log the command
 	logger.Debug("BuildKit command: buildctl %s", strings.Join(args, " "))
 
-	// Execute buildctl
+	// Execute buildctl with output capture to extract digest
+	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd := exec.Command("buildctl", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 	cmd.Env = os.Environ()
 
 	// Set BUILDKIT_HOST
@@ -659,8 +684,67 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 	logger.Info("Build completed successfully")
 
+	// ========================================
+	// REPRODUCIBLE BUILDS: Extract and log digest from BuildKit output
+	// ========================================
+	if !config.NoPush && len(config.Destination) > 0 {
+		// Try to extract digest from stderr output
+		// BuildKit outputs manifest digest in stderr like: "exporting manifest sha256:xxxxx"
+		stderrOutput := stderrBuf.String()
+		stdoutOutput := stdoutBuf.String()
+		
+		for _, dest := range config.Destination {
+			var digest string
+			
+			// Pattern 1: Look for "exporting manifest sha256:xxx" in stderr
+			if lines := strings.Split(stderrOutput, "\n"); len(lines) > 0 {
+				for _, line := range lines {
+					if strings.Contains(line, "exporting manifest sha256:") {
+						parts := strings.Fields(line)
+						for _, part := range parts {
+							if strings.HasPrefix(part, "sha256:") {
+								digest = part
+								break
+							}
+						}
+					}
+					if digest != "" {
+						break
+					}
+				}
+			}
+			
+			// Pattern 2: Look for digest in stdout (some buildkit versions)
+			if digest == "" {
+				if lines := strings.Split(stdoutOutput, "\n"); len(lines) > 0 {
+					for _, line := range lines {
+						if strings.Contains(line, "sha256:") {
+							parts := strings.Fields(line)
+							for _, part := range parts {
+								if strings.HasPrefix(part, "sha256:") && len(part) == 71 { // sha256: + 64 chars
+									digest = part
+									break
+								}
+							}
+						}
+						if digest != "" {
+							break
+						}
+					}
+				}
+			}
+			
+			if digest != "" {
+				logger.Debug("Extracted digest for %s: %s", dest, digest)
+				logger.Debug("Using digest from push output: %s", digest)
+			} else {
+				logger.Debug("Could not extract digest from BuildKit output for %s", dest)
+			}
+		}
+	}
+
 	// Note: BuildKit handles push as part of the build, so no separate push step needed
-	// Digest files are not yet implemented for BuildKit (TODO)
+	// Digest file export for BuildKit
 	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
 		logger.Warning("Digest file export not yet implemented for BuildKit")
 	}
