@@ -62,7 +62,7 @@ func DetectBuilder() string {
 		}
 	}
 
-	// Check for Buildah
+	// Check for Buildah (legacy)
 	if _, err := exec.LookPath("buildah"); err == nil {
 		return "buildah"
 	}
@@ -336,8 +336,9 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 	// Only copy if it's a bind mount, not a git clone
 	// Git clones are in subdirectories like /home/smithy/workspace/smithy-build-*
-	// Bind mounts are exactly at /home/smithy/workspace
-	if ctx.Path == workspaceMount && !ctx.IsGitRepo {
+	// Bind mounts can be at /workspace or /home/smithy/workspace
+	isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
+	if isBindMount {
 		logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
 
 		// Create cache directory
@@ -503,11 +504,26 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		dockerfilePath = "Dockerfile"
 	}
 
-	// BuildKit expects relative path from context
-	if filepath.IsAbs(dockerfilePath) {
-		relPath, err := filepath.Rel(buildContext, dockerfilePath)
-		if err == nil {
-			dockerfilePath = relPath
+	// CRITICAL FIX: If we copied the context, update dockerfile path
+	// The dockerfile should be relative to the NEW buildContext location
+	if buildContext != ctx.Path {
+		// Context was copied to temp directory
+		// Make dockerfile path relative to the ORIGINAL context first
+		if filepath.IsAbs(dockerfilePath) {
+			// Try to make it relative to original context
+			if relPath, err := filepath.Rel(ctx.Path, dockerfilePath); err == nil {
+				dockerfilePath = relPath
+			}
+		}
+		// Now dockerfilePath is relative to context (e.g. "Dockerfile")
+		// and will work with the copied buildContext
+	} else {
+		// Context not copied, use normal relative path logic
+		if filepath.IsAbs(dockerfilePath) {
+			relPath, err := filepath.Rel(buildContext, dockerfilePath)
+			if err == nil {
+				dockerfilePath = relPath
+			}
 		}
 	}
 
@@ -568,10 +584,12 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
 		sourceEpoch = epoch
 		args = append(args, "--opt", fmt.Sprintf("source-date-epoch=%s", epoch))
+		args = append(args, "--opt", fmt.Sprintf("build-arg:SOURCE_DATE_EPOCH=%s", sourceEpoch))
 		logger.Debug("Using SOURCE_DATE_EPOCH=%s from environment", epoch)
 	} else if config.Reproducible {
 		sourceEpoch = "0"
 		args = append(args, "--opt", "source-date-epoch=0")
+		args = append(args, "--opt", fmt.Sprintf("build-arg:SOURCE_DATE_EPOCH=%s", sourceEpoch))
 		logger.Debug("Setting source-date-epoch=0 for reproducible build")
 	}
 
