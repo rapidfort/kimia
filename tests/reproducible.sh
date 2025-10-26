@@ -71,7 +71,7 @@ echo "================================================================"
 echo ""
 
 # Check dependencies
-for cmd in docker curl jq; do
+for cmd in docker curl; do
     if ! command -v $cmd &> /dev/null; then
         error "$cmd is required but not installed"
     fi
@@ -79,25 +79,32 @@ done
 
 # Create temporary directory for test files
 TEST_DIR=$(mktemp -d)
-chown -R 1000:1000 "$TEST_DIR"
 trap "rm -rf $TEST_DIR" EXIT
 
 # Create test Dockerfile with pinned base image and package versions
 cat > $TEST_DIR/Dockerfile << 'DOCKERFILE'
-# Pin base image by SHA256 digest for reproducibility (alpine:3.22)
 FROM alpine@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
 
-# Pin package versions for reproducibility
+ARG SOURCE_DATE_EPOCH
+
 RUN apk add --no-cache \
     curl=8.14.1-r2 \
     ca-certificates=20250911-r0
 
 WORKDIR /app
+
 RUN echo "reproducible test" > file.txt
+
+# Final step: Fix ALL timestamps in the entire filesystem
+RUN find / -xdev -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + 2>/dev/null || true
+
 CMD ["sh"]
 DOCKERFILE
 
-log "Test Dockerfile created"
+# CRITICAL: chown to 1000:1000 so smithy can read/write
+chown -R 1000:1000 "$TEST_DIR"
+
+log "Test Dockerfile created at: $TEST_DIR"
 echo ""
 
 # Get storage driver flag based on builder (same as docker-tests.sh)
@@ -134,7 +141,6 @@ BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
 BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
 BASE_CMD="$BASE_CMD -v $TEST_DIR:/workspace"
 BASE_CMD="$BASE_CMD -e SOURCE_DATE_EPOCH=$EPOCH"
-BASE_CMD="$BASE_CMD -e HOME=/tmp"
 BASE_CMD="$BASE_CMD $SMITHY_IMAGE"
 
 # Function to build and get digest from registry
@@ -146,14 +152,15 @@ build_and_get_digest() {
     # Build command following docker-tests.sh pattern
     # WITH PUSH (not --no-push) to get digest from registry
     BUILD_CMD="$BASE_CMD"
-    BUILD_CMD="$BUILD_CMD --context /workspace"
-    BUILD_CMD="$BUILD_CMD --dockerfile /workspace/Dockerfile"
-    BUILD_CMD="$BUILD_CMD --destination $TEST_IMAGE:v1"
-    BUILD_CMD="$BUILD_CMD --storage-driver $STORAGE_FLAG"
-    BUILD_CMD="$BUILD_CMD --build-arg BUILD_DATE=$EPOCH"
-    BUILD_CMD="$BUILD_CMD --label version=1.0.0"
-    BUILD_CMD="$BUILD_CMD --label build.date=$EPOCH"
+    BUILD_CMD="$BUILD_CMD --context=/workspace"
+    BUILD_CMD="$BUILD_CMD --dockerfile=/workspace/Dockerfile"
+    BUILD_CMD="$BUILD_CMD --destination=$TEST_IMAGE:v1"
+    BUILD_CMD="$BUILD_CMD --storage-driver=$STORAGE_FLAG"
+    BUILD_CMD="$BUILD_CMD --build-arg=BUILD_DATE=$EPOCH"
+    BUILD_CMD="$BUILD_CMD --label=version=1.0.0"
+    BUILD_CMD="$BUILD_CMD --label=build.date=$EPOCH"
     BUILD_CMD="$BUILD_CMD --insecure"
+    BUILD_CMD="$BUILD_CMD --reproducible"
     BUILD_CMD="$BUILD_CMD --verbosity=debug"
     
     debug "Build command: $BUILD_CMD" >&2
@@ -172,10 +179,10 @@ build_and_get_digest() {
     
     # Extract registry path for curl
     local registry_path=$(echo "$TEST_IMAGE" | sed "s|${REGISTRY}/||")
-    local registry_url="http://${REGISTRY}"
+    local registry_url="https://${REGISTRY}"
     
     # Get manifest digest from Docker-Content-Digest header
-    local digest=$(curl -sfI \
+    local digest=$(curl -sfIk \
         -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
         "${registry_url}/v2/${registry_path}/manifests/v1" | \
         grep -i "docker-content-digest:" | \
