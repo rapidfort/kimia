@@ -20,12 +20,37 @@ type PushConfig struct {
 	SkipTLSVerify       bool
 	RegistryCertificate string
 	PushRetry           int
+	StorageDriver       string
 }
 
 // Push pushes built images to registries with authentication
-func Push(config PushConfig, authFile string) error {
+// Returns a map of destination->digest for each successfully pushed image
+func Push(config PushConfig, authFile string) (map[string]string, error) {
+	// BuildKit pushes during build (via --output with push=true)
+	// Only buildah needs a separate push step
+	builder := DetectBuilder()
+	if builder == "buildkit" {
+		logger.Debug("Skipping separate push step (BuildKit pushes during build)")
+		return make(map[string]string), nil
+	}
+
+	digestMap := make(map[string]string)
+
 	for _, dest := range config.Destinations {
 		logger.Info("Pushing image: %s", dest)
+
+		// List images to verify the image exists before pushing
+		listCmd := exec.Command("buildah", "images", "--format", "{{.Name}}:{{.Tag}}")
+		listCmd.Env = os.Environ()
+		if config.StorageDriver != "" {
+			listCmd.Env = append(listCmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+		}
+		if listOutput, err := listCmd.Output(); err == nil {
+			logger.Debug("Available images in storage before push:")
+			logger.Debug("%s", string(listOutput))
+		} else {
+			logger.Debug("Failed to list images: %v", err)
+		}
 
 		// Extract and normalize registry
 		registry := auth.ExtractRegistry(dest)
@@ -89,8 +114,11 @@ func Push(config PushConfig, authFile string) error {
 				cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
 			}
 
-			// Add container runtime environment variables
-			cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+			// Use storage driver from config for buildah
+			if config.StorageDriver != "" {
+				cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+				logger.Debug("Set STORAGE_DRIVER=%s for push", config.StorageDriver)
+			}
 
 			err := cmd.Run()
 
@@ -147,21 +175,38 @@ func Push(config PushConfig, authFile string) error {
 				continue
 			}
 
+			// Success - extract digest from stderr
+			stderrStr := stderr.String()
+			digest := extractDigestFromPushOutput(stderrStr)
+			if digest != "" {
+				digestMap[dest] = digest
+				logger.Debug("Extracted digest for %s: %s", dest, digest)
+			}
+
 			logger.Info("Successfully pushed: %s", dest)
 			lastErr = nil
 			break
 		}
 
 		if lastErr != nil {
-			return fmt.Errorf("failed to push %s after %d attempts: %v", dest, retries, lastErr)
+			return digestMap, fmt.Errorf("failed to push %s after %d attempts: %v", dest, retries, lastErr)
 		}
 	}
 
-	return nil
+	return digestMap, nil
 }
 
 // PushSingle pushes a single image with retries (used by hardening)
-func PushSingle(image string, config PushConfig, authFile string) error {
+// Returns the manifest digest of the pushed image
+func PushSingle(image string, config PushConfig, authFile string) (string, error) {
+	// BuildKit pushes during build (via --output with push=true)
+	// Only buildah needs a separate push step
+	builder := DetectBuilder()
+	if builder == "buildkit" {
+		logger.Debug("Skipping separate push step for %s (BuildKit pushes during build)", image)
+		return "", nil
+	}
+
 	// Build push command
 	args := []string{"push"}
 
@@ -206,7 +251,22 @@ func PushSingle(image string, config PushConfig, authFile string) error {
 		if authFile != "" {
 			cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
 		}
-		cmd.Env = append(cmd.Env, "STORAGE_DRIVER=vfs")
+
+		// Use storage driver from config for buildah
+		if config.StorageDriver != "" {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("STORAGE_DRIVER=%s", config.StorageDriver))
+			logger.Debug("Set STORAGE_DRIVER=%s for push", config.StorageDriver)
+		}
+
+		// Log full command for debugging
+		logger.Debug("Buildah push command: buildah %s", strings.Join(args, " "))
+		logger.Debug("Push command environment:")
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
+				strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") {
+				logger.Debug("  %s", env)
+			}
+		}
 
 		err := cmd.Run()
 
@@ -218,13 +278,18 @@ func PushSingle(image string, config PushConfig, authFile string) error {
 		}
 
 		if err == nil {
-			return nil
+			// Extract digest from stderr
+			digest := extractDigestFromPushOutput(stderr.String())
+			if digest != "" {
+				logger.Debug("Extracted digest for %s: %s", image, digest)
+			}
+			return digest, nil
 		}
 
 		lastErr = err
 	}
 
-	return lastErr
+	return "", lastErr
 }
 
 // isInsecureRegistry checks if a destination matches an insecure registry pattern
@@ -235,4 +300,23 @@ func isInsecureRegistry(dest string, insecureRegistries []string) bool {
 		}
 	}
 	return false
+}
+
+// extractDigestFromPushOutput extracts the manifest digest from buildah push stderr
+// Example stderr line: "Copying config sha256:0b0a90c89d1e19e603b72d1d02efdd324a622d7ee93071c8e268165f2f0e6821"
+func extractDigestFromPushOutput(stderr string) string {
+	// Look for "Copying config sha256:..." in the output
+	lines := strings.Split(stderr, "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "Copying config sha256:") {
+			// Extract the sha256 digest
+			parts := strings.Split(line, "sha256:")
+			if len(parts) >= 2 {
+				digest := strings.TrimSpace(parts[1])
+				// Return with sha256: prefix
+				return "sha256:" + digest
+			}
+		}
+	}
+	return ""
 }

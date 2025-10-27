@@ -86,6 +86,44 @@ fi
 # Create suites directory
 mkdir -p "${SUITES_DIR}"
 
+# Option 1: Check for .env file
+if [ -f "${SCRIPT_DIR}/.env" ]; then
+    echo -e "${CYAN}Loading credentials from .env file...${NC}"
+    set -a
+    source "${SCRIPT_DIR}/.env"
+    set +a
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+        DOCKER_AUTH_METHOD="env"
+        echo -e "${GREEN}✓ Credentials loaded from .env${NC}"
+    fi
+# Option 2: Check for Docker config
+elif [ -f ~/.docker/config.json ]; then
+    echo -e "${CYAN}Using Docker config from ~/.docker/config.json${NC}"
+    DOCKER_AUTH_METHOD="config"
+    echo -e "${GREEN}✓ Docker config found${NC}"
+# Option 3: Check environment variables
+elif [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+    echo -e "${CYAN}Using credentials from environment variables${NC}"
+    DOCKER_AUTH_METHOD="env"
+    echo -e "${GREEN}✓ Credentials found in environment${NC}"
+else
+    echo -e "${YELLOW}⚠ WARNING: No Docker credentials found!${NC}"
+    echo -e "${YELLOW}   You may hit Docker Hub rate limits${NC}"
+    echo ""
+    echo -e "${YELLOW}To avoid rate limits, choose one:${NC}"
+    echo -e "${YELLOW}  1. Run 'docker login' first${NC}"
+    echo -e "${YELLOW}  2. Create ${SCRIPT_DIR}/.env with:${NC}"
+    echo -e "${YELLOW}       DOCKER_USERNAME=your-username${NC}"
+    echo -e "${YELLOW}       DOCKER_PASSWORD=your-password${NC}"
+    echo -e "${YELLOW}  3. Export DOCKER_USERNAME and DOCKER_PASSWORD${NC}"
+    echo ""
+    read -p "Continue without credentials? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
 # ============================================================================
 # Helper Functions
 # ============================================================================
@@ -200,16 +238,19 @@ run_test() {
 
     echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, ${mode}, ${driver})"
     echo -e "${CYAN}  Script: $(basename $script_file)${NC}"
+    echo -e "${CYAN}  Command: $test_cmd${NC}"
+    echo ""
 
-    # EXECUTE the test script
-    if bash "$script_file" > /tmp/test-$$.log 2>&1; then
+    # EXECUTE the test script with all output visible
+    if bash "$script_file" 2>&1 | tee /tmp/test-$$.log; then
+        echo ""
         echo -e "${GREEN}✓ PASS${NC}"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, ${mode}, ${driver})")
     else
+        echo ""
         echo -e "${RED}✗ FAIL${NC}"
         echo -e "${YELLOW}  To re-run: bash $script_file${NC}"
-        cat /tmp/test-$$.log | sed 's/^/    /'
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver})")
     fi
@@ -253,6 +294,14 @@ run_rootless_tests() {
     BASE_CMD="$BASE_CMD --cap-drop ALL"
     BASE_CMD="$BASE_CMD --cap-add SETUID"
     BASE_CMD="$BASE_CMD --cap-add SETGID"
+  
+    # Add Docker Hub credentials based on detected method
+    if [ "$DOCKER_AUTH_METHOD" = "config" ]; then
+        BASE_CMD="$BASE_CMD -v ~/.docker/config.json:/home/smithy/.docker/config.json:ro"
+    elif [ "$DOCKER_AUTH_METHOD" = "env" ]; then
+        BASE_CMD="$BASE_CMD -e DOCKER_USERNAME=${DOCKER_USERNAME}"
+        BASE_CMD="$BASE_CMD -e DOCKER_PASSWORD=${DOCKER_PASSWORD}"
+    fi
 
     # Add additional capabilities for overlay (both BuildKit and Buildah)
     if [ "$driver" = "overlay" ]; then
@@ -298,9 +347,9 @@ run_rootless_tests() {
         --context=https://github.com/nginxinc/docker-nginx.git \
         --git-branch=master \
         --dockerfile=mainline/alpine/Dockerfile \
-        --destination=test-${BUILDER}-rootless-nginx-${driver}:latest \
+        --destination=${REGISTRY}/${BUILDER}-rootless-nginx-${driver}:latest \
         --storage-driver=${storage_flag} \
-        --no-push \
+        --insecure \
         --verbosity=debug
 
     # Test 4: Build from git - redis
@@ -311,9 +360,9 @@ run_rootless_tests() {
         $BASE_CMD \
         --context=https://github.com/docker-library/redis.git \
         --dockerfile=7.2/alpine/Dockerfile \
-        --destination=test-${BUILDER}-rootless-redis-${driver}:latest \
+        --destination=${REGISTRY}/${BUILDER}-rootless-redis-${driver}:latest \
         --storage-driver=${storage_flag} \
-        --no-push \
+        --insecure \
         --verbosity=debug
 
     # Test 5: Build from git with build args - postgres
@@ -324,10 +373,10 @@ run_rootless_tests() {
         $BASE_CMD \
         --context=https://github.com/docker-library/postgres.git \
         --dockerfile=16/alpine3.22/Dockerfile \
-        --destination=test-${BUILDER}-rootless-postgres-${driver}:latest \
+        --destination=${REGISTRY}/${BUILDER}-rootless-postgres-${driver}:latest \
         --build-arg=PG_MAJOR=16 \
         --storage-driver=${storage_flag} \
-        --no-push \
+        --insecure \
         --verbosity=debug
 }
 

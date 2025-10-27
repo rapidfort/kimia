@@ -38,8 +38,9 @@ type Config struct {
 	// Build behavior
 	CustomPlatform string
 	Target         string
-	StorageDriver  string // Storage driver selection (vfs, overlay)
-	Reproducible   bool
+	StorageDriver  string // Storage driver selection (vfs, overlay, native)
+	Reproducible   bool   // Enable reproducible builds
+	Timestamp      string // Custom timestamp for reproducible builds (Unix epoch)
 
 	// Labels and metadata
 	Labels      map[string]string
@@ -50,7 +51,7 @@ type Config struct {
 	GitTokenFile string
 	GitTokenUser string
 
-	// Enterprise features (will error in OSS)
+	// Enterprise features
 	Scan   bool
 	Harden bool
 }

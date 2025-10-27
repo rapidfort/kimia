@@ -1,11 +1,14 @@
 package build
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,10 +53,11 @@ type Config struct {
 
 	// Reproducible builds
 	Reproducible bool
+	Timestamp    string
 }
 
-// detectBuilder determines which builder is available
-func detectBuilder() string {
+// DetectBuilder determines which builder is available
+func DetectBuilder() string {
 	// Check for BuildKit first (preferred/default)
 	if _, err := exec.LookPath("buildkitd"); err == nil {
 		if _, err := exec.LookPath("buildctl"); err == nil {
@@ -71,7 +75,7 @@ func detectBuilder() string {
 
 // Execute executes a build using the detected builder (buildah or buildkit)
 func Execute(config Config, ctx *Context, authFile string) error {
-	builder := detectBuilder()
+	builder := DetectBuilder()
 
 	if builder == "unknown" {
 		return fmt.Errorf("no builder found (expected buildkitd or buildah)")
@@ -138,8 +142,19 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	args = append(args, "-f", dockerfilePath)
 
-	// Add build arguments
-	for key, value := range config.BuildArgs {
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort build arguments
+	// ========================================
+	// CRITICAL: Go maps have random iteration order!
+	// We must sort keys to ensure deterministic command line
+	buildArgKeys := make([]string, 0, len(config.BuildArgs))
+	for key := range config.BuildArgs {
+		buildArgKeys = append(buildArgKeys, key)
+	}
+	sort.Strings(buildArgKeys)
+
+	for _, key := range buildArgKeys {
+		value := config.BuildArgs[key]
 		if value != "" {
 			args = append(args, "--build-arg", fmt.Sprintf("%s=%s", key, value))
 		} else {
@@ -148,8 +163,17 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		}
 	}
 
-	// Add labels
-	for key, value := range config.Labels {
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort labels
+	// ========================================
+	labelKeys := make([]string, 0, len(config.Labels))
+	for key := range config.Labels {
+		labelKeys = append(labelKeys, key)
+	}
+	sort.Strings(labelKeys)
+
+	for _, key := range labelKeys {
+		value := config.Labels[key]
 		args = append(args, "--label", fmt.Sprintf("%s=%s", key, value))
 	}
 
@@ -182,13 +206,37 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		logger.Info("Image download retry set to %d attempts", config.ImageDownloadRetry)
 	}
 
+	// ========================================
+	// REPRODUCIBLE BUILDS: Handle timestamp
+	// ========================================
+	// This sets the image creation timestamp to a deterministic value
+	// Note: Buildah will use SOURCE_DATE_EPOCH from environment directly
+	// Config.Timestamp is already set by args.go with proper precedence
+	var sourceEpoch string
+	if config.Reproducible && config.Timestamp != "" {
+		sourceEpoch = config.Timestamp
+    
+    	// 1. Set timestamp for image metadata
+    	args = append(args, "--timestamp", sourceEpoch)
+    
+    	// 2. Pass as build arg so Dockerfile can use it
+    	//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+    
+	}
+
 	// Add insecure registry options for build
 	if config.Insecure || config.InsecurePull {
 		args = append(args, "--tls-verify=false")
 	}
 
-	// Add tags (destinations)
-	for _, dest := range config.Destination {
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort destinations
+	// ========================================
+	sortedDests := make([]string, len(config.Destination))
+	copy(sortedDests, config.Destination)
+	sort.Strings(sortedDests)
+
+	for _, dest := range sortedDests {
 		args = append(args, "-t", dest)
 	}
 
@@ -228,10 +276,18 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		logger.Debug("Set STORAGE_DRIVER=%s", storageDriver)
 	}
 
-	// Reproducible builds: set SOURCE_DATE_EPOCH=0 for reproducible timestamps
-	if config.Reproducible {
-		cmd.Env = append(cmd.Env, "SOURCE_DATE_EPOCH=0")
+	// Print environment AFTER all variables are set
+	logger.Info("Buildah build environment:")
+	for _, env := range cmd.Env {
+		if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
+			strings.HasPrefix(env, "BUILDAH_") ||
+			strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") ||
+			strings.HasPrefix(env, "DOCKER_CONFIG=") {
+			logger.Info("  %s", env)
+		}
 	}
+
+	logger.Info("Executing: buildah %s", strings.Join(args, " "))
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildah build failed: %v", err)
@@ -248,21 +304,17 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	if config.NoPush {
 		logger.Info("No push requested, skipping image push to registries")
-		return nil
-	}
-
-	if err := saveDigestInfo(config); err != nil {
-		logger.Warning("Failed to save digest information: %v", err)
 	}
 
 	return nil
 }
 
-// executeBuildKit executes a buildkit build
 func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	logger.Info("Starting BuildKit build...")
 
-	// Setup environment
+	// ========================================
+	// SETUP: Environment and paths
+	// ========================================
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
 		homeDir = "/home/smithy"
@@ -276,18 +328,22 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	buildkitSocket := filepath.Join(xdgRuntimeDir, "buildkitd.sock")
 	buildkitConfig := filepath.Join(homeDir, ".config/buildkit/buildkitd.toml")
 
-	// Handle bind-mounted contexts - copy to real filesystem
-	// Bind mounts from Docker may not be accessible to buildctl/buildkitd
-	// BUT: Don't copy git-cloned directories (they're already in real filesystem)
+	logger.Debug("BuildKit configuration:")
+	logger.Debug("  HOME: %s", homeDir)
+	logger.Debug("  XDG_RUNTIME_DIR: %s", xdgRuntimeDir)
+	logger.Debug("  BUILDKIT_HOST: unix://%s", buildkitSocket)
+	logger.Debug("  Config file: %s", buildkitConfig)
+
+	// ========================================
+	// CONTEXT HANDLING: Copy bind mounts to real filesystem
+	// ========================================
 	buildContext := ctx.Path
 	var tempContext string
-
 	workspaceMount := filepath.Join(homeDir, "workspace")
 
 	// Only copy if it's a bind mount, not a git clone
-	// Git clones are in subdirectories like /home/smithy/workspace/smithy-build-*
-	// Bind mounts are exactly at /home/smithy/workspace
-	if ctx.Path == workspaceMount && !ctx.IsGitRepo {
+	isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
+	if isBindMount {
 		logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
 
 		// Create cache directory
@@ -316,16 +372,77 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 		buildContext = tempContext
 		logger.Debug("Using copied context at: %s", buildContext)
+	} else {
+		logger.Debug("Using original context at: %s", buildContext)
 	}
 
-	logger.Debug("BuildKit configuration:")
-	logger.Debug("  HOME: %s", homeDir)
-	logger.Debug("  XDG_RUNTIME_DIR: %s", xdgRuntimeDir)
-	logger.Debug("  BUILDKIT_HOST: unix://%s", buildkitSocket)
-	logger.Debug("  Config file: %s", buildkitConfig)
-	logger.Debug("  Build context: %s", buildContext)
+	// ========================================
+	// INSECURE REGISTRY CONFIGURATION
+	// ========================================
+	if config.Insecure {
+		// Read existing config (should always exist from Dockerfile)
+		var existingConfig string
+		if data, err := os.ReadFile(buildkitConfig); err == nil {
+			existingConfig = string(data)
+			logger.Debug("Read existing buildkit config from: %s", buildkitConfig)
+		} else {
+			// Fallback: match what's in Dockerfile (should rarely happen)
+			existingConfig = `[worker.oci]
+  enabled = true
+  rootless = true
+  binary = "crun"
+  noProcessSandbox = true
+`
+			logger.Debug("Config file not found, using default (matches Dockerfile)")
+			
+			// Create config directory if it doesn't exist
+			configDir := filepath.Dir(buildkitConfig)
+			if err := os.MkdirAll(configDir, 0755); err != nil {
+				return fmt.Errorf("failed to create buildkit config directory: %v", err)
+			}
+		}
 
-	// Start buildkitd with rootlesskit
+		// Extract registries from destinations
+		registries := make(map[string]bool)
+		for _, dest := range config.Destination {
+			if idx := strings.Index(dest, "/"); idx > 0 {
+				registry := dest[:idx]
+				registries[registry] = true
+			}
+		}
+
+		// Append insecure config for each registry
+		configContent := existingConfig
+		configModified := false
+
+		for registry := range registries {
+			if !strings.Contains(existingConfig, fmt.Sprintf(`[registry."%s"]`, registry)) {
+				configContent += fmt.Sprintf(`
+[registry."%s"]
+  http = true
+  insecure = true
+`, registry)
+				logger.Info("Adding insecure registry: %s", registry)
+				configModified = true
+			} else {
+				logger.Debug("Registry already configured: %s", registry)
+			}
+		}
+
+		// Only write if we modified it
+		if configModified {
+			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+				return fmt.Errorf("failed to write buildkit config: %v", err)
+			}
+			logger.Debug("Updated buildkit config written to: %s", buildkitConfig)
+		} else {
+			logger.Debug("No changes needed to buildkit config")
+		}
+	}
+
+	// ========================================
+	// START BUILDKITD DAEMON
+	// ========================================
 	logger.Debug("Starting buildkitd with rootlesskit...")
 	daemonCmd := exec.Command(
 		"rootlesskit",
@@ -337,7 +454,6 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		"--addr=unix://"+buildkitSocket,
 	)
 
-	// Capture buildkitd output
 	daemonCmd.Stdout = os.Stdout
 	daemonCmd.Stderr = os.Stderr
 
@@ -355,7 +471,9 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		}
 	}()
 
-	// Wait for buildkitd to be ready
+	// ========================================
+	// WAIT FOR BUILDKITD TO BE READY
+	// ========================================
 	logger.Debug("Waiting for buildkitd to be ready...")
 	ready := false
 	for i := 0; i < 30; i++ {
@@ -367,19 +485,17 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 			break
 		}
 
-		// Show progress with actual error
 		logger.Debug("Waiting for buildkitd... (%d/30) - error: %v", i+1, err)
 		if len(output) > 0 {
 			logger.Debug("  Output: %s", string(output))
 		}
 
 		// Check if daemon is still running
-		if daemonCmd.Process != nil {
-			// Process is still running
-			time.Sleep(1 * time.Second)
-		} else {
+		if daemonCmd.Process == nil {
 			return fmt.Errorf("buildkitd process died")
 		}
+
+		time.Sleep(1 * time.Second)
 	}
 
 	if !ready {
@@ -388,36 +504,70 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 	logger.Debug("buildkitd is ready")
 
-	// Build with buildctl
-	args := []string{
-		"--addr=unix://" + buildkitSocket,
-		"build",
-		"--frontend", "dockerfile.v0",
-		"--local", fmt.Sprintf("context=%s", buildContext),
-		"--local", fmt.Sprintf("dockerfile=%s", buildContext),
-	}
+	// ========================================
+	// BUILD BUILDCTL COMMAND
+	// ========================================
+	args := []string{"build", "--frontend", "dockerfile.v0"}
 
-	// Add dockerfile path if not default
+	// Add Dockerfile
 	dockerfilePath := config.Dockerfile
 	if dockerfilePath == "" {
 		dockerfilePath = "Dockerfile"
 	}
-	if dockerfilePath != "Dockerfile" {
-		args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
+
+	// Handle dockerfile path for copied contexts
+	if buildContext != ctx.Path {
+		// Context was copied to temp directory
+		if filepath.IsAbs(dockerfilePath) {
+			if relPath, err := filepath.Rel(ctx.Path, dockerfilePath); err == nil {
+				dockerfilePath = relPath
+			}
+		}
+	} else {
+		// Context not copied, use normal relative path logic
+		if filepath.IsAbs(dockerfilePath) {
+			relPath, err := filepath.Rel(buildContext, dockerfilePath)
+			if err == nil {
+				dockerfilePath = relPath
+			}
+		}
 	}
 
-	// Add build arguments
-	for key, value := range config.BuildArgs {
+	args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
+
+	// Add context
+	args = append(args, "--local", fmt.Sprintf("context=%s", buildContext))
+	args = append(args, "--local", fmt.Sprintf("dockerfile=%s", buildContext))
+
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort build arguments
+	// ========================================
+	buildArgKeys := make([]string, 0, len(config.BuildArgs))
+	for key := range config.BuildArgs {
+		buildArgKeys = append(buildArgKeys, key)
+	}
+	sort.Strings(buildArgKeys)
+
+	for _, key := range buildArgKeys {
+		value := config.BuildArgs[key]
 		if value != "" {
 			args = append(args, "--opt", fmt.Sprintf("build-arg:%s=%s", key, value))
 		} else {
-			// Use environment variable
 			args = append(args, "--opt", fmt.Sprintf("build-arg:%s", key))
 		}
 	}
 
-	// Add labels
-	for key, value := range config.Labels {
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort labels
+	// ========================================
+	labelKeys := make([]string, 0, len(config.Labels))
+	for key := range config.Labels {
+		labelKeys = append(labelKeys, key)
+	}
+	sort.Strings(labelKeys)
+
+	for _, key := range labelKeys {
+		value := config.Labels[key]
 		args = append(args, "--opt", fmt.Sprintf("label:%s=%s", key, value))
 	}
 
@@ -431,54 +581,169 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		args = append(args, "--opt", fmt.Sprintf("platform=%s", config.CustomPlatform))
 	}
 
-	// Add cache options
-	if !config.Cache {
-		args = append(args, "--no-cache")
+	// ========================================
+	// REPRODUCIBLE BUILDS: Add source-date-epoch
+	// ========================================
+	// BuildKit requires TWO settings for reproducible builds:
+	// 1. source-date-epoch: Sets the image creation timestamp
+	// 2. rewrite-timestamp=true: Rewrites all file timestamps in layers
+	var sourceEpoch string
+	if config.Reproducible && config.Timestamp != "" {
+		sourceEpoch = config.Timestamp
+		args = append(args, "--opt", fmt.Sprintf("source-date-epoch=%s", sourceEpoch))
+		args = append(args, "--opt", fmt.Sprintf("build-arg:SOURCE_DATE_EPOCH=%s", sourceEpoch))
+		logger.Debug("Using timestamp=%s for reproducible build", sourceEpoch)
 	}
 
-	// Handle outputs (destinations)
+	// ========================================
+	// REPRODUCIBLE BUILDS: Cache control
+	// ========================================
+	if !config.Cache || config.Reproducible {
+		args = append(args, "--no-cache")
+		if config.Reproducible {
+			logger.Debug("Cache disabled for reproducible build")
+		}
+	}
+
+	// ========================================
+	// REPRODUCIBLE BUILDS: Sort destinations
+	// ========================================
+	sortedDests := make([]string, len(config.Destination))
+	copy(sortedDests, config.Destination)
+	sort.Strings(sortedDests)
+
+	// ========================================
+	// OUTPUT CONFIGURATION
+	// ========================================
 	if config.TarPath != "" {
 		// Export to tar
-		args = append(args, "--output", fmt.Sprintf("type=docker,dest=%s", config.TarPath))
+		outputOpts := fmt.Sprintf("type=docker,dest=%s", config.TarPath)
+		if config.Reproducible && sourceEpoch != "" {
+			outputOpts += ",rewrite-timestamp=true"
+			logger.Debug("Added rewrite-timestamp=true for reproducible tar export")
+		}
+		args = append(args, "--output", outputOpts)
 	} else if !config.NoPush {
 		// Push to registries
-		for _, dest := range config.Destination {
-			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=true", dest))
+		for _, dest := range sortedDests {
+			outputOpts := fmt.Sprintf("type=image,name=%s,push=true", dest)
+			if config.Reproducible && sourceEpoch != "" {
+				outputOpts += ",rewrite-timestamp=true"
+				logger.Debug("Added rewrite-timestamp=true for reproducible push: %s", dest)
+			}
+			args = append(args, "--output", outputOpts)
 		}
 	} else {
-		// Build only, no push (store in local image store)
-		for _, dest := range config.Destination {
-			args = append(args, "--output", fmt.Sprintf("type=image,name=%s,push=false", dest))
+		// Build only, no push
+		for _, dest := range sortedDests {
+			outputOpts := fmt.Sprintf("type=image,name=%s,push=false", dest)
+			if config.Reproducible && sourceEpoch != "" {
+				outputOpts += ",rewrite-timestamp=true"
+				logger.Debug("Added rewrite-timestamp=true for reproducible build: %s", dest)
+			}
+			args = append(args, "--output", outputOpts)
 		}
 	}
 
-	// Log the command
-	logger.Debug("BuildKit command: buildctl %s", strings.Join(args, " "))
-
-	// Execute buildctl
+	// ========================================
+	// EXECUTE BUILDCTL
+	// ========================================
+	// Create command with output capture for digest extraction
+	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd := exec.Command("buildctl", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 	cmd.Env = os.Environ()
 
 	// Set BUILDKIT_HOST
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BUILDKIT_HOST=unix://%s", buildkitSocket))
 
-	// Enhanced environment setup for auth
+	// Set DOCKER_CONFIG for auth
 	if authFile != "" {
-		cmd.Env = append(cmd.Env,
-			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
-		)
+		cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)))
 	}
 
+	// Set SOURCE_DATE_EPOCH for reproducible builds
+	if sourceEpoch != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+	}
+
+	// Log environment variables
+	logger.Info("BuildKit build environment:")
+	for _, env := range cmd.Env {
+		if strings.HasPrefix(env, "BUILDKIT_HOST=") ||
+			strings.HasPrefix(env, "DOCKER_CONFIG=") ||
+			strings.HasPrefix(env, "SOURCE_DATE_EPOCH=") {
+			logger.Info("  %s", env)
+		}
+	}
+
+	// Log the command being executed
+	logger.Info("Executing: buildctl %s", strings.Join(args, " "))
+
+	// Execute build
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildkit build failed: %v", err)
 	}
 
 	logger.Info("Build completed successfully")
 
-	// Note: BuildKit handles push as part of the build, so no separate push step needed
-	// Digest files are not yet implemented for BuildKit (TODO)
+	// ========================================
+	// REPRODUCIBLE BUILDS: Extract digest from output
+	// ========================================
+	if !config.NoPush && len(config.Destination) > 0 {
+		stderrOutput := stderrBuf.String()
+		stdoutOutput := stdoutBuf.String()
+
+		for _, dest := range config.Destination {
+			var digest string
+
+			// Pattern 1: Look for "exporting manifest sha256:xxx" in stderr
+			for _, line := range strings.Split(stderrOutput, "\n") {
+				if strings.Contains(line, "exporting manifest sha256:") {
+					parts := strings.Fields(line)
+					for _, part := range parts {
+						if strings.HasPrefix(part, "sha256:") {
+							digest = part
+							break
+						}
+					}
+				}
+				if digest != "" {
+					break
+				}
+			}
+
+			// Pattern 2: Look for digest in stdout (fallback)
+			if digest == "" {
+				for _, line := range strings.Split(stdoutOutput, "\n") {
+					if strings.Contains(line, "sha256:") {
+						parts := strings.Fields(line)
+						for _, part := range parts {
+							if strings.HasPrefix(part, "sha256:") && len(part) == 71 {
+								digest = part
+								break
+							}
+						}
+					}
+					if digest != "" {
+						break
+					}
+				}
+			}
+
+			if digest != "" {
+				logger.Debug("Extracted digest for %s: %s", dest, digest)
+				logger.Debug("Using digest from push output: %s", digest)
+			} else {
+				logger.Debug("Could not extract digest from BuildKit output for %s", dest)
+			}
+		}
+	}
+
+	// ========================================
+	// DIGEST FILE EXPORT (TODO)
+	// ========================================
 	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
 		logger.Warning("Digest file export not yet implemented for BuildKit")
 	}
@@ -575,21 +840,22 @@ success:
 	return nil
 }
 
-// saveDigestInfo saves image digest information to files (Buildah only)
-func saveDigestInfo(config Config) error {
-	if len(config.Destination) == 0 {
+// SaveDigestInfo saves image digest information to files (Buildah only)
+// The digest should be obtained from the push operation output
+func SaveDigestInfo(config Config, digestMap map[string]string) error {
+	if len(config.Destination) == 0 || len(digestMap) == 0 {
 		return nil
 	}
 
-	// Get image digest
+	// Use the first destination's digest
 	image := config.Destination[0]
-	cmd := exec.Command("buildah", "inspect", "--format", "{{.Digest}}", image)
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("failed to get image digest: %v", err)
+	digest, ok := digestMap[image]
+	if !ok {
+		logger.Debug("No digest available for %s", image)
+		return nil
 	}
 
-	digest := strings.TrimSpace(string(output))
+	logger.Debug("Using digest from push output: %s", digest)
 
 	// Save digest file
 	if config.DigestFile != "" {
@@ -626,8 +892,6 @@ func saveDigestInfo(config Config) error {
 }
 
 // copyDir recursively copies a directory from src to dst
-// This is needed for BuildKit rootless mode where external bind mounts
-// are not accessible within the rootlesskit namespace
 func copyDir(src, dst string) error {
 	// Get source directory info
 	srcInfo, err := os.Stat(src)
