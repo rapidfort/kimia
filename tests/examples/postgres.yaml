@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  generateName: kimia-postgres-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -12,15 +12,15 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
-        imagePullPolicy: Always
+      - name: kimia-bud
+        image: ghcr.io/rapidfort/kimia:1.0.15
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
-          - --context-sub-path=""
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
+          - --context=https://github.com/docker-library/postgres.git
+          - --context-sub-path=18/alpine3.22
+          - --dockerfile=Dockerfile
+          - --destination=postgres
           - --no-push
+          - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

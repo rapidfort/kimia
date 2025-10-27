@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  name: smithy-php-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -13,14 +13,13 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
-        imagePullPolicy: Always
+        image: ghcr.io/rapidfort/smithy:1.0.10
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
-          - --context-sub-path=""
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
-          - --no-push
+          - --context=https://github.com/docker-library/php.git
+          - --context-sub-path=8.4/trixie/apache
+          - --dockerfile=Dockerfile
+          - --destination=10.228.96.114:5000/myphp
+          - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

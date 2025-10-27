@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  name: smithy-practice-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -13,16 +13,15 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
-        imagePullPolicy: Always
+        image: ghcr.io/rapidfort/smithy:latest
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
-          - --context-sub-path=""
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
+          - --context=https://github.com/DHarshil/practice_app.git
+          - --dockerfile=Dockerfile
+          - --destination=practice
           - --no-push
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
+
