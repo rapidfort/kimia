@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smithy-huggingface-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: smithy
+        image: ghcr.io/rapidfort/smithy:1.0.10
+        args:
+          - --context=https://github.com/huggingface/text-generation-inference.git
+          - --dockerfile=Dockerfile
+          - --destination=10.228.96.114:5000/my-huggingface
+          - --insecure-registry=10.228.96.114:5000
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

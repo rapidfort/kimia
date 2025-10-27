@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaniko-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: smithy
+        image: gcr.io/kaniko-project/executor:debug
+        args:
+          - --context=git://github.com/rapidfort/smithy.git
+          - --dockerfile=Dockerfile
+          - --destination=10.228.96.114:5000/smithy
+          - --no-push

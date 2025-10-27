@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-%s" (include "smithy-builds.fullname" .) .Values.volumeNames.registriesConf }}
+data:
+  registries.conf: |
+{{ include "smithy-builds.registriesConf" . | indent 4 }}

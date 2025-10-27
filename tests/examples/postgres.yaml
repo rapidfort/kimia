@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: kimia-postgres-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-bud
+        image: ghcr.io/rapidfort/kimia:1.0.15
+        args:
+          - --context=https://github.com/docker-library/postgres.git
+          - --context-sub-path=18/alpine3.22
+          - --dockerfile=Dockerfile
+          - --destination=postgres
+          - --no-push
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

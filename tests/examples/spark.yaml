@@ -1,0 +1,77 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: registries-conf
+data:
+  registries.conf: |
+    unqualified-search-registries = ["10.228.96.114:5000","docker.io","quay.io"]
+
+    # Mark the private registry as insecure (HTTP or self-signed TLS)
+    [[registry]]
+    location = "10.228.96.114:5000"
+    insecure = true
+    blocked = false
+
+    [[registry]]
+    location = "docker.io"
+
+    [[registry]]
+    location = "quay.io"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: smithy-spark-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      volumes:
+        - name: registries-conf
+          configMap:
+            name: registries-conf 
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      initContainers:
+      - name: build-scala-java
+        image: ghcr.io/rapidfort/smithy:latest
+        args:
+          - --context=https://github.com/apache/spark-docker.git
+          - --context-sub-path=4.0.0/scala2.13-java21-ubuntu
+          - --dockerfile=Dockerfile
+          - --destination=10.228.96.114:5000/spark:4.0.0-scala2.13-java21-ubuntu
+          - -v
+          - --insecure-registry=10.228.96.114:5000
+        volumeMounts:
+        - mountPath: /home/smithy/.config/containers/registries.conf
+          subPath: registries.conf
+          name: registries-conf
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: ["ALL"]
+            add: ["SETUID","SETGID"]
+
+      containers:
+      - name: build-scala-python
+        image: ghcr.io/rapidfort/smithy:1.0.10
+        args:
+          - --context=https://github.com/apache/spark-docker.git \
+          - --context-sub-path=4.0.0/scala2.13-java21-python3-ubuntu \
+          - --dockerfile=Dockerfile \
+          - --destination=10.228.96.114:5000/myspark \
+          - --insecure-registry=10.228.96.114:5000
+          - -v
+        volumeMounts:
+        - mountPath: /home/smithy/.config/containers/registries.conf
+          subPath: registries.conf
+          name: registries-conf
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

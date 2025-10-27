@@ -1,0 +1,27 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: h2h-build-kaniko-python
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      volumes:
+        - name: registries-conf
+          configMap:
+            name: h2h-build-registries-conf
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:debug
+          imagePullPolicy: Always
+          volumeMounts:
+            - name: registries-conf
+              mountPath: /home/smithy/.config/containers/registries.conf
+              subPath: registries.conf
+          args:
+            - --context=git://github.com/docker-library/python.git
+            - --dockerfile=Dockerfile
+            - --destination=10.228.96.114:5000/python-kaniko:latest
+            - --context-sub-path=3.15-rc/alpine3.22
+            - --insecure-registry=10.228.96.114:5000

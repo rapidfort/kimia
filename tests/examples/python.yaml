@@ -1,0 +1,28 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: smithy-python-build
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: smithy
+        image: ghcr.io/rapidfort/smithy:latest
+        args:
+          - --context=https://github.com/docker-library/python.git
+          - --context-sub-path=3.14/alpine3.22
+          - --dockerfile=Dockerfile
+          - --destination=python
+          - --no-push
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]
