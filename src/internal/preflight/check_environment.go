@@ -6,9 +6,43 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
 	"github.com/rapidfort/kimia/internal/build"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
+
+// Environment represents the runtime environment
+type Environment int
+
+const (
+	EnvStandalone Environment = iota
+	EnvDocker
+	EnvKubernetes
+)
+
+// DetectEnvironment determines if running in Kubernetes, Docker, or standalone
+func DetectEnvironment() Environment {
+	// Check Kubernetes first (most specific)
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return EnvKubernetes
+	}
+
+	// Check Docker via .dockerenv file
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return EnvDocker
+	}
+
+	// Check Docker via cgroups
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		content := string(data)
+		if strings.Contains(content, "docker") ||
+			strings.Contains(content, "containerd") {
+			return EnvDocker
+		}
+	}
+
+	return EnvStandalone
+}
 
 // CheckEnvironment performs comprehensive environment check
 func CheckEnvironment() int {
@@ -34,7 +68,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	builder := build.DetectBuilder()
 	logger.Info("")
 	logger.Info("Kimia Environment Check (%s)", builder)
-	logger.Info("═══════════════════════════════════════════════════════════")
+	logger.Info("═══════════════════════════════════════════════════════")
 	logger.Info("")
 
 	allGood := true
@@ -42,11 +76,37 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	// Runtime Context
 	logger.Info("RUNTIME CONTEXT")
 	uid := os.Getuid()
-	isK8s := IsInKubernetes()
+
+	// CRITICAL: Kimia is rootless-only and does NOT support root mode
+	if uid == 0 {
+		logger.Error("  User ID:                 %d ✗", uid)
+		logger.Error("")
+		logger.Error("╔══════════════════════════════════════════════════════╗")
+		logger.Error("║              KIMIA DOES NOT SUPPORT ROOT             ║")
+		logger.Error("╠══════════════════════════════════════════════════════╣")
+		logger.Error("║ Kimia is designed to run as a non-root user with     ║")
+		logger.Error("║ capabilities, not as root.                           ║")
+		logger.Error("║                                                      ║")
+		logger.Error("║ Please run as non-root user (UID > 0)                ║")
+		logger.Error("║                                                      ║")
+		logger.Error("║ For Kubernetes, set:                                 ║")
+		logger.Error("║   securityContext:                                   ║")
+		logger.Error("║     runAsUser: 1000                                  ║")
+		logger.Error("║     runAsNonRoot: true                               ║")
+		logger.Error("║     allowPrivilegeEscalation: true                   ║")
+		logger.Error("║     capabilities:                                    ║")
+		logger.Error("║       drop: [ALL]                                    ║")
+		logger.Error("║       add: [SETUID, SETGID]                          ║")
+		logger.Error("╚══════════════════════════════════════════════════════╝")
+		logger.Error("")
+		return 1
+	}
+
+	env := DetectEnvironment()
 
 	checkmark := getCheckmark(true)
 	logger.Info("  User ID:                 %d %s", uid, checkmark)
-	logger.Info("  Environment:             %s", getEnvironment(isK8s))
+	logger.Info("  Environment:             %s", getEnvironment(env))
 	logger.Info("  Storage Driver:          %s", storageDriver)
 
 	if username := os.Getenv("USER"); username != "" {
@@ -78,12 +138,12 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		case "overlay":
 			hasMknod := caps.HasCapability("CAP_MKNOD")
 			hasDACOverride := caps.HasCapability("CAP_DAC_OVERRIDE")
-			
+
 			logger.Info("  CAP_MKNOD:               %s %s (required for overlay)",
 				getPresence(hasMknod), getCheckmark(hasMknod))
 			logger.Info("  CAP_DAC_OVERRIDE:        %s %s (required for overlay)",
 				getPresence(hasDACOverride), getCheckmark(hasDACOverride))
-			
+
 			if !hasMknod {
 				logger.Warning("  Warning: MKNOD capability missing (required for overlay storage)")
 				allGood = false
@@ -138,7 +198,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	logger.Info("")
 
-	// User Namespaces (always check - Kimia is rootless-only)
+	// User Namespaces (Kimia is rootless-only, always check)
 	logger.Info("USER NAMESPACES")
 	userns, err := CheckUserNamespaces()
 	if err != nil {
@@ -174,8 +234,8 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		hasRequiredCaps = caps.HasRequiredCapabilities()
 		// For overlay, also check MKNOD and DAC_OVERRIDE
 		if storageDriver == "overlay" {
-			hasRequiredCaps = hasRequiredCaps && 
-				caps.HasCapability("CAP_MKNOD") && 
+			hasRequiredCaps = hasRequiredCaps &&
+				caps.HasCapability("CAP_MKNOD") &&
 				caps.HasCapability("CAP_DAC_OVERRIDE")
 		}
 	}
@@ -199,7 +259,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	}
 	logger.Info("")
 
-	// BUILD MODE
+	// BUILD MODE (Kimia is rootless-only)
 	fmt.Println("BUILD MODE")
 
 	var buildModeAvailable bool
@@ -274,13 +334,13 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	// Verdict
 	logger.Info("VERDICT")
-	logger.Info("═══════════════════════════════════════════════════════════")
+	logger.Info("═══════════════════════════════════════════════════════")
 	logger.Info("")
 
 	if allGood {
 		logger.Info("✓ Environment is properly configured for building images")
 		logger.Info("✓ %s", buildModeMethod)
-		
+
 		if storage != nil && storage.OverlayAvailable {
 			logger.Info("✓ Overlay storage available for better performance")
 		} else {
@@ -332,51 +392,85 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		}
 
 		if needsHelp {
-			logger.Info("Kubernetes Configuration Required:")
-			logger.Info("")
-			logger.Info("Some Kubernetes clusters require unconfined seccomp and AppArmor profiles")
-			logger.Info("for user namespace operations to work properly.")
-			logger.Info("")
-			logger.Info("Complete Pod/Job specification:")
-			logger.Info("")
-			logger.Info("---")
-			logger.Info("apiVersion: batch/v1")
-			logger.Info("kind: Job")
-			logger.Info("metadata:")
-			logger.Info("  name: kimia-build")
-			logger.Info("spec:")
-			logger.Info("  template:")
-			logger.Info("    spec:")
-			logger.Info("      restartPolicy: Never")
-			logger.Info("      securityContext:")
-			logger.Info("        runAsUser: 1000")
-			logger.Info("        runAsGroup: 1000")
-			logger.Info("        fsGroup: 1000")
-			logger.Info("        seccompProfile:")
-			logger.Info("          type: Unconfined  # May be required for user namespaces")
-			logger.Info("      containers:")
-			logger.Info("      - name: kimia")
-			logger.Info("        image: ghcr.io/rapidfort/kimia:latest")
-			logger.Info("        securityContext:")
-			logger.Info("          runAsUser: 1000")
-			logger.Info("          runAsGroup: 1000")
-			logger.Info("          allowPrivilegeEscalation: true  # CRITICAL: Required!")
-			logger.Info("          appArmorProfile:")
-			logger.Info("            type: Unconfined  # May be required for user namespaces")
-			logger.Info("          seccompProfile:")
-			logger.Info("            type: Unconfined  # May be required for user namespaces")
-			logger.Info("          capabilities:")
-			logger.Info("            drop: [ALL]")
-			
-			if storageDriver == "overlay" {
-				logger.Info("            add: [SETUID, SETGID, MKNOD, DAC_OVERRIDE]")
-			} else {
-				logger.Info("            add: [SETUID, SETGID]")
+			// Provide environment-specific guidance
+			switch env {
+			case EnvKubernetes:
+				logger.Info("Kubernetes Configuration Required:")
+				logger.Info("")
+				logger.Info("Some Kubernetes clusters require unconfined seccomp and AppArmor profiles")
+				logger.Info("for user namespace operations to work properly.")
+				logger.Info("")
+				logger.Info("Complete Pod/Job specification:")
+				logger.Info("")
+				logger.Info("---")
+				logger.Info("apiVersion: batch/v1")
+				logger.Info("kind: Job")
+				logger.Info("metadata:")
+				logger.Info("  name: kimia-build")
+				logger.Info("spec:")
+				logger.Info("  template:")
+				logger.Info("    spec:")
+				logger.Info("      restartPolicy: Never")
+				logger.Info("      securityContext:")
+				logger.Info("        runAsUser: 1000")
+				logger.Info("        runAsGroup: 1000")
+				logger.Info("        fsGroup: 1000")
+				logger.Info("        seccompProfile:")
+				logger.Info("          type: Unconfined  # May be required for user namespaces")
+				logger.Info("      containers:")
+				logger.Info("      - name: kimia")
+				logger.Info("        image: ghcr.io/rapidfort/kimia:latest")
+				logger.Info("        securityContext:")
+				logger.Info("          runAsUser: 1000")
+				logger.Info("          runAsGroup: 1000")
+				logger.Info("          allowPrivilegeEscalation: true  # CRITICAL: Required!")
+				logger.Info("          appArmorProfile:")
+				logger.Info("            type: Unconfined  # May be required for user namespaces")
+				logger.Info("          seccompProfile:")
+				logger.Info("            type: Unconfined  # May be required for user namespaces")
+				logger.Info("          capabilities:")
+				logger.Info("            drop: [ALL]")
+
+				if storageDriver == "overlay" {
+					logger.Info("            add: [SETUID, SETGID, MKNOD, DAC_OVERRIDE]")
+				} else {
+					logger.Info("            add: [SETUID, SETGID]")
+				}
+
+			case EnvDocker:
+				logger.Info("Docker Configuration Required:")
+				logger.Info("")
+				logger.Info("Run Kimia with the following Docker options:")
+				logger.Info("")
+				if storageDriver == "overlay" {
+					logger.Info("  docker run --cap-add SETUID --cap-add SETGID --cap-add MKNOD \\")
+					logger.Info("             --user 1000:1000 \\")
+					logger.Info("             ghcr.io/rapidfort/kimia:latest")
+				} else {
+					logger.Info("  docker run --cap-add SETUID --cap-add SETGID \\")
+					logger.Info("             --user 1000:1000 \\")
+					logger.Info("             ghcr.io/rapidfort/kimia:latest")
+				}
+				logger.Info("")
+				logger.Info("If capabilities don't work, try with SETUID binaries:")
+				logger.Info("  docker run --security-opt seccomp=unconfined \\")
+				logger.Info("             --user 1000:1000 \\")
+				logger.Info("             ghcr.io/rapidfort/kimia:latest")
+
+			case EnvStandalone:
+				logger.Info("Standalone/VM Configuration Required:")
+				logger.Info("")
+				logger.Info("Ensure the following are available:")
+				logger.Info("  1. User namespaces enabled in kernel")
+				logger.Info("  2. Subuid/subgid mappings configured in /etc/subuid and /etc/subgid")
+				logger.Info("  3. Either:")
+				logger.Info("     - Run with capabilities (CAP_SETUID, CAP_SETGID)")
+				logger.Info("     - Have newuidmap/newgidmap SETUID binaries available")
 			}
-			
+
 			logger.Info("")
 			logger.Info("NOTE: seccompProfile and appArmorProfile set to Unconfined may be required")
-			logger.Info("      depending on your cluster's security policies.")
+			logger.Info("      depending on your environment's security policies.")
 			logger.Info("")
 
 			// Provide specific guidance based on what's wrong
@@ -423,13 +517,24 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 				logger.Error("  - Consider adding seccompProfile: Unconfined if still failing")
 				logger.Error("")
 			}
-			
+
 			logger.Info("Troubleshooting Steps:")
-			logger.Info("  1. Apply the YAML configuration above")
-			logger.Info("  2. Check pod status: kubectl get pod <pod-name>")
-			logger.Info("  3. Describe pod: kubectl describe pod <pod-name>")
-			logger.Info("  4. View logs: kubectl logs <pod-name>")
-			logger.Info("  5. Run preflight check: kubectl exec <pod-name> -- kimia check-environment")
+			if env == EnvKubernetes {
+				logger.Info("  1. Apply the YAML configuration above")
+				logger.Info("  2. Check pod status: kubectl get pod <pod-name>")
+				logger.Info("  3. Describe pod: kubectl describe pod <pod-name>")
+				logger.Info("  4. View logs: kubectl logs <pod-name>")
+				logger.Info("  5. Run preflight check: kubectl exec <pod-name> -- kimia check-environment")
+			} else if env == EnvDocker {
+				logger.Info("  1. Run with the recommended Docker options above")
+				logger.Info("  2. Check container status: docker ps")
+				logger.Info("  3. View logs: docker logs <container-name>")
+				logger.Info("  4. Run preflight check: docker exec <container-name> kimia check-environment")
+			} else {
+				logger.Info("  1. Verify user namespace support: unshare --user --pid --map-root-user echo OK")
+				logger.Info("  2. Check subuid/subgid: cat /etc/subuid /etc/subgid")
+				logger.Info("  3. Run preflight check: kimia check-environment")
+			}
 			logger.Info("")
 		}
 
@@ -466,11 +571,17 @@ func getSuccess(success bool) string {
 	return "Failed"
 }
 
-func getEnvironment(isK8s bool) string {
-	if isK8s {
+func getEnvironment(env Environment) string {
+	switch env {
+	case EnvKubernetes:
 		return "Kubernetes"
+	case EnvDocker:
+		return "Docker"
+	case EnvStandalone:
+		return "Standalone"
+	default:
+		return "Unknown"
 	}
-	return "Standalone"
 }
 
 func checkDependency(name, path string) {

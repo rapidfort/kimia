@@ -32,7 +32,7 @@ func CheckStorageDrivers(hasCaps bool) (*StorageCheck, error) {
 	logger.Debug("Checking storage driver availability")
 
 	result := &StorageCheck{
-		VFSAvailable: true, // VFS is always available
+		VFSAvailable:    true, // VFS is always available
 		NativeAvailable: true, // Native (BuildKit) is always available
 	}
 
@@ -51,7 +51,7 @@ func CheckStorageDrivers(hasCaps bool) (*StorageCheck, error) {
 // TestOverlayMount performs an actual overlay mount test
 // Note: In rootless mode, this must be called from within a user namespace
 // (e.g., via buildah unshare or similar) to have mount capability
-func TestOverlayMount(isRoot bool) *OverlayTestResult {
+func TestOverlayMount() *OverlayTestResult {
 	logger.Debug("Testing overlay mount capability")
 
 	startTime := time.Now()
@@ -94,7 +94,7 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 		return result
 	}
 
-	// Attempt native overlay mount (works in both root and rootless with user namespace)
+	// Attempt native overlay mount (works in rootless mode with user namespace)
 	logger.Debug("Testing native kernel overlay mount")
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
 	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, mergedDir)
@@ -103,10 +103,8 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 		result.ErrorMessage = fmt.Sprintf("Native overlay mount failed: %v\nOutput: %s", err, string(output))
 		result.Duration = time.Since(startTime)
 
-		// In rootless mode, provide helpful error message
-		if !isRoot {
-			result.ErrorMessage += "\nNote: Rootless overlay requires user namespace. Ensure SETUID/SETGID capabilities are available."
-		}
+		// Kimia is rootless-only, provide helpful error message
+		result.ErrorMessage += "\nNote: Rootless overlay requires user namespace. Ensure SETUID/SETGID capabilities are available."
 		return result
 	}
 
@@ -150,7 +148,7 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 
 // unmountOverlay unmounts an overlay filesystem
 func unmountOverlay(mountPoint string) error {
-	// Use umount for native kernel overlay (both root and rootless)
+	// Use umount for native kernel overlay in rootless mode
 	cmd := exec.Command("umount", mountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))
@@ -178,7 +176,8 @@ func cleanupOverlayTest(testBase string) {
 }
 
 // ValidateStorageDriver validates if the requested storage driver is available
-func ValidateStorageDriver(driver string, isRoot bool, hasCaps bool) error {
+// Kimia is rootless-only, so this function assumes non-root user
+func ValidateStorageDriver(driver string, hasCaps bool) error {
 	driver = strings.ToLower(driver)
 
 	logger.Debug("Validating storage driver: %s", driver)
@@ -197,7 +196,7 @@ func ValidateStorageDriver(driver string, isRoot bool, hasCaps bool) error {
 		}
 
 		if !check.OverlayAvailable {
-			if !isRoot && !hasCaps {
+			if !hasCaps {
 				return fmt.Errorf("overlay driver not available: missing SETUID/SETGID capabilities for user namespaces")
 			}
 			return fmt.Errorf("overlay driver not available: unknown reason")

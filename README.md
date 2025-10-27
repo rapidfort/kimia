@@ -125,6 +125,10 @@ spec:
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
+          appArmorProfile:
+            type: Unconfined
+          seccompProfile:
+            type: Unconfined
         volumeMounts:
         - name: docker-config
           mountPath: /home/kimia/.docker
