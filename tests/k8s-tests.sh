@@ -597,7 +597,20 @@ run_rootless_tests() {
         \"--verbosity=debug\"]" \
         "buildargs-push"
 
-    # Test 7: Reproducible builds
+   # Test 7: Build with args context-sub-path push to registry
+    run_k8s_test \
+        "Build with Arguments (Push)" \
+        "$driver" \
+        "[\"--context=https://github.com/docker-library/postgres.git\", \
+        \"--context-sub-path=18/alpine3.22\", \
+        \"--dockerfile=Dockerfile\", \
+        \"--destination=${REGISTRY}/${BUILDER}-k8s-postgres-buildargs-${driver}:latest\", \
+        \"--storage-driver=${storage_flag}\", \
+        \"--insecure\", \
+        \"--verbosity=debug\"]" \
+        "buildargs-push"
+
+    # Test 8: Reproducible builds
     local test_image="${REGISTRY}/${BUILDER}-k8s-reproducible-test-${driver}"
     
     run_k8s_test \
@@ -654,9 +667,9 @@ run_rootless_tests() {
 
     echo ""
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo -e "\${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
-    echo -e "\${CYAN}  Build #1 digest: ${digest1} ${NC}"
-    echo -e "\${CYAN}  Build #2 digest: ${digest2} ${NC}"
+    echo -e "${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
+    echo -e "${CYAN}  Build #1 digest: ${digest1} ${NC}"
+    echo -e "${CYAN}  Build #2 digest: ${digest2} ${NC}"
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
     echo ""
 }

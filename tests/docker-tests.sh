@@ -379,7 +379,22 @@ run_rootless_tests() {
         --insecure \
         --verbosity=debug
 
-    # Test 6: Reproducible builds - build twice and compare digests
+    # Test 6: Build from git with build args - postgres
+    run_test \
+        "git-postgres-args" \
+        "rootless" \
+        "$driver" \
+        $BASE_CMD \
+        --context=https://github.com/docker-library/postgres.git \
+        --context-sub-path=18/alpine3.22 \
+        --dockerfile=Dockerfile \
+        --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-postgres-${driver}:latest \
+        --build-arg=PG_MAJOR=16 \
+        --storage-driver=${storage_flag} \
+        --insecure \
+        --verbosity=debug
+
+    # Test 7: Reproducible builds - build twice and compare digests
     local test_image="${REGISTRY}/${BUILDER}-reproducible-test-${driver}"
     
     # First build
