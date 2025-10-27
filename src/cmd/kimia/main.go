@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rapidfort/kimia/internal/auth"
@@ -120,6 +121,19 @@ func main() {
 		logger.Fatal("Failed to prepare build context: %v", err)
 	}
 	defer ctx.Cleanup()
+
+	// Apply context-sub-path if specified
+	if config.SubContext != "" {
+		subPath := filepath.Join(ctx.Path, config.SubContext)
+		
+		// Verify the subdirectory exists
+		if _, err := os.Stat(subPath); err != nil {
+			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
+		}
+		
+		logger.Info("Using context sub-path: %s", config.SubContext)
+		ctx.Path = subPath
+	}
 
 	// Setup authentication
 	authSetup := auth.SetupConfig{
