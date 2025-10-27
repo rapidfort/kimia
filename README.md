@@ -53,6 +53,7 @@ UID 100001           ───►  UID 2
      ...                        ...
 UID 165535           ───►  UID 65535
 ```
+![Kimia Architecture](./assets/kimia_architecture.svg)
 
 **Even if a container escapes, it only has unprivileged user access on the host.**
 
