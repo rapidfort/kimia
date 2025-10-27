@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kimia-nginx-build
+  name: smithy-nginx-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -12,10 +12,12 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia
-        image: ghcr.io/rapidfort/kimia:latest
+      - name: smithy
+        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/nginx/docker-nginx.git
+          - --context-sub-path=""
           - --dockerfile=mainline/alpine/Dockerfile
           - --destination=mynginx
           - --no-push
@@ -24,4 +26,3 @@ spec:
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
-
