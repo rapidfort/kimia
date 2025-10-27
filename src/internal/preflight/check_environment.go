@@ -146,11 +146,11 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 			if !hasMknod {
 				logger.Warning("  Warning: MKNOD capability missing (required for overlay storage)")
-				allGood = false
+				// Note: Don't set allGood=false yet - SETUID binaries may still work
 			}
 			if !hasDACOverride {
 				logger.Warning("  Warning: DAC_OVERRIDE capability missing (required for overlay storage)")
-				allGood = false
+				// Note: Don't set allGood=false yet - SETUID binaries may still work
 			}
 		case "vfs", "native":
 			logger.Info("  CAP_MKNOD:               Not required (%s storage)", storageDriver)
@@ -268,9 +268,11 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	// Kimia only supports rootless mode
 	hasRequiredCaps = caps != nil && caps.HasRequiredCapabilities()
 
-	// For overlay, also need MKNOD and DAC_OVERRIDE
+	// Note: For overlay storage with capabilities mode, we also need MKNOD and DAC_OVERRIDE
+	// However, if capabilities are missing, SETUID binaries may still work with native/vfs storage
+	hasOverlayCaps := false
 	if storageDriver == "overlay" && hasRequiredCaps {
-		hasRequiredCaps = caps.HasCapability("CAP_MKNOD") && caps.HasCapability("CAP_DAC_OVERRIDE")
+		hasOverlayCaps = caps.HasCapability("CAP_MKNOD") && caps.HasCapability("CAP_DAC_OVERRIDE")
 	}
 
 	setuidBins, _ = CheckSetuidBinaries()
@@ -279,12 +281,25 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	usernsOK := userns != nil && userns.IsUserNamespaceReady()
 
+	// Determine if building is possible:
+	// 1. With capabilities (including overlay caps if overlay storage is requested)
+	// 2. With SETUID binaries (can work even without overlay caps, using native/vfs)
 	if hasRequiredCaps && usernsOK {
-		buildModeAvailable = true
-		buildModeMethod = "Rootless (via capabilities)"
+		if storageDriver == "overlay" && !hasOverlayCaps {
+			// Has basic caps but not overlay caps - will fall back to native/vfs
+			buildModeAvailable = true
+			buildModeMethod = "Rootless (via capabilities, native storage)"
+		} else {
+			buildModeAvailable = true
+			buildModeMethod = "Rootless (via capabilities)"
+		}
 	} else if hasSetuidBins && setuidCanWork && usernsOK {
 		buildModeAvailable = true
-		buildModeMethod = "Rootless (via SETUID binaries)"
+		if storageDriver == "overlay" {
+			buildModeMethod = "Rootless (via SETUID binaries, native storage)"
+		} else {
+			buildModeMethod = "Rootless (via SETUID binaries)"
+		}
 		fmt.Printf("    newuidmap:             %s\n", setuidBins.NewuidmapPath)
 		fmt.Printf("    newgidmap:             %s\n", setuidBins.NewgidmapPath)
 	} else {
