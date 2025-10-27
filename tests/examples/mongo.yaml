@@ -13,7 +13,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia-bud:latest
         args:
           - --context=https://github.com/docker-library/mongo.git
           - --context-sub-path=8.0

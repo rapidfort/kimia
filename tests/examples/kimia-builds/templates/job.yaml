@@ -1,4 +1,4 @@
-{{- $cmName := printf "%s-%s" (include "smithy-builds.fullname" .) .Values.volumeNames.registriesConf -}}
+{{- $cmName := printf "%s-%s" (include "kimia-builds.fullname" .) .Values.volumeNames.registriesConf -}}
 
 {{/* Collect builds from values + every file in examples/builds/*.yaml */}}
 {{- $all := list -}}
@@ -34,12 +34,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ printf "%s-%s" (include "smithy-builds.fullname" $) $b.name | trunc 63 | trimSuffix "-" }}
+  name: {{ printf "%s-%s" (include "kimia-builds.fullname" $) $b.name | trunc 63 | trimSuffix "-" }}
   labels:
-    app.kubernetes.io/name: smithy-build
-    app.kubernetes.io/instance: {{ include "smithy-builds.fullname" $ }}
-    app.kubernetes.io/part-of: smithy-builds
-    smithy-build/name: {{ $b.name }}
+    app.kubernetes.io/name: kimia-build
+    app.kubernetes.io/instance: {{ include "kimia-builds.fullname" $ }}
+    app.kubernetes.io/part-of: kimia-builds
+    kimia-build/name: {{ $b.name }}
     {{- with $b.labels }}
 {{ toYaml . | indent 4 }}
     {{- end }}
@@ -48,6 +48,7 @@ metadata:
 {{ toYaml . | indent 4 }}
   {{- end }}
 spec:
+  backoffLimit: {{ default 1 $.Values.jobDefaults.ttlSecondsAfterFinished }}
   ttlSecondsAfterFinished: {{ default 60 $.Values.jobDefaults.ttlSecondsAfterFinished }}
   template:
     spec:
@@ -63,8 +64,8 @@ spec:
       initContainers:
         {{- range $step := $b.init }}
         - name: {{ printf "build-%s" $step.name }}
-          image: {{ printf "%s:%s" $.Values.global.smithy.image (default $.Values.global.smithy.tag $step.smithyTag) }}
-          imagePullPolicy: {{ $.Values.global.smithy.pullPolicy }}
+          image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $step.kimiaTag) }}
+          imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
           args:
             - --context={{ $step.args.context }}
             - --dockerfile={{ $step.args.dockerfile | default "Dockerfile" }}
@@ -89,7 +90,7 @@ spec:
             {{- end }}
           volumeMounts:
             - name: {{ $.Values.volumeNames.registriesConf }}
-              mountPath: /home/smithy/.config/containers/registries.conf
+              mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
           securityContext:
 {{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}
@@ -98,8 +99,8 @@ spec:
 
       containers:
         - name: {{ printf "build-%s" (default "main" $b.main.name) }}
-          image: {{ printf "%s:%s" $.Values.global.smithy.image (default $.Values.global.smithy.tag $b.main.smithyTag) }}
-          imagePullPolicy: {{ $.Values.global.smithy.pullPolicy }}
+          image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $b.main.kimiaTag) }}
+          imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
           args:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
@@ -124,7 +125,7 @@ spec:
             {{- end }}
           volumeMounts:
             - name: {{ $.Values.volumeNames.registriesConf }}
-              mountPath: /home/smithy/.config/containers/registries.conf
+              mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
           securityContext:
 {{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}

@@ -1,4 +1,4 @@
-{{- define "smithy-builds.fullname" -}}
+{{- define "kimia-builds.fullname" -}}
 {{- if .Values.nameOverride -}}
 {{ .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- else -}}
@@ -6,7 +6,7 @@
 {{- end -}}
 {{- end }}
 
-{{- define "smithy-builds.registriesConf" -}}
+{{- define "kimia-builds.registriesConf" -}}
 unqualified-search-registries = [{{- range $i, $r := .Values.global.registries.unqualifiedSearch -}}{{ if gt $i 0 }}, {{ end }}"{{ $r }}"{{- end -}}]
 
 {{- range .Values.global.registries.entries }}

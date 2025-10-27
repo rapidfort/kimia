@@ -1,0 +1,41 @@
+global:
+  kimia:
+    image: ghcr.io/rapidfort/kimia-bud
+    tag: "1.0.16"        # default kimia tag (override per-step if needed)
+    pullPolicy: Always
+
+  registries:
+    unqualifiedSearch:
+      - "10.228.96.114:5000"
+      - "docker.io"
+      - "quay.io"
+    entries:
+      - location: "10.228.96.114:5000"
+        insecure: true
+        blocked: false
+      - location: "docker.io"
+      - location: "quay.io"
+
+jobDefaults:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  restartPolicy: Never
+  # Pod-level security defaults
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  # Container-level security defaults
+  containerSecurityContext:
+    allowPrivilegeEscalation: true
+    capabilities:
+      drop: ["ALL"]
+      add: ["SETUID","SETGID"]
+
+volumeNames:
+  registriesConf: registries-conf
+
+# --- Define one or many build jobs in this array ---
+# Each item produces one Kubernetes Job.
+builds: []

@@ -13,7 +13,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: kimia-bud
-        image: ghcr.io/rapidfort/kimia:1.0.15
+        image: ghcr.io/rapidfort/kimia-bud:1.0.15
         args:
           - --context=https://github.com/docker-library/postgres.git
           - --context-sub-path=18/alpine3.22

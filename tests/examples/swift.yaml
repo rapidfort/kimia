@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-swift-build
+  generateName: kimia-swift-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -13,7 +14,8 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia-bud:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/swiftlang/swift-docker.git
           - --dockerfile=nightly-5.10/ubuntu/22.04/Dockerfile

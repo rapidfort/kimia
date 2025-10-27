@@ -8,4 +8,3 @@ builds:
         destination: "10.228.96.114:5000/swift"
         insecureRegistry: "10.228.96.114:5000"
         verbose: true
-        extraArgs: ["--cache=true", "--no-push", "--reproducible"]

@@ -15,7 +15,7 @@ spec:
       - name: kimia
         image: ghcr.io/rapidfort/kimia-bud:1.0.15
         args:
-          - --context=https://github.com/rust-lang/docker-rust.git
+          - --context=git://github.com/rust-lang/docker-rust.git
           - --dockerfile=stable/alpine3.21/Dockerfile
           - --destination=rust
           - --no-push

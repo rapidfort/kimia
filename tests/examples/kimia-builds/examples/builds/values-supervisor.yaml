@@ -2,7 +2,7 @@ builds:
   - name: supervisor
     init:
       - name: ubuntu
-        smithyTag: "latest"
+        kimiaTag: "latest"
         args:
           context: "https://github.com/dockerfile/ubuntu.git"
           dockerfile: "Dockerfile"
@@ -11,7 +11,7 @@ builds:
           verbose: true
     main:
       name: supervisor
-      smithyTag: "1.0.10"
+      kimiaTag: "latest"
       args:
         context: "https://github.com/dockerfile/supervisor.git"
         dockerfile: "Dockerfile"
