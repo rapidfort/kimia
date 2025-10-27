@@ -269,7 +269,11 @@ run_rootless_tests() {
     # Get the actual storage flag value
     local storage_flag=$(get_storage_flag "$driver")
 
-    print_section "ROOTLESS MODE TESTS (UID 1000) - ${BUILDER^^} with ${driver^^} STORAGE"
+    # Convert to uppercase for display (POSIX compatible)
+    local builder_upper=$(echo "$BUILDER" | awk '{print toupper($0)}')
+    local driver_upper=$(echo "$driver" | awk '{print toupper($0)}')
+
+    print_section "ROOTLESS MODE TESTS (UID 1000) - ${builder_upper} with ${driver_upper} STORAGE"
 
     if [ "$driver" = "overlay" ]; then
         echo -e "${CYAN}Note: Overlay storage uses native kernel overlayfs (via user namespaces)${NC}"
