@@ -1,5 +1,5 @@
 #!/bin/bash
-# Smithy Docker Test Suite
+# Kimia Docker Test Suite
 # Tests rootless mode (UID 1000) only
 # Supports BuildKit (default) and Buildah (legacy) images
 # Tests storage drivers based on builder:
@@ -20,8 +20,8 @@ else
     REGISTRY="${RF_APP_HOST}:5000"
 fi
 
-SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
-RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
+KIMIA_IMAGE=${KIMIA_IMAGE:-"${REGISTRY}/rapidfort/kimia:latest"}
+RF_KIMIA_TMPDIR=${RF_KIMIA_TMPDIR:-"/tmp"}
 BUILDER=${BUILDER:-"buildkit"}  # buildkit or buildah
 STORAGE_DRIVER="both"
 CLEANUP_AFTER=false
@@ -55,7 +55,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --image)
-            SMITHY_IMAGE="$2"
+            KIMIA_IMAGE="$2"
             shift 2
             ;;
         --builder)
@@ -145,7 +145,7 @@ get_primary_driver() {
     fi
 }
 
-# Get the actual storage flag value for smithy
+# Get the actual storage flag value for kimia
 get_storage_flag() {
     local driver="$1"
 
@@ -297,7 +297,7 @@ run_rootless_tests() {
   
     # Add Docker Hub credentials based on detected method
     if [ "$DOCKER_AUTH_METHOD" = "config" ]; then
-        BASE_CMD="$BASE_CMD -v ~/.docker/config.json:/home/smithy/.docker/config.json:ro"
+        BASE_CMD="$BASE_CMD -v ~/.docker/config.json:/home/kimia/.docker/config.json:ro"
     elif [ "$DOCKER_AUTH_METHOD" = "env" ]; then
         BASE_CMD="$BASE_CMD -e DOCKER_USERNAME=${DOCKER_USERNAME}"
         BASE_CMD="$BASE_CMD -e DOCKER_PASSWORD=${DOCKER_PASSWORD}"
@@ -310,7 +310,7 @@ run_rootless_tests() {
 
         # For Buildah overlay: mount tmpfs to rootless storage path to avoid overlay-on-overlay
         if [ "$BUILDER" = "buildah" ]; then
-            BASE_CMD="$BASE_CMD --tmpfs /home/smithy/.local/share/containers:rw,exec,uid=1000,gid=1000"
+            BASE_CMD="$BASE_CMD --tmpfs /home/kimia/.local/share/containers:rw,exec,uid=1000,gid=1000"
         fi
     fi
 
@@ -322,7 +322,7 @@ run_rootless_tests() {
         BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
     fi
 
-    BASE_CMD="$BASE_CMD ${SMITHY_IMAGE}"
+    BASE_CMD="$BASE_CMD ${KIMIA_IMAGE}"
 
     # Test 1: Version check
     run_test \
@@ -389,7 +389,7 @@ run_rootless_tests() {
         "rootless" \
         "$driver" \
         $BASE_CMD \
-        --context=https://github.com/rapidfort/smithy.git \
+        --context=https://github.com/rapidfort/kimia.git \
         --git-branch=main \
         --dockerfile=tests/examples/Dockerfile \
         --destination=${test_image}:v1 \
@@ -420,7 +420,7 @@ run_rootless_tests() {
         "rootless" \
         "$driver" \
         $BASE_CMD \
-        --context=https://github.com/rapidfort/smithy.git \
+        --context=https://github.com/rapidfort/kimia.git \
         --git-branch=main \
         --dockerfile=tests/examples/Dockerfile \
         --destination=${test_image}:v1 \
@@ -508,7 +508,7 @@ main() {
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
-    echo -e "  Image:          ${SMITHY_IMAGE}"
+    echo -e "  Image:          ${KIMIA_IMAGE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
     echo -e "  Cleanup:        ${CLEANUP_AFTER}"
     echo -e "  Suites Dir:     ${SUITES_DIR}"

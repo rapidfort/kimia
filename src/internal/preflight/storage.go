@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // StorageCheck holds the result of storage driver validation
@@ -60,7 +60,7 @@ func TestOverlayMount(isRoot bool) *OverlayTestResult {
 	startTime := time.Now()
 
 	// Create temporary test directory
-	testBase := filepath.Join("/tmp", fmt.Sprintf("smithy-overlay-test-%d", time.Now().UnixNano()))
+	testBase := filepath.Join("/tmp", fmt.Sprintf("kimia-overlay-test-%d", time.Now().UnixNano()))
 
 	result := &OverlayTestResult{
 		TestPath: testBase,

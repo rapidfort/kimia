@@ -1,11 +1,11 @@
-# Smithy - Kubernetes-Native OCI Image Builder
+# Kimia - Kubernetes-Native OCI Image Builder
 ### Daemonless. Rootless. Privilege-free. Fully OCI-compliant.
 <div align="center">
 <p>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <a href="https://kubernetes.io/"><img src="https://img.shields.io/badge/Kubernetes-1.21%2B-326CE5?logo=kubernetes" alt="Kubernetes"></a>
   <a href="https://golang.org/"><img src="https://img.shields.io/badge/Go-1.25%2B-00ADD8?logo=go" alt="Go Version"></a>
-  <a href="https://ghcr.io/rapidfort/smithy"><img src="https://img.shields.io/badge/Registry-ghcr.io-blue" alt="Container Registry"></a>
+  <a href="https://ghcr.io/rapidfort/kimia"><img src="https://img.shields.io/badge/Registry-ghcr.io-blue" alt="Container Registry"></a>
 </p>
 
 **[Quick Start](#quick-start)** • **[Documentation](#command-line-reference)** • **[Examples](#examples)** • **[Contributing](#contributing)**
@@ -17,12 +17,12 @@
 ## Table of Contents
 
 - [Overview](#overview)
-  - [Why Smithy?](#why-smithy)
+  - [Why Kimia?](#why-kimia)
   - [Architecture](#architecture)
 - [Comparison with Kaniko](#comparison-with-kaniko)
   - [Key Security Advantages](#key-security-advantages)
   - [Compatibility Advantages](#compatibility-advantages)
-  - [When to Choose Smithy](#when-to-choose-smithy)
+  - [When to Choose Kimia](#when-to-choose-kimia)
   - [Migration Path](#migration-path)
 - [Quick Start](#quick-start)
   - [Prerequisites](#prerequisites)
@@ -93,9 +93,9 @@
 
 ## Overview
 
-Smithy is a **Kubernetes-native, OCI-compliant container builder** designed for secure, daemonless builds in cloud environments. Built on [Buildah](https://buildah.io/), Smithy provides a safer alternative to traditional Docker-based builders and addresses key security limitations found in other solutions.
+Kimia is a **Kubernetes-native, OCI-compliant container builder** designed for secure, daemonless builds in cloud environments. Built on [Buildah](https://buildah.io/), Kimia provides a safer alternative to traditional Docker-based builders and addresses key security limitations found in other solutions.
 
-### Why Smithy?
+### Why Kimia?
 
 **Security First**
 - **Rootless by Design** - Runs as non-root user (UID 1000)
@@ -117,14 +117,14 @@ Smithy is a **Kubernetes-native, OCI-compliant container builder** designed for 
 
 ### Architecture
 
-![Smithy Architecture](./assets/smithy_architecture.svg)
+![Kimia Architecture](./assets/kimia_architecture.svg)
 
-Smithy uses Linux user namespaces to provide true rootless operation:
+Kimia uses Linux user namespaces to provide true rootless operation:
 
 ```
 Host System (Real)          User Namespace (Mapped)
 ─────────────────          ───────────────────────
-UID 1000 (smithy)    ───►  UID 0 (appears as root)
+UID 1000 (kimia)    ───►  UID 0 (appears as root)
 UID 100000           ───►  UID 1
 UID 100001           ───►  UID 2
      ...                        ...
@@ -137,21 +137,21 @@ Even if a container escapes, it only has unprivileged user access on the host.
 
 ## Comparison with Kaniko
 
-| Feature | Smithy | Kaniko | Advantage |
+| Feature | Kimia | Kaniko | Advantage |
 |---------|--------|--------|-----------|
-| **User Context** | Non-root (UID 1000) | Root (UID 0) | ✅ Smithy: Reduced privilege escalation risk |
-| **Capabilities Required** | SETUID, SETGID only | None | ⚖️ Smithy: Explicit minimal caps for user namespaces |
+| **User Context** | Non-root (UID 1000) | Root (UID 0) | ✅ Kimia: Reduced privilege escalation risk |
+| **Capabilities Required** | SETUID, SETGID only | None | ⚖️ Kimia: Explicit minimal caps for user namespaces |
 | **Docker Daemon** | Not required | Not required | ✅ Equal: No daemon dependencies |
 | **Privileged Mode** | Not required | Not required | ✅ Equal: No privileged containers |
-| **User Namespaces** | Required & utilized | Not used | ✅ Smithy: Additional isolation layer |
-| **Complex Dockerfiles** | Full support | Limited (chown issues) | ✅ Smithy: Better compatibility with ownership changes |
-| **Storage Driver** | VFS (isolated) | Various | ✅ Smithy: Consistent, secure, portable |
+| **User Namespaces** | Required & utilized | Not used | ✅ Kimia: Additional isolation layer |
+| **Complex Dockerfiles** | Full support | Limited (chown issues) | ✅ Kimia: Better compatibility with ownership changes |
+| **Storage Driver** | VFS (isolated) | Various | ✅ Kimia: Consistent, secure, portable |
 | **Build Cache** | Layer caching | Layer caching | ✅ Equal: Efficient rebuilds |
 | **Registry Authentication** | Multiple methods | Multiple methods | ✅ Equal: Flexible auth options |
 | **Multi-stage Builds** | Full support | Full support | ✅ Equal: Modern Dockerfile features |
 | **Git Integration** | Built-in (via args) | Built-in (via executor) | ✅ Equal: Both support Git directly |
-| **Attack Surface** | Minimal (rootless) | Larger (root) | ✅ Smithy: Significantly reduced |
-| **Pod Security Standards** | Restricted-compliant* | Baseline only | ✅ Smithy: Higher security standard |
+| **Attack Surface** | Minimal (rootless) | Larger (root) | ✅ Kimia: Significantly reduced |
+| **Pod Security Standards** | Restricted-compliant* | Baseline only | ✅ Kimia: Higher security standard |
 | **Build Performance** | Fast (native) | Fast (native) | ✅ Equal: Both performant |
 | **Cross-platform Builds** | ✅ Supported | ✅ Supported | ✅ Equal: Multi-arch capable |
 | **Secrets Handling** | Buildah secrets | Kaniko secrets | ✅ Equal: Secure secret management |
@@ -163,7 +163,7 @@ Even if a container escapes, it only has unprivileged user access on the host.
 
 #### 1. **Rootless Architecture**
 ```yaml
-# Smithy - Non-root by design
+# Kimia - Non-root by design
 securityContext:
   runAsUser: 1000
   runAsNonRoot: true
@@ -177,7 +177,7 @@ securityContext:
 
 #### 2. **User Namespace Isolation**
 ```
-Smithy:
+Kimia:
   Container UID 0 → Host UID 1000 (unprivileged)
   Container UID 1 → Host UID 100000
   
@@ -189,7 +189,7 @@ Kaniko:
 
 #### 3. **Explicit Capability Model**
 ```yaml
-# Smithy - Minimal explicit capabilities
+# Kimia - Minimal explicit capabilities
 capabilities:
   drop: [ALL]
   add: [SETUID, SETGID]  # Only for user namespaces
@@ -199,12 +199,12 @@ capabilities:
   drop: [ALL]
 ```
 
-**Impact:** Smithy's approach is more transparent about security requirements.
+**Impact:** Kimia's approach is more transparent about security requirements.
 
 
-### When to Choose Smithy
+### When to Choose Kimia
 
-✅ **Choose Smithy when:**
+✅ **Choose Kimia when:**
 - Security is paramount (defense in depth)
 - Complex ownership operations needed
 - Compliance requires rootless containers
@@ -220,7 +220,7 @@ capabilities:
 1. **Test in Development**
    ```bash
    # Run side-by-side comparison
-   kubectl apply -f smithy-test-build.yaml
+   kubectl apply -f kimia-test-build.yaml
    kubectl apply -f kaniko-test-build.yaml
    ```
 
@@ -249,10 +249,10 @@ capabilities:
 
 5. **Update Volume Mounts**
    ```yaml
-   # Change from /kaniko/.docker to /home/smithy/.docker
+   # Change from /kaniko/.docker to /home/kimia/.docker
    volumeMounts:
    - name: docker-config
-     mountPath: /home/smithy/.docker
+     mountPath: /home/kimia/.docker
    ```
 
 6. **Test and Rollout**
@@ -290,7 +290,7 @@ kubectl apply -f - <<EOF
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  name: kimia-nginx-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -301,8 +301,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia
         args:
           - --context=https://github.com/nginx/docker-nginx.git
           - --dockerfile=mainline/alpine/Dockerfile
@@ -323,7 +323,7 @@ EOF
 kubectl get jobs -w
 
 # View logs
-kubectl logs job/smithy-nginx-build -f
+kubectl logs job/kimia-nginx-build -f
 ```
 
 ---
@@ -354,7 +354,7 @@ kubectl create secret generic registry-credentials \
 
 #### AWS EKS
 
-Standard EKS supports Smithy out of the box. For Bottlerocket nodes:
+Standard EKS supports Kimia out of the box. For Bottlerocket nodes:
 
 ```toml
 # Bottlerocket user data
@@ -499,7 +499,7 @@ spec:
 
 ### Understanding OCI vs Docker Formats
 
-Smithy (via Buildah) defaults to **OCI format** for image manifests, which is the industry standard. However, some Dockerfiles use Docker-specific instructions that may not be fully supported in OCI format:
+Kimia (via Buildah) defaults to **OCI format** for image manifests, which is the industry standard. However, some Dockerfiles use Docker-specific instructions that may not be fully supported in OCI format:
 
 **Docker-specific instructions:**
 - `SHELL` - Custom shell configuration
@@ -512,8 +512,8 @@ To ensure full compatibility with Docker-specific Dockerfile commands, set the `
 
 ```yaml
 containers:
-- name: smithy
-  image: ghcr.io/rapidfort/smithy:latest
+- name: kimia
+  image: ghcr.io/rapidfort/kimia:latest
   env:
   - name: BUILDAH_FORMAT
     value: "docker"  # Use Docker format instead of OCI
@@ -541,13 +541,13 @@ containers:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-oci-build
+  name: kimia-oci-build
 spec:
   template:
     spec:
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         # No BUILDAH_FORMAT needed - OCI is default
         args:
           - --context=.
@@ -558,13 +558,13 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-docker-build
+  name: kimia-docker-build
 spec:
   template:
     spec:
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         env:
         - name: BUILDAH_FORMAT
           value: "docker"
@@ -605,7 +605,7 @@ env:
 
 ```bash
 # Check manifest format
-kubectl exec <smithy-pod> -- buildah inspect myapp:latest | grep -i format
+kubectl exec <kimia-pod> -- buildah inspect myapp:latest | grep -i format
 ```
 
 ---
@@ -627,8 +627,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -642,7 +642,7 @@ spec:
         - name: source
           mountPath: /workspace
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       volumes:
       - name: source
         emptyDir: {}
@@ -667,8 +667,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=https://github.com/myorg/myapp.git
           - --git-branch=main
@@ -686,7 +686,7 @@ spec:
             add: [SETUID, SETGID]
         volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       volumes:
       - name: docker-config
         secret:
@@ -709,8 +709,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -723,7 +723,7 @@ spec:
             add: [SETUID, SETGID]
         volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       volumes:
       - name: docker-config
         secret:
@@ -746,8 +746,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         env:
         - name: BUILDAH_FORMAT
           value: "docker"  # Enable Docker format for HEALTHCHECK support
@@ -762,7 +762,7 @@ spec:
             add: [SETUID, SETGID]
         volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       volumes:
       - name: docker-config
         secret:
@@ -786,19 +786,19 @@ COPY index.html /usr/share/nginx/html/
 
 ---
 
-## Customizing Smithy
+## Customizing Kimia
 
-### Building Custom Smithy Images
+### Building Custom Kimia Images
 
-You can extend the base Smithy image to include additional build tools and dependencies by creating your own Dockerfile.
+You can extend the base Kimia image to include additional build tools and dependencies by creating your own Dockerfile.
 
-#### Example: Adding Bazel to Smithy
+#### Example: Adding Bazel to Kimia
 
-Create a custom Dockerfile that extends the base Smithy image:
+Create a custom Dockerfile that extends the base Kimia image:
 
 ```dockerfile
-# Dockerfile.smithy-bazel
-FROM ghcr.io/rapidfort/smithy:latest
+# Dockerfile.kimia-bazel
+FROM ghcr.io/rapidfort/kimia:latest
 
 # Switch to root to install packages
 USER root
@@ -822,24 +822,24 @@ RUN wget -O /tmp/bazel-installer.sh \
 # Verify Bazel installation
 RUN bazel --version
 
-# Switch back to smithy user
+# Switch back to kimia user
 USER 1000:1000
 
-# Bazel cache directory (owned by smithy user)
-RUN mkdir -p /home/smithy/.cache/bazel && \
-    chown -R 1000:1000 /home/smithy/.cache
+# Bazel cache directory (owned by kimia user)
+RUN mkdir -p /home/kimia/.cache/bazel && \
+    chown -R 1000:1000 /home/kimia/.cache
 
-WORKDIR /home/smithy
+WORKDIR /home/kimia
 ```
 
 #### Build Your Custom Image
 
 ```bash
 # Build the custom image
-docker build -f Dockerfile.smithy-bazel -t myregistry.io/smithy-bazel:latest .
+docker build -f Dockerfile.kimia-bazel -t myregistry.io/kimia-bazel:latest .
 
 # Push to your registry
-docker push myregistry.io/smithy-bazel:latest
+docker push myregistry.io/kimia-bazel:latest
 ```
 
 #### Use Custom Image in Kubernetes
@@ -848,7 +848,7 @@ docker push myregistry.io/smithy-bazel:latest
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-bazel-build
+  name: kimia-bazel-build
 spec:
   template:
     spec:
@@ -857,8 +857,8 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: myregistry.io/smithy-bazel:latest  # Your custom image
+      - name: kimia
+        image: myregistry.io/kimia-bazel:latest  # Your custom image
         args:
           - --context=https://github.com/myorg/bazel-project.git
           - --dockerfile=Dockerfile
@@ -870,9 +870,9 @@ spec:
             add: [SETUID, SETGID]
         volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
         - name: bazel-cache
-          mountPath: /home/smithy/.cache/bazel
+          mountPath: /home/kimia/.cache/bazel
       volumes:
       - name: docker-config
         secret:
@@ -887,7 +887,7 @@ spec:
 #### Adding Node.js and npm
 
 ```dockerfile
-FROM ghcr.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/kimia:latest
 
 USER root
 
@@ -903,7 +903,7 @@ USER 1000:1000
 #### Adding Python and pip
 
 ```dockerfile
-FROM ghcr.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/kimia:latest
 
 USER root
 
@@ -922,7 +922,7 @@ USER 1000:1000
 #### Adding Java and Maven
 
 ```dockerfile
-FROM ghcr.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/kimia:latest
 
 USER root
 
@@ -940,7 +940,7 @@ USER 1000:1000
 #### Adding Go
 
 ```dockerfile
-FROM ghcr.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/kimia:latest
 
 USER root
 
@@ -954,7 +954,7 @@ RUN apk add --no-cache wget && \
 
 # Add Go to PATH
 ENV PATH="/usr/local/go/bin:${PATH}"
-ENV GOPATH="/home/smithy/go"
+ENV GOPATH="/home/kimia/go"
 
 # Verify installation
 RUN go version
@@ -965,7 +965,7 @@ USER 1000:1000
 #### Multi-Tool Image (Node.js + Python + Go)
 
 ```dockerfile
-FROM ghcr.io/rapidfort/smithy:latest
+FROM ghcr.io/rapidfort/kimia:latest
 
 USER root
 
@@ -986,7 +986,7 @@ RUN wget -O /tmp/go.tar.gz \
 
 # Add Go to PATH
 ENV PATH="/usr/local/go/bin:${PATH}"
-ENV GOPATH="/home/smithy/go"
+ENV GOPATH="/home/kimia/go"
 
 # Verify installations
 RUN node --version && \
@@ -1007,13 +1007,13 @@ USER 1000:1000
 
 2. **Keep Permissions Correct**
    ```dockerfile
-   RUN mkdir -p /home/smithy/.cache && \
-       chown -R 1000:1000 /home/smithy/.cache
+   RUN mkdir -p /home/kimia/.cache && \
+       chown -R 1000:1000 /home/kimia/.cache
    ```
 
 3. **Use Specific Version Tags**
    ```dockerfile
-   FROM ghcr.io/rapidfort/smithy:1.0.13  # Not :latest in production
+   FROM ghcr.io/rapidfort/kimia:1.0.13  # Not :latest in production
    ```
 
 4. **Minimize Layer Size**
@@ -1041,7 +1041,7 @@ USER 1000:1000
    ```dockerfile
    LABEL maintainer="team@company.com"
    LABEL version="1.0.0"
-   LABEL description="Smithy with Bazel and Node.js"
+   LABEL description="Kimia with Bazel and Node.js"
    ```
 
 ### Multi-Architecture Custom Images
@@ -1053,8 +1053,8 @@ Build custom images for multiple architectures:
 docker buildx create --use
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t myregistry.io/smithy-bazel:latest \
-  -f Dockerfile.smithy-bazel \
+  -t myregistry.io/kimia-bazel:latest \
+  -f Dockerfile.kimia-bazel \
   --push \
   .
 ```
@@ -1071,7 +1071,7 @@ docker run --rm \
   --cap-add SETGID \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
-  myregistry.io/smithy-bazel:latest \
+  myregistry.io/kimia-bazel:latest \
   --version
 
 # Test Bazel availability
@@ -1081,7 +1081,7 @@ docker run --rm \
   --cap-add SETGID \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
-  myregistry.io/smithy-bazel:latest \
+  myregistry.io/kimia-bazel:latest \
   bash -c "bazel --version"
 ```
 
@@ -1101,8 +1101,8 @@ spec:
         fsGroup: 1000
       
       containers:
-      - name: smithy
-        image: myregistry.io/smithy-bazel:latest
+      - name: kimia
+        image: myregistry.io/kimia-bazel:latest
         
         env:
         - name: BUILDAH_FORMAT
@@ -1125,9 +1125,9 @@ spec:
         
         volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
         - name: bazel-cache
-          mountPath: /home/smithy/.cache/bazel
+          mountPath: /home/kimia/.cache/bazel
         - name: build-cache
           mountPath: /cache
         
@@ -1155,8 +1155,8 @@ spec:
 **Example Dockerfile for Bazel project:**
 
 ```dockerfile
-# Use the custom smithy-bazel base
-FROM myregistry.io/smithy-bazel:latest as builder
+# Use the custom kimia-bazel base
+FROM myregistry.io/kimia-bazel:latest as builder
 
 USER root
 
@@ -1183,13 +1183,13 @@ ENTRYPOINT ["/usr/local/bin/myapp"]
 
 ### ArgoCD Workflows
 
-Complete ArgoCD Workflow example with Smithy:
+Complete ArgoCD Workflow example with Kimia:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
-  generateName: smithy-build-
+  generateName: kimia-build-
   namespace: argo
 spec:
   entrypoint: build-and-deploy
@@ -1204,11 +1204,11 @@ spec:
   - name: build-and-deploy
     steps:
     - - name: build
-        template: smithy-build
+        template: kimia-build
     - - name: deploy
         template: deploy-image
 
-  - name: smithy-build
+  - name: kimia-build
     inputs:
       artifacts:
       - name: source
@@ -1218,7 +1218,7 @@ spec:
           revision: "{{workflow.parameters.git-revision}}"
     
     container:
-      image: ghcr.io/rapidfort/smithy:latest
+      image: ghcr.io/rapidfort/kimia:latest
       
       args:
         - "--context=/workspace"
@@ -1232,9 +1232,9 @@ spec:
       
       volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
         - name: cache
-          mountPath: /home/smithy/.local/share/containers
+          mountPath: /home/kimia/.local/share/containers
       
       securityContext:
         runAsUser: 1000
@@ -1275,7 +1275,7 @@ spec:
 apiVersion: image.toolkit.fluxcd.io/v1beta1
 kind: ImageUpdateAutomation
 metadata:
-  name: smithy-automation
+  name: kimia-automation
   namespace: flux-system
 spec:
   interval: 5m
@@ -1293,7 +1293,7 @@ spec:
       messageTemplate: |
         Automated image update
         
-        Built with Smithy: {{ .AutomationObject }}
+        Built with Kimia: {{ .AutomationObject }}
   update:
     path: ./config
     strategy: Setters
@@ -1302,7 +1302,7 @@ spec:
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: smithy-builder
+  name: kimia-builder
   namespace: flux-system
 spec:
   schedule: "0 2 * * *"  # Daily at 2 AM
@@ -1315,8 +1315,8 @@ spec:
             runAsUser: 1000
             fsGroup: 1000
           containers:
-          - name: smithy
-            image: ghcr.io/rapidfort/smithy:latest
+          - name: kimia
+            image: ghcr.io/rapidfort/kimia:latest
             args:
               - --context=https://github.com/myorg/myapp.git
               - --git-branch=main
@@ -1330,7 +1330,7 @@ spec:
                 add: [SETUID, SETGID]
             volumeMounts:
             - name: docker-config
-              mountPath: /home/smithy/.docker
+              mountPath: /home/kimia/.docker
           volumes:
           - name: docker-config
             secret:
@@ -1344,7 +1344,7 @@ spec:
 apiVersion: tekton.dev/v1beta1
 kind: Pipeline
 metadata:
-  name: smithy-build-pipeline
+  name: kimia-build-pipeline
 spec:
   params:
     - name: git-url
@@ -1381,7 +1381,7 @@ spec:
 
     - name: build-push
       taskRef:
-        name: smithy-build
+        name: kimia-build
       runAfter:
         - fetch-repository
       workspaces:
@@ -1401,7 +1401,7 @@ spec:
 apiVersion: tekton.dev/v1beta1
 kind: Task
 metadata:
-  name: smithy-build
+  name: kimia-build
 spec:
   params:
     - name: IMAGE
@@ -1420,7 +1420,7 @@ spec:
 
   steps:
     - name: build-and-push
-      image: ghcr.io/rapidfort/smithy:latest
+      image: ghcr.io/rapidfort/kimia:latest
       workingDir: $(workspaces.source.path)
       
       securityContext:
@@ -1434,7 +1434,7 @@ spec:
         #!/bin/sh
         set -e
         
-        smithy \
+        kimia \
           --context=$(params.CONTEXT) \
           --dockerfile=$(params.DOCKERFILE) \
           --destination=$(params.IMAGE) \
@@ -1443,11 +1443,11 @@ spec:
       
       volumeMounts:
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       
       env:
         - name: DOCKER_CONFIG
-          value: /home/smithy/.docker
+          value: /home/kimia/.docker
 
   volumes:
     - name: docker-config
@@ -1474,8 +1474,8 @@ spec:
     runAsUser: 1000
     fsGroup: 1000
   containers:
-  - name: smithy
-    image: ghcr.io/rapidfort/smithy:latest
+  - name: kimia
+    image: ghcr.io/rapidfort/kimia:latest
     command:
     - cat
     tty: true
@@ -1486,7 +1486,7 @@ spec:
         add: [SETUID, SETGID]
     volumeMounts:
     - name: docker-config
-      mountPath: /home/smithy/.docker
+      mountPath: /home/kimia/.docker
     resources:
       requests:
         memory: "2Gi"
@@ -1517,9 +1517,9 @@ spec:
         
         stage('Build and Push') {
             steps {
-                container('smithy') {
+                container('kimia') {
                     sh '''
-                        smithy \
+                        kimia \
                           --context=. \
                           --dockerfile=Dockerfile \
                           --destination=${REGISTRY}/${IMAGE_NAME}:${BUILD_NUMBER} \
@@ -1571,11 +1571,11 @@ spec:
 
 ## Kaniko Compatibility Guide
 
-Smithy supports most Kaniko arguments for easy migration.
+Kimia supports most Kaniko arguments for easy migration.
 
 ### Argument Mapping
 
-| Kaniko Argument | Smithy Equivalent | Notes |
+| Kaniko Argument | Kimia Equivalent | Notes |
 |-----------------|-------------------|-------|
 | `--context` | `--context` | ✅ Direct compatibility |
 | `--dockerfile` | `--dockerfile` | ✅ Direct compatibility |
@@ -1613,11 +1613,11 @@ containers:
     mountPath: /kaniko/.docker/
 ```
 
-**After (Smithy):**
+**After (Kimia):**
 ```yaml
 containers:
-- name: smithy
-  image: ghcr.io/rapidfort/smithy:latest
+- name: kimia
+  image: ghcr.io/rapidfort/kimia:latest
   securityContext:
     runAsUser: 1000
     allowPrivilegeEscalation: true
@@ -1633,13 +1633,13 @@ containers:
     - --build-arg=VERSION=1.0.0
   volumeMounts:
   - name: docker-config
-    mountPath: /home/smithy/.docker/
+    mountPath: /home/kimia/.docker/
 ```
 
 **Key Changes:**
 1. Add securityContext with user 1000 and fsGroup 1000
 2. Add capabilities (SETUID, SETGID)
-3. Change volumeMount path to `/home/smithy/.docker/`
+3. Change volumeMount path to `/home/kimia/.docker/`
 4. All arguments remain the same!
 
 ---
@@ -1648,13 +1648,13 @@ containers:
 
 ### Pod Security Standards
 
-Smithy is compatible with Kubernetes Pod Security Standards at the **Restricted** level (with allowPrivilegeEscalation):
+Kimia is compatible with Kubernetes Pod Security Standards at the **Restricted** level (with allowPrivilegeEscalation):
 
 ```yaml
 apiVersion: v1
 kind: Pod
 metadata:
-  name: smithy-build
+  name: kimia-build
   labels:
     pod-security.kubernetes.io/enforce: restricted
     pod-security.kubernetes.io/enforce-version: latest
@@ -1668,8 +1668,8 @@ spec:
       type: RuntimeDefault
   
   containers:
-  - name: smithy
-    image: ghcr.io/rapidfort/smithy:latest
+  - name: kimia
+    image: ghcr.io/rapidfort/kimia:latest
     securityContext:
       runAsNonRoot: true
       runAsUser: 1000
@@ -1683,17 +1683,17 @@ spec:
 
 ### Network Policies
 
-Restrict Smithy's network access:
+Restrict Kimia's network access:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: smithy-network-policy
+  name: kimia-network-policy
 spec:
   podSelector:
     matchLabels:
-      app: smithy
+      app: kimia
   policyTypes:
   - Egress
   egress:
@@ -1754,7 +1754,7 @@ Mount as read-only:
 ```yaml
 volumeMounts:
 - name: docker-config
-  mountPath: /home/smithy/.docker
+  mountPath: /home/kimia/.docker
   readOnly: true
 ```
 
@@ -1765,8 +1765,8 @@ volumeMounts:
 | Variable | Description | Example | Default |
 |----------|-------------|---------|---------|
 | `BUILDAH_FORMAT` | Image format (oci or docker) | `docker` | `oci` |
-| `DOCKER_CONFIG` | Docker config directory | `/home/smithy/.docker` | `/home/smithy/.docker` |
-| `REGISTRY_AUTH_FILE` | Buildah auth file location | `/home/smithy/.docker/auth.json` | Auto-detected |
+| `DOCKER_CONFIG` | Docker config directory | `/home/kimia/.docker` | `/home/kimia/.docker` |
+| `REGISTRY_AUTH_FILE` | Buildah auth file location | `/home/kimia/.docker/auth.json` | Auto-detected |
 | `BUILDAH_ISOLATION` | Buildah isolation mode | `chroot` | `chroot` |
 | `STORAGE_DRIVER` | Storage driver for layers | `vfs` | `vfs` |
 | `DOCKER_USERNAME` | Registry username for auth | `myuser` | - |
@@ -1802,7 +1802,7 @@ Enable and persist build cache with proper permissions:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-build-cached
+  name: kimia-build-cached
 spec:
   template:
     spec:
@@ -1813,8 +1813,8 @@ spec:
         fsGroup: 1000  # Automatically sets ownership of mounted volumes
       
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -1830,7 +1830,7 @@ spec:
         - name: build-cache
           mountPath: /cache
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       
       volumes:
       - name: build-cache
@@ -1848,7 +1848,7 @@ spec:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: smithy-build-cache
+  name: kimia-build-cache
 spec:
   accessModes:
     - ReadWriteOnce
@@ -1860,7 +1860,7 @@ spec:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-build-persistent-cache
+  name: kimia-build-persistent-cache
 spec:
   template:
     spec:
@@ -1886,8 +1886,8 @@ spec:
           mountPath: /cache
       
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=.
           - --dockerfile=Dockerfile
@@ -1904,12 +1904,12 @@ spec:
         - name: build-cache
           mountPath: /cache
         - name: docker-config
-          mountPath: /home/smithy/.docker
+          mountPath: /home/kimia/.docker
       
       volumes:
       - name: build-cache
         persistentVolumeClaim:
-          claimName: smithy-build-cache
+          claimName: kimia-build-cache
       - name: docker-config
         secret:
           secretName: registry-credentials
@@ -1918,7 +1918,7 @@ spec:
 ```
 
 **Key Points:**
-- **fsGroup: 1000** - Ensures mounted volumes are owned by smithy user (UID 1000)
+- **fsGroup: 1000** - Ensures mounted volumes are owned by kimia user (UID 1000)
 - Cache directory must be writable by UID 1000
 - For PersistentVolumes, use init container OR fsGroup
 - For emptyDir, fsGroup alone is sufficient
@@ -1942,9 +1942,9 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
-        # ... smithy configuration
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        # ... kimia configuration
 ```
 
 ### Resource Tuning
@@ -2159,39 +2159,39 @@ volumes:
 
 **Verify permissions:**
 ```bash
-kubectl exec <smithy-pod> -- ls -la /cache
-# Should show: drwxr-xr-x smithy smithy
+kubectl exec <kimia-pod> -- ls -la /cache
+# Should show: drwxr-xr-x kimia kimia
 ```
 
 ### Debugging Commands
 
 ```bash
 # Check pod status
-kubectl describe pod <smithy-pod-name>
+kubectl describe pod <kimia-pod-name>
 
 # View logs
-kubectl logs <smithy-pod-name> -f
+kubectl logs <kimia-pod-name> -f
 
 # Check user namespace support
-kubectl exec <smithy-pod-name> -- cat /proc/self/uid_map
+kubectl exec <kimia-pod-name> -- cat /proc/self/uid_map
 
 # Verify storage
-kubectl exec <smithy-pod-name> -- df -h
+kubectl exec <kimia-pod-name> -- df -h
 
 # Check cache directory permissions
-kubectl exec <smithy-pod-name> -- ls -la /cache
+kubectl exec <kimia-pod-name> -- ls -la /cache
 
 # Check network connectivity
-kubectl exec <smithy-pod-name> -- ping -c 3 myregistry.io
+kubectl exec <kimia-pod-name> -- ping -c 3 myregistry.io
 
 # Inspect image
-kubectl exec <smithy-pod-name> -- buildah images
+kubectl exec <kimia-pod-name> -- buildah images
 
 # Check image format
-kubectl exec <smithy-pod-name> -- buildah inspect myapp:latest | grep -i format
+kubectl exec <kimia-pod-name> -- buildah inspect myapp:latest | grep -i format
 
 # Verify fsGroup is applied
-kubectl get pod <smithy-pod-name> -o jsonpath='{.spec.securityContext.fsGroup}'
+kubectl get pod <kimia-pod-name> -o jsonpath='{.spec.securityContext.fsGroup}'
 ```
 
 ---
@@ -2210,8 +2210,8 @@ We welcome contributions! Here's how you can help:
 
 ```bash
 # Clone repository
-git clone https://github.com/rapidfort/smithy.git
-cd smithy
+git clone https://github.com/rapidfort/kimia.git
+cd kimia
 
 # Build locally
 make build
@@ -2246,13 +2246,13 @@ make release RELEASE_TYPE=staging
 
 ### General Questions
 
-**Q: How does Smithy differ from Kaniko?**
+**Q: How does Kimia differ from Kaniko?**
 
-A: Smithy uses user namespaces for true rootless operation, while Kaniko runs as root. Smithy also has better support for complex Dockerfiles with ownership changes and Docker-specific instructions like HEALTHCHECK.
+A: Kimia uses user namespaces for true rootless operation, while Kaniko runs as root. Kimia also has better support for complex Dockerfiles with ownership changes and Docker-specific instructions like HEALTHCHECK.
 
-**Q: Can I use Smithy outside Kubernetes?**
+**Q: Can I use Kimia outside Kubernetes?**
 
-A: Yes! Smithy can run as a standard container:
+A: Yes! Kimia can run as a standard container:
 ```bash
 docker run \
   --cap-drop ALL \
@@ -2261,15 +2261,15 @@ docker run \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   -v $(pwd):/workspace \
-  ghcr.io/rapidfort/smithy:latest \
+  ghcr.io/rapidfort/kimia:latest \
   --context=/workspace --destination=registry/image:tag
 ```
 
-**Q: Does Smithy support multi-architecture builds?**
+**Q: Does Kimia support multi-architecture builds?**
 
 A: Yes, use the `--custom-platform` flag:
 ```bash
-smithy --custom-platform=linux/arm64 ...
+kimia --custom-platform=linux/arm64 ...
 ```
 
 ### Technical Questions
@@ -2280,11 +2280,11 @@ A: User namespaces provide security isolation. Without them, container processes
 
 **Q: What are SETUID and SETGID capabilities for?**
 
-A: These minimal capabilities allow Smithy to create user namespaces. They're far safer than privileged mode or CAP_SYS_ADMIN.
+A: These minimal capabilities allow Kimia to create user namespaces. They're far safer than privileged mode or CAP_SYS_ADMIN.
 
-**Q: Can I use Smithy with distroless images?**
+**Q: Can I use Kimia with distroless images?**
 
-A: Yes, Smithy supports building any OCI-compliant image, including distroless.
+A: Yes, Kimia supports building any OCI-compliant image, including distroless.
 
 **Q: When should I use Docker format vs OCI format?**
 
@@ -2292,25 +2292,25 @@ A: Use Docker format (`BUILDAH_FORMAT=docker`) when your Dockerfile contains HEA
 
 ### Operational Questions
 
-**Q: How much resource overhead does Smithy add?**
+**Q: How much resource overhead does Kimia add?**
 
 A: Minimal - typically 2-5% CPU and 256MB-2GB RAM depending on build complexity.
 
-**Q: Can I run multiple Smithy builds simultaneously?**
+**Q: Can I run multiple Kimia builds simultaneously?**
 
-A: Yes, Smithy is designed for concurrent builds. Each build is isolated in its own user namespace.
+A: Yes, Kimia is designed for concurrent builds. Each build is isolated in its own user namespace.
 
-**Q: Does Smithy work with private registries?**
+**Q: Does Kimia work with private registries?**
 
-A: Yes, Smithy supports authentication with any OCI-compliant registry.
+A: Yes, Kimia supports authentication with any OCI-compliant registry.
 
-**Q: Will my existing Kaniko configurations work with Smithy?**
+**Q: Will my existing Kaniko configurations work with Kimia?**
 
-A: Most Kaniko arguments are directly compatible. You just need to add proper securityContext (including fsGroup: 1000) and change the volume mount path from `/kaniko/.docker` to `/home/smithy/.docker`.
+A: Most Kaniko arguments are directly compatible. You just need to add proper securityContext (including fsGroup: 1000) and change the volume mount path from `/kaniko/.docker` to `/home/kimia/.docker`.
 
 **Q: Why is my cache directory giving permission errors?**
 
-A: The cache directory must be writable by the smithy user (UID 1000). Use one of these solutions:
+A: The cache directory must be writable by the kimia user (UID 1000). Use one of these solutions:
 
 ```yaml
 # Solution 1: Use fsGroup (recommended)
@@ -2334,6 +2334,6 @@ initContainers:
 
 ## Acknowledgments
 
-- Built on [Buildah](https://buildah.io/) - The backbone of Smithy
+- Built on [Buildah](https://buildah.io/) - The backbone of Kimia
 - Inspired by [Kaniko](https://github.com/GoogleContainerTools/kaniko) - Pioneering daemonless builds
 - Container tools from the [Containers](https://github.com/containers) organization

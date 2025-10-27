@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // ValidationStatus represents the validation result status

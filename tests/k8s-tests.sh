@@ -1,11 +1,11 @@
 #!/bin/bash
-# Smithy Kubernetes Test Suite
+# Kimia Kubernetes Test Suite
 # Tests ROOTLESS mode (UID 1000) ONLY
-# Smithy is designed for rootless operation in all environments
+# Kimia is designed for rootless operation in all environments
 # Supports BuildKit (default) and Buildah (legacy) images
 # Tests storage drivers based on builder:
 #   - BuildKit: native (default), overlay
-#   - Buildah: vfs (default), overlay (requires emptyDir at /home/smithy/.local)
+#   - Buildah: vfs (default), overlay (requires emptyDir at /home/kimia/.local)
 # Note: Uses native kernel overlayfs via user namespaces (no fuse-overlayfs)
 
 set -e
@@ -21,8 +21,8 @@ else
     REGISTRY="${RF_APP_HOST}:5000"
 fi
 
-SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
-NAMESPACE=${NAMESPACE:-"smithy-tests"}
+KIMIA_IMAGE=${KIMIA_IMAGE:-"${REGISTRY}/rapidfort/kimia:latest"}
+NAMESPACE=${NAMESPACE:-"kimia-tests"}
 BUILDER=${BUILDER:-"buildkit"}  # buildkit or buildah
 STORAGE_DRIVER="both"
 CLEANUP_AFTER=false
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --image)
-            SMITHY_IMAGE="$2"
+            KIMIA_IMAGE="$2"
             shift 2
             ;;
         --namespace)
@@ -115,7 +115,7 @@ get_primary_driver() {
     fi
 }
 
-# Get the actual storage flag value for smithy
+# Get the actual storage flag value for kimia
 get_storage_flag() {
     local driver="$1"
 
@@ -211,17 +211,17 @@ generate_job_yaml() {
             container_apparmor="appArmorProfile:
             type: Unconfined"
 
-            # CRITICAL: Buildah overlay needs emptyDir at /home/smithy/.local
+            # CRITICAL: Buildah overlay needs emptyDir at /home/kimia/.local
             # Why: Cannot nest kernel overlayfs on top of kernel overlayfs (container root)
             # Container root = kernel overlayfs, storage needs kernel overlayfs = NESTED = FAILS
             # Solution: Mount emptyDir (tmpfs) to break the nesting
             # This allows: tmpfs → kernel overlayfs ✓ (instead of overlayfs → overlayfs ✗)
             # Note: Uses native kernel overlayfs via user namespaces (no fuse-overlayfs needed)
             volume_mounts="
-        - name: smithy-local
-          mountPath: /home/smithy/.local"
+        - name: kimia-local
+          mountPath: /home/kimia/.local"
             volumes="
-      - name: smithy-local
+      - name: kimia-local
         emptyDir: {}"
             has_volumes=true
         fi
@@ -237,7 +237,7 @@ metadata:
   name: ${job_name}
   namespace: ${NAMESPACE}
   labels:
-    app: smithy-test
+    app: kimia-test
     builder: ${BUILDER}
     mode: rootless
     driver: ${driver}
@@ -247,7 +247,7 @@ spec:
   template:
     metadata:
       labels:
-        app: smithy-test
+        app: kimia-test
         builder: ${BUILDER}
         mode: rootless
         driver: ${driver}
@@ -261,12 +261,12 @@ spec:
         ${pod_seccomp}
         ${pod_apparmor}
       containers:
-      - name: smithy
-        image: ${SMITHY_IMAGE}
+      - name: kimia
+        image: ${KIMIA_IMAGE}
         args: ${args}
         env:
-        - name: SMITHY_USER
-          value: "smithy"
+        - name: KIMIA_USER
+          value: "kimia"
         - name: STORAGE_DRIVER
           value: "${storage_flag}"
         securityContext:
@@ -289,7 +289,7 @@ metadata:
   name: ${job_name}
   namespace: ${NAMESPACE}
   labels:
-    app: smithy-test
+    app: kimia-test
     builder: ${BUILDER}
     mode: rootless
     driver: ${driver}
@@ -299,7 +299,7 @@ spec:
   template:
     metadata:
       labels:
-        app: smithy-test
+        app: kimia-test
         builder: ${BUILDER}
         mode: rootless
         driver: ${driver}
@@ -313,12 +313,12 @@ spec:
         ${pod_seccomp}
         ${pod_apparmor}
       containers:
-      - name: smithy
-        image: ${SMITHY_IMAGE}
+      - name: kimia
+        image: ${KIMIA_IMAGE}
         args: ${args}
         env:
-        - name: SMITHY_USER
-          value: "smithy"
+        - name: KIMIA_USER
+          value: "kimia"
         - name: STORAGE_DRIVER
           value: "${storage_flag}"
         securityContext:
@@ -528,7 +528,7 @@ run_rootless_tests() {
         if [ "$BUILDER" = "buildkit" ]; then
             echo -e "${CYAN}      BuildKit: DAC_OVERRIDE + Unconfined seccomp/AppArmor${NC}"
         else
-            echo -e "${CYAN}      Buildah: MKNOD + Unconfined seccomp/AppArmor + emptyDir at /home/smithy/.local${NC}"
+            echo -e "${CYAN}      Buildah: MKNOD + Unconfined seccomp/AppArmor + emptyDir at /home/kimia/.local${NC}"
             echo -e "${CYAN}      (emptyDir breaks nested overlayfs: container root = overlay)${NC}"
         fi
         echo ""
@@ -603,7 +603,7 @@ run_rootless_tests() {
     run_k8s_test \
         "Reproducible Build #1" \
         "$driver" \
-        "[\"--context=https://github.com/rapidfort/smithy.git\", \
+        "[\"--context=https://github.com/rapidfort/kimia.git\", \
         \"--git-branch=main\", \
         \"--dockerfile=tests/examples/Dockerfile\", \
         \"--destination=${test_image}:v1\", \
@@ -630,7 +630,7 @@ run_rootless_tests() {
     run_k8s_test \
         "Reproducible Build #2" \
         "$driver" \
-        "[\"--context=https://github.com/rapidfort/smithy.git\", \
+        "[\"--context=https://github.com/rapidfort/kimia.git\", \
         \"--git-branch=main\", \
         \"--dockerfile=tests/examples/Dockerfile\", \
         \"--destination=${test_image}:v1\", \
@@ -681,7 +681,7 @@ cleanup_on_interrupt() {
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Cleaning up...${NC}"
 
-    kubectl delete jobs -n ${NAMESPACE} -l app=smithy-test --force --grace-period=0 &> /dev/null || true
+    kubectl delete jobs -n ${NAMESPACE} -l app=kimia-test --force --grace-period=0 &> /dev/null || true
     kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
 
     echo -e "${GREEN}✓ Cleanup completed${NC}"
@@ -698,14 +698,14 @@ main() {
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
-    echo -e "  Image:          ${SMITHY_IMAGE}"
+    echo -e "  Image:          ${KIMIA_IMAGE}"
     echo -e "  Namespace:      ${NAMESPACE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
     echo -e "  Cleanup:        ${CLEANUP_AFTER}"
     echo -e "  Job Timeout:    ${JOB_TIMEOUT}s"
     echo -e "  Suites Dir:     ${SUITES_DIR}"
     echo ""
-    echo -e "${YELLOW}NOTE: Smithy runs in ROOTLESS mode only (UID 1000)${NC}"
+    echo -e "${YELLOW}NOTE: Kimia runs in ROOTLESS mode only (UID 1000)${NC}"
     echo ""
 
     # Describe storage mappings
@@ -743,7 +743,7 @@ main() {
         echo -e "    - Capabilities: SETUID, SETGID, MKNOD, DAC_OVERRIDE"
         echo -e "    - Seccomp: Unconfined"
         echo -e "    - AppArmor: Unconfined"
-        echo -e "    - Volumes: /home/smithy/.local (emptyDir only)"
+        echo -e "    - Volumes: /home/kimia/.local (emptyDir only)"
         echo -e "    - Note: emptyDir breaks nested overlayfs (container root = kernel overlay)"
         echo -e "    - Note: Uses native kernel overlayfs via user namespaces"
     fi

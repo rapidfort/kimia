@@ -5,10 +5,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rapidfort/smithy/internal/auth"
-	"github.com/rapidfort/smithy/internal/build"
-	"github.com/rapidfort/smithy/internal/preflight"
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/internal/build"
+	"github.com/rapidfort/kimia/internal/preflight"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 func main() {
@@ -36,8 +36,8 @@ func main() {
 	// Parse configuration
 	config := parseArgs(os.Args[1:])
 
-	// Log smithy version (builder will be logged by build.Execute)
-	logger.Info("Smithy - Kubernetes-Native OCI Image Builder v%s", Version)
+	// Log kimia version (builder will be logged by build.Execute)
+	logger.Info("Kimia - Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
 	// Validate storage driver only if specified
@@ -73,10 +73,10 @@ func main() {
 	}
 
 	if config.Context == "" {
-		fmt.Fprintf(os.Stderr, "Error: Smithy only supports BUILD mode\n\n")
+		fmt.Fprintf(os.Stderr, "Error: Kimia only supports BUILD mode\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
-		fmt.Fprintf(os.Stderr, "Run 'smithy --help' for more information.\n")
+		fmt.Fprintf(os.Stderr, "  kimia --context=. --destination=registry/image:tag\n\n")
+		fmt.Fprintf(os.Stderr, "Run 'kimia --help' for more information.\n")
 		os.Exit(1)
 	}
 
@@ -99,7 +99,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "  --context: Build context (directory or Git URL)\n")
 		fmt.Fprintf(os.Stderr, "  --destination: Target image name\n\n")
 		fmt.Fprintf(os.Stderr, "Example:\n")
-		fmt.Fprintf(os.Stderr, "  smithy --context=. --destination=registry/image:tag\n\n")
+		fmt.Fprintf(os.Stderr, "  kimia --context=. --destination=registry/image:tag\n\n")
 		os.Exit(1)
 	}
 

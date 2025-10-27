@@ -15,7 +15,7 @@ var (
 )
 
 func printVersion() {
-	fmt.Println("Smithy – Kubernetes-Native OCI Builder")
+	fmt.Println("Kimia – Kubernetes-Native OCI Builder")
 	fmt.Println("Daemonless. Rootless. Privilege-free. Fully OCI-compliant.")
 	fmt.Println()
 	fmt.Printf("Version: %s\n", Version)

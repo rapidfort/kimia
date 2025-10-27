@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // Context manages the build context
@@ -45,7 +45,7 @@ func Prepare(gitConfig GitConfig) (*Context, error) {
 		// Create directory in $HOME/workspace for git clone
 		homeDir := os.Getenv("HOME")
 		if homeDir == "" {
-			homeDir = "/home/smithy"
+			homeDir = "/home/kimia"
 		}
 
 		workspaceDir := filepath.Join(homeDir, "workspace")
@@ -56,7 +56,7 @@ func Prepare(gitConfig GitConfig) (*Context, error) {
 		}
 
 		// Create temporary directory for git clone inside workspace
-		tempDir, err := os.MkdirTemp(workspaceDir, "smithy-build-*")
+		tempDir, err := os.MkdirTemp(workspaceDir, "kimia-build-*")
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // Config holds build configuration
@@ -317,7 +317,7 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// ========================================
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
-		homeDir = "/home/smithy"
+		homeDir = "/home/kimia"
 	}
 
 	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")

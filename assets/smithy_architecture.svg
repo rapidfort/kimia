@@ -8,10 +8,10 @@
     Kubernetes Pod/Job
   </text>
   
-  <!-- Smithy Container -->
+  <!-- Kimia Container -->
   <rect x="30" y="50" width="390" height="150" fill="none" stroke="#34495e" stroke-width="1.5"/>
   <text x="225" y="75" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
-    Smithy Container (UID: 1000)
+    Kimia Container (UID: 1000)
   </text>
   
   <!-- Buildah Box -->

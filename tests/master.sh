@@ -1,5 +1,5 @@
 #!/bin/bash
-# Smithy Master Test Script
+# Kimia Master Test Script
 # Main orchestrator for Docker and Kubernetes tests
 # Supports both BuildKit (default) and Buildah (legacy) images
 
@@ -21,9 +21,9 @@ if [ -z "${RF_APP_HOST}" ]; then
 else
     REGISTRY="${RF_APP_HOST}:5000"
 fi
-NAMESPACE=${NAMESPACE:-"smithy-tests"}
-SMITHY_IMAGE=${SMITHY_IMAGE:-"${REGISTRY}/rapidfort/smithy:latest"}
-RF_SMITHY_TMPDIR=${RF_SMITHY_TMPDIR:-"/tmp"}
+NAMESPACE=${NAMESPACE:-"kimia-tests"}
+KIMIA_IMAGE=${KIMIA_IMAGE:-"${REGISTRY}/rapidfort/kimia:latest"}
+RF_KIMIA_TMPDIR=${RF_KIMIA_TMPDIR:-"/tmp"}
 BUILDER=${BUILDER:-"buildkit"}  # buildkit (default) or buildah
 
 # Colors
@@ -49,7 +49,7 @@ FAILED_TESTS=0
 # ============================================================================
 
 usage() {
-    echo -e "${CYAN}Smithy Master Test Script${NC}"
+    echo -e "${CYAN}Kimia Master Test Script${NC}"
     echo "Main orchestrator for Docker and Kubernetes tests"
     echo ""
     echo -e "${YELLOW}USAGE:${NC}"
@@ -59,7 +59,7 @@ usage() {
     echo "    -h, --help                  Show this help message"
     echo "    -m, --mode MODE             Test mode: docker, kubernetes, both (required)"
     echo "    -r, --registry URL          Registry URL (default: ${REGISTRY})"
-    echo "    -i, --image IMAGE           Smithy image to test"
+    echo "    -i, --image IMAGE           Kimia image to test"
     echo "    -b, --builder BUILDER       Builder: buildkit (default), buildah"
     echo "    -s, --storage DRIVER        Storage driver: vfs, overlay, native, both (default: both)"
     echo "    -c, --cleanup               Clean up resources after tests"
@@ -71,8 +71,8 @@ usage() {
     echo "    both                        Run all tests"
     echo ""
     echo -e "${YELLOW}BUILDERS:${NC}"
-    echo "    buildkit                    Test BuildKit-based smithy (default, recommended)"
-    echo "    buildah                     Test Buildah-based smithy-bud (legacy)"
+    echo "    buildkit                    Test BuildKit-based kimia (default, recommended)"
+    echo "    buildah                     Test Buildah-based kimia-bud (legacy)"
     echo ""
     echo -e "${YELLOW}STORAGE DRIVERS:${NC}"
     echo "    native                      Test native storage (BuildKit) or vfs (Buildah)"
@@ -102,7 +102,7 @@ usage() {
     echo "    $0 -m kubernetes -c"
     echo ""
     echo "    # Use specific image"
-    echo "    $0 -m both -i myregistry/smithy:test"
+    echo "    $0 -m both -i myregistry/kimia:test"
     echo ""
     echo -e "${YELLOW}TEST COVERAGE:${NC}"
     echo "    Docker Tests:"
@@ -118,9 +118,9 @@ usage() {
     echo ""
     echo -e "${YELLOW}ENVIRONMENT VARIABLES:${NC}"
     echo "    REGISTRY                    Override registry URL"
-    echo "    SMITHY_IMAGE                Override smithy image"
+    echo "    KIMIA_IMAGE                Override kimia image"
     echo "    NAMESPACE                   Override K8s namespace"
-    echo "    RF_SMITHY_TMPDIR            Override temp directory"
+    echo "    RF_KIMIA_TMPDIR            Override temp directory"
     echo "    BUILDER                     Override builder (buildkit/buildah)"
     echo ""
     exit 0
@@ -145,7 +145,7 @@ parse_args() {
                 shift 2
                 ;;
             -i|--image)
-                SMITHY_IMAGE="$2"
+                KIMIA_IMAGE="$2"
                 shift 2
                 ;;
             -b|--builder)
@@ -196,13 +196,13 @@ parse_args() {
     fi
 
     # Auto-set image based on builder if not specified
-    if [ -z "$SMITHY_IMAGE" ] || [ "$SMITHY_IMAGE" = "${REGISTRY}/rapidfort/smithy:latest" ]; then
+    if [ -z "$KIMIA_IMAGE" ] || [ "$KIMIA_IMAGE" = "${REGISTRY}/rapidfort/kimia:latest" ]; then
         if [ "$BUILDER" = "buildah" ]; then
-            SMITHY_IMAGE="${REGISTRY}/rapidfort/smithy-bud:latest"
-            echo -e "${CYAN}Auto-selected Buildah image: ${SMITHY_IMAGE}${NC}"
+            KIMIA_IMAGE="${REGISTRY}/rapidfort/kimia-bud:latest"
+            echo -e "${CYAN}Auto-selected Buildah image: ${KIMIA_IMAGE}${NC}"
         else
-            SMITHY_IMAGE="${REGISTRY}/rapidfort/smithy:latest"
-            echo -e "${CYAN}Auto-selected BuildKit image: ${SMITHY_IMAGE}${NC}"
+            KIMIA_IMAGE="${REGISTRY}/rapidfort/kimia:latest"
+            echo -e "${CYAN}Auto-selected BuildKit image: ${KIMIA_IMAGE}${NC}"
         fi
     fi
 
@@ -267,7 +267,7 @@ run_docker_tests() {
     # Build command
     local cmd="${SCRIPT_DIR}/docker-tests.sh"
     cmd="$cmd --registry $REGISTRY"
-    cmd="$cmd --image $SMITHY_IMAGE"
+    cmd="$cmd --image $KIMIA_IMAGE"
     cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
 
@@ -289,7 +289,7 @@ run_kubernetes_tests() {
     # Build command
     local cmd="${SCRIPT_DIR}/k8s-tests.sh"
     cmd="$cmd --registry $REGISTRY"
-    cmd="$cmd --image $SMITHY_IMAGE"
+    cmd="$cmd --image $KIMIA_IMAGE"
     cmd="$cmd --namespace $NAMESPACE"
     cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
@@ -309,13 +309,13 @@ run_kubernetes_tests() {
 main() {
     parse_args "$@"
 
-    print_header "SMITHY TEST SUITE"
+    print_header "KIMIA TEST SUITE"
 
     echo -e "${CYAN}Configuration:${NC}"
     echo -e "  Mode:           ${TEST_MODE}"
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
-    echo -e "  Image:          ${SMITHY_IMAGE}"
+    echo -e "  Image:          ${KIMIA_IMAGE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
     echo -e "  Namespace:      ${NAMESPACE}"
     echo -e "  Cleanup:        ${CLEANUP_AFTER}"
