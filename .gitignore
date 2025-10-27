@@ -99,7 +99,7 @@ __debug_bin
 # Air (live reload)
 tmp/
 
-# Smithy specific (customize as needed)
+# Kimia specific (customize as needed)
 .version
 *.old
 

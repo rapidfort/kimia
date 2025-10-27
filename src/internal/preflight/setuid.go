@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // SetuidBinaryCheck holds the result of SETUID binary validation

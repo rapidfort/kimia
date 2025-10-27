@@ -1,4 +1,4 @@
-# Stage 1: Build smithy binary
+# Stage 1: Build kimia binary
 ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
 ARG COMMIT="unknown"
@@ -6,11 +6,11 @@ ARG BRANCH="unknown"
 ARG RELEASE="0"
 
 ARG GOLANG_VERSION=1.25.3
-ARG SMITHY_UID=1000
-ARG SMITHY_USER=smithy
+ARG KIMIA_UID=1000
+ARG KIMIA_USER=kimia
 ARG TARGETARCH
 
-FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
+FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -24,8 +24,8 @@ COPY src/ .
 # The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
-# Build from cmd/smithy
-# Note: ldflags use 'main' because cmd/smithy is the main package
+# Build from cmd/kimia
+# Note: ldflags use 'main' because cmd/kimia is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -33,12 +33,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.BuildDate=${BUILD_DATE} \
         -X main.CommitSHA=${COMMIT} \
         -X main.Branch=${BRANCH}" \
-    -o smithy ./cmd/smithy
+    -o kimia ./cmd/kimia
 
 # Build running image binary
 FROM alpine AS run-prep-image
-ARG SMITHY_UID
-ARG SMITHY_USER
+ARG KIMIA_UID
+ARG KIMIA_USER
 ARG TARGETARCH
 
 RUN apk update && apk add gnutls
@@ -66,34 +66,34 @@ RUN apk add --no-cache \
     update-ca-certificates && \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Copy smithy binary
-COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
-RUN chmod +x /usr/local/bin/smithy
+# Copy kimia binary
+COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
+RUN chmod +x /usr/local/bin/kimia
 
-# Create smithy user
-RUN addgroup -g ${SMITHY_UID} ${SMITHY_USER} && \
-    adduser -D -G ${SMITHY_USER} -u ${SMITHY_UID} ${SMITHY_USER}
+# Create kimia user
+RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
+    adduser -D -G ${KIMIA_USER} -u ${KIMIA_UID} ${KIMIA_USER}
 
-# Setup subuid/subgid for smithy user (for rootless mode)
-RUN echo "${SMITHY_USER}:100000:65536" >> /etc/subuid && \
-    echo "${SMITHY_USER}:100000:65536" >> /etc/subgid
+# Setup subuid/subgid for kimia user (for rootless mode)
+RUN echo "${KIMIA_USER}:100000:65536" >> /etc/subuid && \
+    echo "${KIMIA_USER}:100000:65536" >> /etc/subgid
 
 # ============================================================================
 # Rootless-Only Configuration (UID 1000 only)
 # ============================================================================
 
-# Create user directories for smithy
-RUN mkdir -p /home/${SMITHY_USER}/.local/share/containers/storage && \
-    mkdir -p /home/${SMITHY_USER}/.config/containers && \
-    mkdir -p /home/${SMITHY_USER}/.docker && \
+# Create user directories for kimia
+RUN mkdir -p /home/${KIMIA_USER}/.local/share/containers/storage && \
+    mkdir -p /home/${KIMIA_USER}/.config/containers && \
+    mkdir -p /home/${KIMIA_USER}/.docker && \
     mkdir -p /tmp/lock
 
 # User-specific storage config - Native kernel overlayfs
-RUN cat > /home/${SMITHY_USER}/.config/containers/storage.conf <<'EOF'
+RUN cat > /home/${KIMIA_USER}/.config/containers/storage.conf <<'EOF'
 [storage]
 driver="vfs"
 runroot="/tmp/containers/run"
-graphroot="/home/smithy/.local/share/containers/storage"
+graphroot="/home/kimia/.local/share/containers/storage"
 
 [storage.options]
 vfs.ignore_chown_errors="true"
@@ -105,7 +105,7 @@ mountopt="nodev,metacopy=on"
 EOF
 
 # Registries config (user-specific)
-RUN cat > /home/${SMITHY_USER}/.config/containers/registries.conf <<'EOF'
+RUN cat > /home/${KIMIA_USER}/.config/containers/registries.conf <<'EOF'
 unqualified-search-registries = ['docker.io', 'quay.io']
 
 [[registry]]
@@ -116,14 +116,14 @@ location = "quay.io"
 EOF
 
 # Policy (user-specific)
-RUN cat > /home/${SMITHY_USER}/.config/containers/policy.json <<'EOF'
+RUN cat > /home/${KIMIA_USER}/.config/containers/policy.json <<'EOF'
 {
     "default": [{"type": "insecureAcceptAnything"}]
 }
 EOF
 
 # Containers config (user-specific)
-RUN cat > /home/${SMITHY_USER}/.config/containers/containers.conf <<'EOF'
+RUN cat > /home/${KIMIA_USER}/.config/containers/containers.conf <<'EOF'
 [engine]
 events_logger="file"
 network_backend="netavark"
@@ -157,28 +157,28 @@ RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docke
 
 # Environment variables
 ENV BUILDAH_LOG_LEVEL=error
-ENV HOME=/home/smithy
-ENV DOCKER_CONFIG=/home/smithy/.docker
-ENV XDG_RUNTIME_DIR=/run/user/${SMITHY_UID}
+ENV HOME=/home/kimia
+ENV DOCKER_CONFIG=/home/kimia/.docker
+ENV XDG_RUNTIME_DIR=/run/user/${KIMIA_UID}
 ENV NETAVARK_LOCK_PATH=/tmp/lock/netavark.lock
 
-# Set ownership for smithy user directories
-RUN chown -R ${SMITHY_USER}:${SMITHY_USER} /home/${SMITHY_USER} && \
+# Set ownership for kimia user directories
+RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER} && \
     mkdir -p "${XDG_RUNTIME_DIR}" && \
-    chown -R ${SMITHY_USER}:${SMITHY_USER} "${XDG_RUNTIME_DIR}" && \
+    chown -R ${KIMIA_USER}:${KIMIA_USER} "${XDG_RUNTIME_DIR}" && \
     chmod 1777 /tmp/lock
 
 # Run as non-root user (rootless mode only)
-USER ${SMITHY_UID}:${SMITHY_UID}
-WORKDIR /home/${SMITHY_USER}
+USER ${KIMIA_UID}:${KIMIA_UID}
+WORKDIR /home/${KIMIA_USER}
 
-ENV PATH="/home/${SMITHY_USER}/rapidfort:${PATH}"
+ENV PATH="/home/${KIMIA_USER}/rapidfort:${PATH}"
 
-LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
-LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (Buildah)"
+LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
+LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (Buildah)"
 
-# Set smithy as the entrypoint
-ENTRYPOINT ["/usr/local/bin/smithy"]
+# Set kimia as the entrypoint
+ENTRYPOINT ["/usr/local/bin/kimia"]
 
 # Default command shows help
 CMD ["--help"]

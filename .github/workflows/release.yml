@@ -30,9 +30,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - image_name: smithy
+          - image_name: kimia
             dockerfile: Dockerfile.buildkit
-          - image_name: smithy-bud
+          - image_name: kimia-bud
             dockerfile: Dockerfile.buildah
       
     steps:
@@ -182,15 +182,15 @@ jobs:
           cat >> $GITHUB_STEP_SUMMARY <<EOF
           ## ✅ Multi-Image Build Complete
           
-          Both **smithy** (buildkit) and **smithy-bud** (buildah) images have been built and pushed successfully.
+          Both **kimia** (buildkit) and **kimia-bud** (buildah) images have been built and pushed successfully.
           
           ### Quick Reference
           \`\`\`bash
-          # Pull smithy
-          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/smithy:latest
+          # Pull kimia
+          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/kimia:latest
           
-          # Pull smithy-bud
-          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/smithy-bud:latest
+          # Pull kimia-bud
+          docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/kimia-bud:latest
           \`\`\`
           EOF
 
@@ -221,5 +221,5 @@ jobs:
           echo "   git push origin v${{ steps.version.outputs.VERSION }}"
           echo ""
           echo "This will trigger a production release for both images:"
-          echo "  - smithy (buildkit)"
-          echo "  - smithy-bud (buildah)"
+          echo "  - kimia (buildkit)"
+          echo "  - kimia-bud (buildah)"

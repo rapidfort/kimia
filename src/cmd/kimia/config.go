@@ -1,6 +1,6 @@
 package main
 
-// Config holds all smithy configuration options
+// Config holds all kimia configuration options
 type Config struct {
 	// Core build arguments
 	Dockerfile  string

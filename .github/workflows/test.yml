@@ -24,21 +24,21 @@ jobs:
           file: ./Dockerfile
           push: false
           load: true
-          tags: smithy:test
+          tags: kimia:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Test image
         run: |
           echo "🧪 Running smoke tests..."
-          docker run --rm smithy:test --version
-          docker run --rm smithy:test --help
+          docker run --rm kimia:test --version
+          docker run --rm kimia:test --help
 
       - name: Inspect image
         run: |
           echo "📦 Image details:"
-          docker image inspect smithy:test --format '{{.Size}}' | awk '{print "Size: " $1/1024/1024 "MB"}'
-          docker image inspect smithy:test --format '{{.Architecture}}'
+          docker image inspect kimia:test --format '{{.Size}}' | awk '{print "Size: " $1/1024/1024 "MB"}'
+          docker image inspect kimia:test --format '{{.Architecture}}'
 
   # Optional: Add K8s integration tests with kind
   kubernetes-test:
@@ -53,49 +53,49 @@ jobs:
       - name: Create k8s cluster with kind
         uses: helm/kind-action@v1.8.0
         with:
-          cluster_name: smithy-test
+          cluster_name: kimia-test
 
       - name: Build and load image to kind
         run: |
-          docker build -t smithy:test .
-          kind load docker-image smithy:test --name smithy-test
+          docker build -t kimia:test .
+          kind load docker-image kimia:test --name kimia-test
 
       - name: Run Kubernetes tests
         run: |
           echo "🧪 Running basic k8s deployment test..."
           
           # Create test namespace
-          kubectl create namespace smithy-test
+          kubectl create namespace kimia-test
           
           # Create basic test job
           kubectl apply -f - <<EOF
           apiVersion: batch/v1
           kind: Job
           metadata:
-            name: smithy-version-test
-            namespace: smithy-test
+            name: kimia-version-test
+            namespace: kimia-test
           spec:
             template:
               spec:
                 containers:
-                - name: smithy
-                  image: smithy:test
+                - name: kimia
+                  image: kimia:test
                   imagePullPolicy: Never
-                  command: ["smithy", "--version"]
+                  command: ["kimia", "--version"]
                 restartPolicy: Never
             backoffLimit: 1
           EOF
           
           # Wait for job completion
-          kubectl wait --for=condition=complete job/smithy-version-test -n smithy-test --timeout=60s
+          kubectl wait --for=condition=complete job/kimia-version-test -n kimia-test --timeout=60s
           
           # Check logs
-          kubectl logs job/smithy-version-test -n smithy-test
+          kubectl logs job/kimia-version-test -n kimia-test
           
           echo "✅ Kubernetes test passed!"
 
       - name: Cleanup
         if: always()
         run: |
-          kubectl delete namespace smithy-test --ignore-not-found=true
+          kubectl delete namespace kimia-test --ignore-not-found=true
 

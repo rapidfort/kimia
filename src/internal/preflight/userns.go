@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // UserNamespaceCheck holds the result of user namespace validation

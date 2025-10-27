@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-sleep-build
+  name: kimia-sleep-build
 spec:
   template:
     spec:
@@ -13,8 +13,8 @@ spec:
         seccompProfile:
           type: Unconfined
       containers:
-      - name: smithy
-        image: 100.92.16.57:5000/rapidfort/smithy
+      - name: kimia
+        image: 100.92.16.57:5000/rapidfort/kimia
         command: [ "sleep", "inf" ]
         securityContext:
           runAsUser: 1000

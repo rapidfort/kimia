@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rapidfort/smithy/internal/auth"
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // PushConfig holds push configuration

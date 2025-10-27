@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // DockerConfig represents Docker's config.json structure
@@ -59,7 +59,7 @@ func Setup(config SetupConfig) (string, error) {
 	// DOCKER_CONFIG is the primary source (Kaniko standard)
 	dockerConfigDir := os.Getenv("DOCKER_CONFIG")
 	if dockerConfigDir == "" {
-		dockerConfigDir = "/home/smithy/.docker"
+		dockerConfigDir = "/home/kimia/.docker"
 	}
 
 	// Build list of paths to check - prioritize DOCKER_CONFIG
@@ -67,8 +67,8 @@ func Setup(config SetupConfig) (string, error) {
 		filepath.Join(dockerConfigDir, "config.json"), // Primary: DOCKER_CONFIG/config.json
 		filepath.Join(dockerConfigDir, "auth.json"),   // Secondary: DOCKER_CONFIG/auth.json
 		"/kaniko/.docker/config.json",                 // Kaniko default location
-		"/home/smithy/.docker/config.json",            // Smithy default location
-		"/home/smithy/.docker/auth.json",
+		"/home/kimia/.docker/config.json",            // Kimia default location
+		"/home/kimia/.docker/auth.json",
 		os.Getenv("HOME") + "/.docker/config.json",
 		os.Getenv("HOME") + "/.docker/auth.json",
 		"/.docker/config.json",
@@ -204,7 +204,7 @@ func Setup(config SetupConfig) (string, error) {
 	}
 
 	// Create temp directory for auth files
-	authDir := "/tmp/smithy-auth"
+	authDir := "/tmp/kimia-auth"
 	if err := os.MkdirAll(authDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create auth directory: %v", err)
 	}
@@ -275,7 +275,7 @@ func CreateMinimal(config SetupConfig) (string, error) {
 	logger.Debug("Creating minimal auth configuration")
 
 	// Create temp directory for auth files
-	authDir := "/tmp/smithy-auth"
+	authDir := "/tmp/kimia-auth"
 	if err := os.MkdirAll(authDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create auth directory: %v", err)
 	}

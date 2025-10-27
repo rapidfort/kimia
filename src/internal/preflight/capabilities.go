@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // Capability represents a Linux capability

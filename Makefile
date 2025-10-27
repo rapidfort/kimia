@@ -1,4 +1,4 @@
-# Smithy Makefile - Dual Image Build System (BuildKit + Buildah)
+# Kimia Makefile - Dual Image Build System (BuildKit + Buildah)
 # Variables
 REGISTRY ?= $(if $(RF_APP_HOST),$(RF_APP_HOST):5000/rapidfort,rapidfort)
 NAMESPACE ?= default
@@ -25,12 +25,12 @@ ARCH := $(shell uname -m | sed 's/x86_64/amd64/g' | sed 's/aarch64/arm64/g')
 OS := linux
 
 # Image names - BuildKit is default
-IMAGE_NAME_BUILDKIT := smithy
-IMAGE_NAME_BUILDAH := smithy-bud
+IMAGE_NAME_BUILDKIT := kimia
+IMAGE_NAME_BUILDAH := kimia-bud
 
-# Smithy user configuration
-SMITHY_USER := smithy
-SMITHY_UID := 1000
+# Kimia user configuration
+KIMIA_USER := kimia
+KIMIA_UID := 1000
 
 # Test script location
 TEST_SCRIPT := tests/master.sh
@@ -41,8 +41,8 @@ BUILD_ARGS := \
               --build-arg COMMIT=$(COMMIT) \
               --build-arg BRANCH=$(BRANCH) \
               --build-arg RELEASE=$(RELEASE) \
-              --build-arg SMITHY_USER=$(SMITHY_USER) \
-              --build-arg SMITHY_UID=$(SMITHY_UID)
+              --build-arg KIMIA_USER=$(KIMIA_USER) \
+              --build-arg KIMIA_UID=$(KIMIA_UID)
 
 # Default target
 .PHONY: all
@@ -52,7 +52,7 @@ all: build-all push-all
 .PHONY: help
 help:
 	@echo "╔═══════════════════════════════════════════════════════════════════╗"
-	@echo "║              SMITHY BUILD SYSTEM                                  ║"
+	@echo "║              KIMIA BUILD SYSTEM                                  ║"
 	@echo "╚═══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Version Info:"
@@ -68,15 +68,15 @@ help:
 	fi
 	@echo ""
 	@echo "Images:"
-	@echo "  smithy        - BuildKit-based (default, recommended)"
-	@echo "  smithy-bud    - Buildah-based ('bud' = buildah build)"
+	@echo "  kimia        - BuildKit-based (default, recommended)"
+	@echo "  kimia-bud    - Buildah-based ('bud' = buildah build)"
 	@echo ""
 	@echo "━━━ Main Commands ━━━"
 	@echo "  make all                - Build & push ALL images to dev registry"
 	@echo "  make full               - Build, push & test ALL images"
 	@echo ""
 	@echo "━━━ Build Commands ━━━"
-	@echo "  make build              - Build smithy image (BuildKit)"
+	@echo "  make build              - Build kimia image (BuildKit)"
 	@echo "  make build-buildkit     - Build BuildKit image"
 	@echo "  make build-buildah      - Build Buildah image"
 	@echo "  make build-all          - Build BOTH images"
@@ -95,7 +95,7 @@ help:
 	@echo "  make test-clean         - Clean up test resources"
 	@echo ""
 	@echo "━━━ Utilities ━━━"
-	@echo "  make run                - Run smithy container locally"
+	@echo "  make run                - Run kimia container locally"
 	@echo "  make version            - Show current versions"
 	@echo "  make show-images        - Show local docker images"
 	@echo "  make clean              - Clean build artifacts"
@@ -312,12 +312,12 @@ test-clean:
 		$(TEST_SCRIPT) -m both -c -r $(REGISTRY); \
 	else \
 		echo "[INFO] Test script not found, performing basic cleanup..."; \
-		rm -rf /tmp/smithy-docker-config 2>/dev/null || true; \
+		rm -rf /tmp/kimia-docker-config 2>/dev/null || true; \
 		rm -f /tmp/Dockerfile.* 2>/dev/null || true; \
 		rm -f /tmp/test.log 2>/dev/null || true; \
 		rm -rf /tmp/output 2>/dev/null || true; \
-		rm -rf /tmp/smithy-auth 2>/dev/null || true; \
-		kubectl delete namespace smithy-tests --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true; \
+		rm -rf /tmp/kimia-auth 2>/dev/null || true; \
+		kubectl delete namespace kimia-tests --force --grace-period=0 --ignore-not-found=true 2>/dev/null || true; \
 	fi
 	@echo "[TEST-CLEAN] Cleanup complete"
 
@@ -355,18 +355,18 @@ run:
 		echo "[ERROR] No build found. Run 'make build' first"; \
 		exit 1; \
 	fi; \
-	echo "[RUN] Running smithy container version $$VERSION..."; \
+	echo "[RUN] Running kimia container version $$VERSION..."; \
 	docker run --rm -it \
 		--security-opt seccomp=unconfined \
 		--security-opt apparmor=unconfined \
-		--user $(SMITHY_UID):$(SMITHY_UID) \
-		-e HOME=/home/$(SMITHY_USER) \
-		-e DOCKER_CONFIG=/home/$(SMITHY_USER)/.docker \
+		--user $(KIMIA_UID):$(KIMIA_UID) \
+		-e HOME=/home/$(KIMIA_USER) \
+		-e DOCKER_CONFIG=/home/$(KIMIA_USER)/.docker \
 		$(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION
 
 .PHONY: show-images
 show-images:
-	@echo "[IMAGES] Local Smithy images:"
+	@echo "[IMAGES] Local Kimia images:"
 	@docker images | grep -E "$(REGISTRY)/($(IMAGE_NAME_BUILDKIT)|$(IMAGE_NAME_BUILDAH))" | head -20 || echo "No images found"
 
 .PHONY: inspect

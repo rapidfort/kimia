@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/rapidfort/smithy/pkg/logger"
+	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // CheckEnvironment performs comprehensive environment check
@@ -25,7 +25,7 @@ func CheckEnvironment() int {
 // CheckEnvironmentWithDriver performs comprehensive environment check with storage driver context
 func CheckEnvironmentWithDriver(storageDriver string) int {
 	logger.Info("")
-	logger.Info("Smithy Environment Check")
+	logger.Info("Kimia Environment Check")
 	logger.Info("═══════════════════════════════════════════════════════════")
 	logger.Info("")
 

@@ -1,5 +1,5 @@
-# Dockerfile.buildkit - Self-contained Smithy with BuildKit
-# Smithy launches its own rootlesskit + buildkitd
+# Dockerfile.buildkit - Self-contained Kimia with BuildKit
+# Kimia launches its own rootlesskit + buildkitd
 
 ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
@@ -10,8 +10,8 @@ ARG BUILDKIT_VERSION=v0.25.1
 ARG ROOTLESSKIT_VERSION=v2.3.5
 ARG TARGETARCH
 
-# Stage 1: Build smithy binary
-FROM golang:${GOLANG_VERSION}-alpine AS smithy-builder
+# Stage 1: Build kimia binary
+FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.BuildDate=${BUILD_DATE} \
         -X main.CommitSHA=${COMMIT} \
         -X main.Branch=${BRANCH}" \
-    -o smithy ./cmd/smithy
+    -o kimia ./cmd/kimia
 
 # Stage 2: Runtime image with BuildKit + rootlesskit + crun
 FROM alpine:latest
@@ -69,9 +69,9 @@ RUN buildkitd --version && \
     buildctl --version && \
     rootlesskit --version
 
-# Copy smithy binary
-COPY --from=smithy-builder /app/smithy /usr/local/bin/smithy
-RUN chmod +x /usr/local/bin/smithy
+# Copy kimia binary
+COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
+RUN chmod +x /usr/local/bin/kimia
 
 # Install credential helpers
 RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
@@ -97,20 +97,20 @@ RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/dock
 # Setup SETUID binaries for user namespaces
 RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Create smithy user with proper subuid/subgid mappings
-RUN adduser -D -u 1000 smithy && \
-    echo "smithy:100000:65536" >> /etc/subuid && \
-    echo "smithy:100000:65536" >> /etc/subgid
+# Create kimia user with proper subuid/subgid mappings
+RUN adduser -D -u 1000 kimia && \
+    echo "kimia:100000:65536" >> /etc/subuid && \
+    echo "kimia:100000:65536" >> /etc/subgid
 
 # Create directories with proper permissions
 RUN mkdir -p /tmp/work /tmp/run && \
     mkdir -p /run/buildkit /var/lib/buildkit && \
     chmod 777 /run/buildkit /var/lib/buildkit && \
-    chown -R smithy:smithy /tmp/work /tmp/run
+    chown -R kimia:kimia /tmp/work /tmp/run
 
 # Configure buildkit to use crun in rootless mode
-RUN mkdir -p /home/smithy/.config/buildkit && \
-    cat > /home/smithy/.config/buildkit/buildkitd.toml <<'EOF'
+RUN mkdir -p /home/kimia/.config/buildkit && \
+    cat > /home/kimia/.config/buildkit/buildkitd.toml <<'EOF'
 [worker.oci]
   enabled = true
   rootless = true
@@ -118,7 +118,7 @@ RUN mkdir -p /home/smithy/.config/buildkit && \
   noProcessSandbox = true
 EOF
 
-RUN chown -R smithy:smithy /home/smithy/.config
+RUN chown -R kimia:kimia /home/kimia/.config
 
 # Switch to non-root user
 USER 1000
@@ -128,12 +128,12 @@ WORKDIR /tmp/work
 ENV PATH=/usr/local/bin:$PATH
 ENV XDG_RUNTIME_DIR=/tmp/run
 ENV BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
-ENV HOME=/home/smithy
-ENV DOCKER_CONFIG=/home/smithy/.docker
+ENV HOME=/home/kimia
+ENV DOCKER_CONFIG=/home/kimia/.docker
 
-LABEL org.opencontainers.image.source="https://github.com/rapidfort/smithy"
-LABEL org.opencontainers.image.description="Smithy - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
+LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
+LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
 LABEL org.opencontainers.image.builder="buildkit"
 
-ENTRYPOINT ["/usr/local/bin/smithy"]
+ENTRYPOINT ["/usr/local/bin/kimia"]
 CMD ["--help"]
