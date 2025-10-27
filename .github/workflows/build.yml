@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_BASE: ${{ github.repository }}
 
 jobs:
   build:
@@ -16,6 +16,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    
+    strategy:
+      matrix:
+        include:
+          - image_suffix: ""
+            dockerfile: Dockerfile.buildkit
+            description: "Kimia (BuildKit-based)"
+          - image_suffix: "-bud"
+            dockerfile: Dockerfile.buildah
+            description: "Kimia-Bud (Buildah-based)"
       
     steps:
       - name: Checkout code
@@ -35,49 +45,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata
+      - name: Extract metadata for ${{ matrix.description }}
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            # Use a fixed prefix for SHA-based tags to avoid producing an
-            # invalid tag when the branch template is empty (which can
-            # generate a leading '-' like ":-df2dc06"). This produces
-            # tags like 'sha-df2dc06' which are valid.
             type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build multi-arch image (with cache & push)
+      - name: Build and push ${{ matrix.description }} (main/init branch)
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:buildcache,mode=max
 
-      - name: Build multi-arch image (PR — no registry cache)
+      - name: Build ${{ matrix.description }} (PR - no push)
         if: github.event_name == 'pull_request'
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
-          # Do not push on PRs and avoid accessing GHCR for cache (avoids 403)
           push: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Run tests
         run: |
           if [ -f tests/master.sh ]; then
             chmod +x tests/master.sh
-            # Add test commands here
+            ./tests/master.sh
+          else
+            echo "No tests found, skipping..."
           fi
-
