@@ -378,6 +378,92 @@ run_rootless_tests() {
         --storage-driver=${storage_flag} \
         --insecure \
         --verbosity=debug
+
+    # Test 6: Reproducible builds - build twice and compare digests
+    local test_image="${REGISTRY}/${BUILDER}-reproducible-test-${driver}"
+    
+    # First build
+    echo "Building image (first build)..."
+    run_test \
+        "reproducible-build1" \
+        "rootless" \
+        "$driver" \
+        $BASE_CMD \
+        --context=https://github.com/rapidfort/smithy.git \
+        --git-branch=main \
+        --dockerfile=tests/examples/Dockerfile \
+        --destination=${test_image}:v1 \
+        --storage-driver=${storage_flag} \
+        --reproducible \
+        --insecure \
+        --verbosity=debug
+    
+    docker pull ${test_image}:v1 || true
+
+    # Extract digest from first build
+    local digest1=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+    if [ -z "$digest1" ]; then
+        echo "Warning: Could not extract digest from first build"
+        digest1="none"
+    fi
+    echo "First build digest: ${digest1}"
+    
+    # Clean local cache
+    echo "Cleaning local image cache..."
+    docker rmi ${test_image}:v1 2>/dev/null || true
+    
+    # Second build
+    echo ""
+    echo "Building image (second build)..."
+    run_test \
+        "reproducible-build2" \
+        "rootless" \
+        "$driver" \
+        $BASE_CMD \
+        --context=https://github.com/rapidfort/smithy.git \
+        --git-branch=main \
+        --dockerfile=tests/examples/Dockerfile \
+        --destination=${test_image}:v1 \
+        --storage-driver=${storage_flag} \
+        --reproducible \
+        --insecure \
+        --verbosity=debug
+    
+    docker pull ${test_image}:v1 || true
+    # Extract digest from second build
+    local digest2=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+    if [ -z "$digest2" ]; then
+        echo "Warning: Could not extract digest from second build"
+        digest2="none"
+    fi
+    echo "Second build digest: ${digest2}"
+    
+    # Compare digests
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
+    echo -e "${CYAN}  Build #1 digest: ${digest1} ${NC}"
+    echo -e "${CYAN}  Build #2 digest: ${digest2} ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo ""
+ 
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    if [ "$digest1" = "$digest2" ] && [ "$digest1" != "none" ]; then
+        echo "SUCCESS: Builds are reproducible!"
+        echo "Both builds produced identical digest: ${digest1}"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        TEST_RESULTS+=("PASS: reproducible-comparison (${BUILDER}, rootless, ${driver})")
+    else
+        echo "FAILURE: Builds are NOT reproducible!"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: reproducible-comparison (${BUILDER}, rootless, ${driver})")
+    fi
+    
+    # Cleanup test image
+    docker rmi ${test_image}:v1 2>/dev/null || true
+    echo ""
+
 }
 
 # ============================================================================
