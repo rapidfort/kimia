@@ -21,15 +21,12 @@ type BuildMode int
 
 const (
 	BuildModeRootless BuildMode = iota
-	BuildModeRoot
 )
 
 func (m BuildMode) String() string {
 	switch m {
 	case BuildModeRootless:
 		return "Rootless"
-	case BuildModeRoot:
-		return "Root"
 	default:
 		return "Unknown"
 	}
@@ -42,7 +39,6 @@ type ValidationResult struct {
 	StorageDriver  string
 	Errors         []string
 	Warnings       []string
-	IsRoot         bool
 	UID            int
 	Capabilities   *CapabilityCheck
 	UserNamespace  *UserNamespaceCheck
@@ -61,9 +57,40 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 
 	// 1. Detect current user context
 	result.UID = os.Getuid()
-	result.IsRoot = result.UID == 0
 
 	logger.Info("Current UID: %d", result.UID)
+
+	// CRITICAL: Kimia is rootless-only and does NOT support root mode
+	if result.UID == 0 {
+		result.Errors = append(result.Errors,
+			"Kimia does not support root mode",
+			"",
+			"Kimia is designed to run as a non-root user with capabilities.",
+			"Please run as a non-root user (UID > 0)",
+			"",
+			"For Kubernetes, set:",
+			"  securityContext:",
+			"    runAsUser: 1000",
+			"    runAsNonRoot: true",
+			"    allowPrivilegeEscalation: true",
+			"    capabilities:",
+			"      drop: [ALL]")
+
+		// Add storage-specific capability requirements
+		if storageDriver == "overlay" {
+			result.Errors = append(result.Errors,
+				"      add: [SETUID, SETGID, MKNOD]  # MKNOD required for overlay")
+		} else {
+			result.Errors = append(result.Errors,
+				"      add: [SETUID, SETGID]  # MKNOD not needed for vfs")
+		}
+
+		result.Status = StatusError
+		return result, nil
+	}
+
+	// Kimia always operates in rootless mode
+	result.BuildMode = BuildModeRootless
 
 	// 2. Check capabilities
 	caps, err := CheckCapabilities()
@@ -83,26 +110,19 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 	}
 	result.SetuidBinaries = setuidBins
 
-	// 3. Determine build mode and validate
-	if result.IsRoot {
-		result.BuildMode = BuildModeRoot
-		result.Status = validateRootMode(result)
-	} else {
-		result.BuildMode = BuildModeRootless
-
-		// Check user namespaces for rootless mode
-		userns, err := CheckUserNamespaces()
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("Failed to check user namespaces: %v", err))
-			result.Status = StatusError
-			return result, nil
-		}
-		result.UserNamespace = userns
-
-		result.Status = validateRootlessMode(result)
+	// 3. Check user namespaces for rootless mode
+	userns, err := CheckUserNamespaces()
+	if err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("Failed to check user namespaces: %v", err))
+		result.Status = StatusError
+		return result, nil
 	}
+	result.UserNamespace = userns
 
-	// 4. Validate storage driver
+	// 4. Validate rootless mode configuration
+	result.Status = validateRootlessMode(result)
+
+	// 5. Validate storage driver
 	if result.Status != StatusError {
 		storageStatus := validateStorageDriver(result)
 		if storageStatus == StatusError {
@@ -113,66 +133,6 @@ func Validate(storageDriver string) (*ValidationResult, error) {
 	}
 
 	return result, nil
-}
-
-// validateRootMode validates root mode configuration
-func validateRootMode(result *ValidationResult) ValidationStatus {
-	logger.Debug("Validating root mode configuration")
-
-	// Check if running in Kubernetes
-	if IsInKubernetes() {
-		result.Errors = append(result.Errors,
-			"Rootful mode is NOT supported in Kubernetes environments",
-			"",
-			"Kubernetes requires rootless mode with capabilities:",
-			"  securityContext:",
-			"    runAsUser: 1000",
-			"    runAsNonRoot: true",
-			"    allowPrivilegeEscalation: true",
-			"    capabilities:",
-			"      drop: [ALL]")
-
-		// Add storage-specific capability requirements
-		if result.StorageDriver == "overlay" {
-			result.Errors = append(result.Errors,
-				"      add: [SETUID, SETGID, MKNOD]  # MKNOD required for overlay")
-		} else {
-			result.Errors = append(result.Errors,
-				"      add: [SETUID, SETGID]  # MKNOD not needed for vfs")
-		}
-
-		return StatusError
-	}
-
-	// Root mode works in Docker, but has security warnings
-	result.Warnings = append(result.Warnings,
-		"Running in ROOT mode",
-		"Security implications:",
-		"  • Container escapes grant root access to host",
-		"  • No user namespace isolation",
-		"  • Violates Pod Security Standards",
-		"",
-		"For production, use rootless mode:",
-		"  runAsUser: 1000")
-
-	if result.StorageDriver == "overlay" {
-		result.Warnings = append(result.Warnings,
-			"  capabilities: [SETUID, SETGID, MKNOD]")
-	} else {
-		result.Warnings = append(result.Warnings,
-			"  capabilities: [SETUID, SETGID]")
-	}
-
-	// Check if capabilities are unnecessarily configured
-	if result.Capabilities.HasSetUID || result.Capabilities.HasSetGID {
-		result.Warnings = append(result.Warnings,
-			"",
-			"Unnecessary capabilities detected",
-			"Root already has all privileges. The SETUID/SETGID",
-			"capabilities have no effect and can be removed.")
-	}
-
-	return StatusWarning
 }
 
 func validateRootlessMode(result *ValidationResult) ValidationStatus {
@@ -230,7 +190,7 @@ func validateRootlessMode(result *ValidationResult) ValidationStatus {
 			}
 		}
 	} else {
-		// In Docker: Either capabilities OR SETUID binaries work
+		// In Docker/Standalone: Either capabilities OR SETUID binaries work
 		if hasCapabilities {
 			// Check MKNOD for overlay
 			if needsMknod && !hasMknod {
@@ -294,8 +254,8 @@ func validateStorageDriver(result *ValidationResult) ValidationStatus {
 	logger.Debug("Validating storage driver: %s", result.StorageDriver)
 
 	if result.StorageDriver == "overlay" {
-		// Check if MKNOD capability is available for overlay
-		if !result.IsRoot && !result.Capabilities.HasCapability("CAP_MKNOD") {
+		// Check if MKNOD capability is available for overlay (rootless mode)
+		if !result.Capabilities.HasCapability("CAP_MKNOD") {
 			result.Warnings = append(result.Warnings,
 				"",
 				"Overlay storage requires CAP_MKNOD capability",
