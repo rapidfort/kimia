@@ -14,6 +14,7 @@ import (
 // StorageCheck holds the result of storage driver validation
 type StorageCheck struct {
 	VFSAvailable     bool
+	NativeAvailable bool
 	OverlayAvailable bool
 	TestResult       *OverlayTestResult
 }
@@ -27,19 +28,15 @@ type OverlayTestResult struct {
 }
 
 // CheckStorageDrivers validates available storage drivers
-func CheckStorageDrivers(isRoot bool, hasCaps bool) (*StorageCheck, error) {
+func CheckStorageDrivers(hasCaps bool) (*StorageCheck, error) {
 	logger.Debug("Checking storage driver availability")
 
 	result := &StorageCheck{
 		VFSAvailable: true, // VFS is always available
+		NativeAvailable: true, // Native (BuildKit) is always available
 	}
 
-	// Overlay is available in both root and rootless modes
-	// Rootless uses user namespaces (via newuidmap/newgidmap) to get mount capability
-	if isRoot {
-		result.OverlayAvailable = true
-		logger.Debug("Overlay available (root mode - native kernel overlay)")
-	} else if hasCaps {
+	if hasCaps {
 		// With SETUID/SETGID caps, user namespaces work, giving mount capability
 		result.OverlayAvailable = true
 		logger.Debug("Overlay available (rootless mode - native kernel overlay via user namespaces)")
@@ -194,7 +191,7 @@ func ValidateStorageDriver(driver string, isRoot bool, hasCaps bool) error {
 
 	case "overlay":
 		// Check overlay requirements
-		check, err := CheckStorageDrivers(isRoot, hasCaps)
+		check, err := CheckStorageDrivers(hasCaps)
 		if err != nil {
 			return fmt.Errorf("failed to check storage drivers: %v", err)
 		}

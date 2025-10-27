@@ -14,7 +14,7 @@ spec:
           type: Unconfined
       containers:
       - name: kimia
-        image: 100.92.16.57:5000/rapidfort/kimia
+        image: ghcr.io/rapidfort/kimia
         command: [ "sleep", "inf" ]
         securityContext:
           runAsUser: 1000

@@ -21,12 +21,14 @@ type Capability struct {
 type CapabilityCheck struct {
 	HasSetUID     bool
 	HasSetGID     bool
+	HasDACOverride bool 
 	EffectiveCaps uint64
 	Capabilities  []Capability
 }
 
 // Linux capability bit positions
 const (
+	CAP_DAC_OVERRIDE = 1  // bit 1 - bypass file read, write, and execute permission checks
 	CAP_SETGID = 6  // bit 6
 	CAP_SETUID = 7  // bit 7
 	CAP_MKNOD  = 27 // bit 27 - CREATE special files (needed for overlay)
@@ -73,10 +75,12 @@ func CheckCapabilities() (*CapabilityCheck, error) {
 	logger.Debug("Effective capabilities: 0x%016x", capEff)
 
 	// Check specific capabilities
+	hasDACOverride := (capEff & (1 << CAP_DAC_OVERRIDE)) != 0  // Added
 	hasSetUID := (capEff & (1 << CAP_SETUID)) != 0
 	hasSetGID := (capEff & (1 << CAP_SETGID)) != 0
 	hasMknod := (capEff & (1 << CAP_MKNOD)) != 0
 
+	logger.Debug("CAP_DAC_OVERRIDE (bit %d): %v", CAP_DAC_OVERRIDE, hasDACOverride)  // Added
 	logger.Debug("CAP_SETUID (bit %d): %v", CAP_SETUID, hasSetUID)
 	logger.Debug("CAP_SETGID (bit %d): %v", CAP_SETGID, hasSetGID)
 	logger.Debug("CAP_MKNOD (bit %d): %v", CAP_MKNOD, hasMknod)
@@ -84,8 +88,10 @@ func CheckCapabilities() (*CapabilityCheck, error) {
 	result := &CapabilityCheck{
 		HasSetUID:     hasSetUID,
 		HasSetGID:     hasSetGID,
+		HasDACOverride: hasDACOverride,  // Added
 		EffectiveCaps: capEff,
 		Capabilities: []Capability{
+			{Name: "CAP_DAC_OVERRIDE", Bit: CAP_DAC_OVERRIDE, Present: hasDACOverride},  // Added
 			{Name: "CAP_SETUID", Bit: CAP_SETUID, Present: hasSetUID},
 			{Name: "CAP_SETGID", Bit: CAP_SETGID, Present: hasSetGID},
 			{Name: "CAP_MKNOD", Bit: CAP_MKNOD, Present: hasMknod},
@@ -117,6 +123,8 @@ func (c *CapabilityCheck) HasCapability(capName string) bool {
 
 	// For backward compatibility, also check by bit position
 	switch capName {
+	case "CAP_DAC_OVERRIDE":  // Added
+		return c.HasDACOverride
 	case "CAP_SETUID":
 		return c.HasSetUID
 	case "CAP_SETGID":

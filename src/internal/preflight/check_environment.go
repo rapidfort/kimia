@@ -6,17 +6,24 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
+	"github.com/rapidfort/kimia/internal/build"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // CheckEnvironment performs comprehensive environment check
-// Now accepts storage driver parameter to provide storage-specific guidance
 func CheckEnvironment() int {
 	// Get storage driver from environment or default to vfs
-	storageDriver := os.Getenv("STORAGE_DRIVER")
-	if storageDriver == "" {
-		storageDriver = "vfs"
+	var storageDriver string
+	if build.DetectBuilder() == "buildah" {
+		storageDriver = os.Getenv("STORAGE_DRIVER")
+		if storageDriver == "" {
+			storageDriver = "vfs"
+		}
+	} else {
+		storageDriver = os.Getenv("STORAGE_DRIVER")
+		if storageDriver == "" {
+			storageDriver = "native"
+		}
 	}
 
 	return CheckEnvironmentWithDriver(storageDriver)
@@ -24,8 +31,9 @@ func CheckEnvironment() int {
 
 // CheckEnvironmentWithDriver performs comprehensive environment check with storage driver context
 func CheckEnvironmentWithDriver(storageDriver string) int {
+	builder := build.DetectBuilder()
 	logger.Info("")
-	logger.Info("Kimia Environment Check")
+	logger.Info("Kimia Environment Check (%s)", builder)
 	logger.Info("═══════════════════════════════════════════════════════════")
 	logger.Info("")
 
@@ -34,7 +42,6 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	// Runtime Context
 	logger.Info("RUNTIME CONTEXT")
 	uid := os.Getuid()
-	isRoot := uid == 0
 	isK8s := IsInKubernetes()
 
 	checkmark := getCheckmark(true)
@@ -66,20 +73,28 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		logger.Info("  CAP_SETUID:              %s %s", getPresence(caps.HasSetUID), getCheckmark(caps.HasSetUID))
 		logger.Info("  CAP_SETGID:              %s %s", getPresence(caps.HasSetGID), getCheckmark(caps.HasSetGID))
 
-		// MKNOD only needed for overlay storage
+		// Additional capabilities for overlay storage
 		switch storageDriver {
 		case "overlay":
 			hasMknod := caps.HasCapability("CAP_MKNOD")
+			hasDACOverride := caps.HasCapability("CAP_DAC_OVERRIDE")
+			
 			logger.Info("  CAP_MKNOD:               %s %s (required for overlay)",
 				getPresence(hasMknod), getCheckmark(hasMknod))
-			if !hasMknod && !isRoot {
+			logger.Info("  CAP_DAC_OVERRIDE:        %s %s (required for overlay)",
+				getPresence(hasDACOverride), getCheckmark(hasDACOverride))
+			
+			if !hasMknod {
 				logger.Warning("  Warning: MKNOD capability missing (required for overlay storage)")
-				if !isK8s {
-					allGood = false
-				}
+				allGood = false
 			}
-		case "vfs":
-			logger.Info("  CAP_MKNOD:               Not required (vfs storage)")
+			if !hasDACOverride {
+				logger.Warning("  Warning: DAC_OVERRIDE capability missing (required for overlay storage)")
+				allGood = false
+			}
+		case "vfs", "native":
+			logger.Info("  CAP_MKNOD:               Not required (%s storage)", storageDriver)
+			logger.Info("  CAP_DAC_OVERRIDE:        Not required (%s storage)", storageDriver)
 		}
 
 		logger.Info("  Effective Caps:          %s", caps.FormatCapabilities())
@@ -92,7 +107,6 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	setuidBins, err := CheckSetuidBinaries()
 	if err != nil {
 		logger.Error("  Error: %v", err)
-		// Don't fail yet - capabilities might work
 	} else {
 		if setuidBins.NewuidmapPresent {
 			if setuidBins.NewuidmapSetuid {
@@ -124,37 +138,33 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	logger.Info("")
 
-	// User Namespaces (only for non-root)
-	var userns *UserNamespaceCheck
-	if !isRoot {
-		logger.Info("USER NAMESPACES")
-		var err error
-		userns, err = CheckUserNamespaces()
-		if err != nil {
-			logger.Error("  Error: %v", err)
-			allGood = false
-		} else {
-			logger.Info("  Kernel Support:          %s %s", getEnabled(userns.Supported), getCheckmark(userns.Supported))
-			if userns.Supported {
-				logger.Info("  Max User Namespaces:     %d", userns.MaxUserNS)
-			}
-
-			if userns.SubuidConfigured {
-				logger.Info("  Subuid Mapping:          %s %s", userns.SubuidRange, getCheckmark(true))
-			} else {
-				logger.Info("  Subuid Mapping:          Not configured %s", getCheckmark(false))
-			}
-
-			if userns.SubgidConfigured {
-				logger.Info("  Subgid Mapping:          %s %s", userns.SubgidRange, getCheckmark(true))
-			} else {
-				logger.Info("  Subgid Mapping:          Not configured %s", getCheckmark(false))
-			}
-
-			logger.Info("  Namespace Creation:      %s %s", getSuccess(userns.CanCreate), getCheckmark(userns.CanCreate))
+	// User Namespaces (always check - Kimia is rootless-only)
+	logger.Info("USER NAMESPACES")
+	userns, err := CheckUserNamespaces()
+	if err != nil {
+		logger.Error("  Error: %v", err)
+		allGood = false
+	} else {
+		logger.Info("  Kernel Support:          %s %s", getEnabled(userns.Supported), getCheckmark(userns.Supported))
+		if userns.Supported {
+			logger.Info("  Max User Namespaces:     %d", userns.MaxUserNS)
 		}
-		logger.Info("")
+
+		if userns.SubuidConfigured {
+			logger.Info("  Subuid Mapping:          %s %s", userns.SubuidRange, getCheckmark(true))
+		} else {
+			logger.Info("  Subuid Mapping:          Not configured %s", getCheckmark(false))
+		}
+
+		if userns.SubgidConfigured {
+			logger.Info("  Subgid Mapping:          %s %s", userns.SubgidRange, getCheckmark(true))
+		} else {
+			logger.Info("  Subgid Mapping:          Not configured %s", getCheckmark(false))
+		}
+
+		logger.Info("  Namespace Creation:      %s %s", getSuccess(userns.CanCreate), getCheckmark(userns.CanCreate))
 	}
+	logger.Info("")
 
 	// Storage Drivers
 	logger.Info("STORAGE DRIVERS")
@@ -162,24 +172,29 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	hasRequiredCaps := false
 	if caps != nil {
 		hasRequiredCaps = caps.HasRequiredCapabilities()
-		// For overlay, also check MKNOD
+		// For overlay, also check MKNOD and DAC_OVERRIDE
 		if storageDriver == "overlay" {
-			hasRequiredCaps = hasRequiredCaps && caps.HasCapability("CAP_MKNOD")
+			hasRequiredCaps = hasRequiredCaps && 
+				caps.HasCapability("CAP_MKNOD") && 
+				caps.HasCapability("CAP_DAC_OVERRIDE")
 		}
 	}
 
-	storage, err := CheckStorageDrivers(isRoot, hasRequiredCaps)
+	storage, err := CheckStorageDrivers(hasRequiredCaps)
 	if err != nil {
 		logger.Error("  Error: %v", err)
 		allGood = false
 	} else {
-		logger.Info("  VFS:                     Available %s", getCheckmark(true))
-
-		if isRoot {
-			logger.Info("  Overlay (native):        Available %s", getCheckmark(true))
+		if builder != "buildah" {
+			logger.Info("  Native:                  %s", getCheckmark(storage.NativeAvailable))
 		} else {
-			logger.Info("  Overlay (native):        Not available (rootless mode)")
-			logger.Info("    Note: Overlay requires root privileges")
+			logger.Info("  VFS:                     %s", getCheckmark(storage.VFSAvailable))
+		}
+
+		if storage.OverlayAvailable {
+			logger.Info("  Overlay:                 Available %s", getCheckmark(true))
+		} else {
+			logger.Info("  Overlay:                 Not available (requires MKNOD + DAC_OVERRIDE capabilities)")
 		}
 	}
 	logger.Info("")
@@ -190,45 +205,32 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	var buildModeAvailable bool
 	var buildModeMethod string
 
-	if isRoot {
-		// Check if in Kubernetes
-		if isK8s {
-			buildModeAvailable = false
-			buildModeMethod = "Root (NOT supported in Kubernetes)"
-			allGood = false
-			logger.Error("  ERROR: Rootful mode is NOT supported in Kubernetes")
-		} else {
-			buildModeAvailable = true
-			buildModeMethod = "Root"
-		}
+	// Kimia only supports rootless mode
+	hasRequiredCaps = caps != nil && caps.HasRequiredCapabilities()
+
+	// For overlay, also need MKNOD and DAC_OVERRIDE
+	if storageDriver == "overlay" && hasRequiredCaps {
+		hasRequiredCaps = caps.HasCapability("CAP_MKNOD") && caps.HasCapability("CAP_DAC_OVERRIDE")
+	}
+
+	setuidBins, _ = CheckSetuidBinaries()
+	hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
+	setuidCanWork := CanSetuidBinariesWork()
+
+	usernsOK := userns != nil && userns.IsUserNamespaceReady()
+
+	if hasRequiredCaps && usernsOK {
+		buildModeAvailable = true
+		buildModeMethod = "Rootless (via capabilities)"
+	} else if hasSetuidBins && setuidCanWork && usernsOK {
+		buildModeAvailable = true
+		buildModeMethod = "Rootless (via SETUID binaries)"
+		fmt.Printf("    newuidmap:             %s\n", setuidBins.NewuidmapPath)
+		fmt.Printf("    newgidmap:             %s\n", setuidBins.NewgidmapPath)
 	} else {
-		// Rootless mode checks
-		hasRequiredCaps := caps != nil && caps.HasRequiredCapabilities()
-
-		// For overlay, also need MKNOD
-		if storageDriver == "overlay" && hasRequiredCaps {
-			hasRequiredCaps = caps.HasCapability("CAP_MKNOD")
-		}
-
-		setuidBins, _ := CheckSetuidBinaries()
-		hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
-		setuidCanWork := CanSetuidBinariesWork()
-
-		usernsOK := userns != nil && userns.IsUserNamespaceReady()
-
-		if hasRequiredCaps && usernsOK {
-			buildModeAvailable = true
-			buildModeMethod = "Rootless (via capabilities)"
-		} else if hasSetuidBins && setuidCanWork && usernsOK {
-			buildModeAvailable = true
-			buildModeMethod = "Rootless (via SETUID binaries)"
-			fmt.Printf("    newuidmap:             %s\n", setuidBins.NewuidmapPath)
-			fmt.Printf("    newgidmap:             %s\n", setuidBins.NewgidmapPath)
-		} else {
-			buildModeAvailable = false
-			buildModeMethod = "None"
-			allGood = false
-		}
+		buildModeAvailable = false
+		buildModeMethod = "None"
+		allGood = false
 	}
 
 	if buildModeAvailable {
@@ -241,8 +243,13 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	// Dependencies
 	logger.Info("DEPENDENCIES")
-	checkDependency("buildah", "/usr/local/bin/buildah")
-	checkDependencyVersion("buildah", "buildah", "--version")
+	if builder == "buildah" {
+		checkDependency("buildah", "/usr/local/bin/buildah")
+		checkDependencyVersion("buildah", "buildah", "--version")
+	} else {
+		checkDependency("buildctl", "/usr/local/bin/buildctl")
+		checkDependencyVersion("buildctl", "buildctl", "--version")
+	}
 	checkDependency("git", "/usr/bin/git")
 	checkDependencyVersion("git", "git", "--version")
 	logger.Info("")
@@ -272,18 +279,15 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	if allGood {
 		logger.Info("✓ Environment is properly configured for building images")
-
-		if isRoot && !isK8s {
-			logger.Info("✓ Root mode available (with security warnings)")
-			logger.Info("")
-			logger.Warning("⚠  SECURITY WARNING: Running as root")
-			logger.Warning("   Consider rootless mode for production")
+		logger.Info("✓ %s", buildModeMethod)
+		
+		if storage != nil && storage.OverlayAvailable {
+			logger.Info("✓ Overlay storage available for better performance")
 		} else {
-			logger.Info("✓ %s", buildModeMethod)
-			if storage != nil && storage.OverlayAvailable && isRoot {
-				logger.Info("✓ Overlay storage available for better performance")
+			if builder != "buildah" {
+				logger.Info("✓ Native storage available")
 			} else {
-				logger.Info("✓ VFS storage available (recommended for rootless)")
+				logger.Info("✓ VFS storage available")
 			}
 		}
 
@@ -297,111 +301,135 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		logger.Info("REQUIRED ACTIONS:")
 		logger.Info("")
 
-		if isRoot && isK8s {
-			logger.Error("ERROR: Rootful mode is NOT supported in Kubernetes")
-			logger.Error("")
-			logger.Error("Kubernetes requires rootless mode with capabilities:")
-			logger.Error("  securityContext:")
-			logger.Error("    runAsUser: 1000")
-			logger.Error("    runAsNonRoot: true")
-			logger.Error("    allowPrivilegeEscalation: true")
-			logger.Error("    capabilities:")
-			logger.Error("      drop: [ALL]")
+		hasRequiredCaps = caps != nil && caps.HasRequiredCapabilities()
+		setuidBins, _ = CheckSetuidBinaries()
+		hasSetuidBins = setuidBins != nil && setuidBins.HasSetuidBinaries()
+		setuidCanWork = CanSetuidBinariesWork()
 
-			if storageDriver == "overlay" {
-				logger.Error("      add: [SETUID, SETGID, MKNOD]  # MKNOD required for overlay")
-			} else {
-				logger.Error("      add: [SETUID, SETGID]  # MKNOD not needed for vfs")
-			}
-			logger.Error("")
-		} else if !isRoot {
-			hasRequiredCaps := caps != nil && caps.HasRequiredCapabilities()
-			setuidBins, _ := CheckSetuidBinaries()
-			hasSetuidBins := setuidBins != nil && setuidBins.HasSetuidBinaries()
-			setuidCanWork := CanSetuidBinariesWork()
+		// Check all failure scenarios
+		needsHelp := false
 
-			// FIXED: Show help if we can't build - check all failure scenarios
-			needsHelp := false
+		// Scenario 1: Missing both capabilities and setuid binaries
+		if !hasRequiredCaps && !hasSetuidBins {
+			needsHelp = true
+		}
 
-			// Scenario 1: Missing both capabilities and setuid binaries
-			if !hasRequiredCaps && !hasSetuidBins {
+		// Scenario 2: Have capabilities granted but they're not working
+		if caps != nil && (!caps.HasSetUID || !caps.HasSetGID) {
+			needsHelp = true
+		}
+
+		// Scenario 3: Have setuid binaries but they can't escalate privileges
+		if hasSetuidBins && !setuidCanWork {
+			needsHelp = true
+		}
+
+		// Scenario 4: Overlay storage missing required capabilities
+		if storageDriver == "overlay" && caps != nil {
+			if !caps.HasCapability("CAP_MKNOD") || !caps.HasCapability("CAP_DAC_OVERRIDE") {
 				needsHelp = true
-			}
-
-			// Scenario 2: Have capabilities granted but they're not working (missing from /proc/self/status)
-			if caps != nil && (!caps.HasSetUID || !caps.HasSetGID) {
-				needsHelp = true
-			}
-
-			// Scenario 3: Have setuid binaries but they can't escalate privileges
-			if hasSetuidBins && !setuidCanWork {
-				needsHelp = true
-			}
-
-			if needsHelp {
-				if isK8s {
-					logger.Info("Kubernetes Configuration Required:")
-					logger.Info("  securityContext:")
-					logger.Info("    runAsUser: 1000")
-					logger.Info("    runAsNonRoot: true")
-					logger.Info("    allowPrivilegeEscalation: true  # CRITICAL: Must be true!")
-					logger.Info("    capabilities:")
-					logger.Info("      drop: [ALL]")
-
-					if storageDriver == "overlay" {
-						logger.Info("      add: [SETUID, SETGID, MKNOD]  # MKNOD required for overlay")
-					} else {
-						logger.Info("      add: [SETUID, SETGID]  # MKNOD not needed for vfs")
-					}
-					logger.Info("")
-
-					// Provide specific guidance based on what's wrong
-					if caps != nil && (!caps.HasSetUID || !caps.HasSetGID) {
-						logger.Error("DIAGNOSIS: Required capabilities (SETUID, SETGID) are missing")
-						logger.Error("  - Capabilities may be granted in YAML but not effective")
-						logger.Error("  - Check: kubectl describe pod <pod-name>")
-						logger.Error("  - Verify capabilities in container securityContext")
-					}
-
-					if hasSetuidBins && !setuidCanWork {
-						logger.Error("DIAGNOSIS: SETUID binaries found but cannot escalate privileges")
-						logger.Error("  - This indicates allowPrivilegeEscalation is set to false")
-						logger.Error("  - NoNewPrivs flag is set, blocking privilege escalation")
-						logger.Error("  - FIX: Set allowPrivilegeEscalation: true in securityContext")
-					}
-
-					if !hasSetuidBins && !hasRequiredCaps {
-						logger.Error("DIAGNOSIS: Neither capabilities nor SETUID binaries available")
-						logger.Error("  - Add capabilities: SETUID, SETGID to container")
-						logger.Error("  - Set allowPrivilegeEscalation: true")
-					}
-				} else {
-					logger.Info("Enable Rootless Mode (Recommended):")
-					logger.Info("  For Docker:")
-					logger.Info("    docker run --user 1000:1000 \\")
-					logger.Info("      --cap-drop ALL \\")
-					logger.Info("      --cap-add SETUID \\")
-					logger.Info("      --cap-add SETGID \\")
-
-					if storageDriver == "overlay" {
-						logger.Info("      --cap-add MKNOD \\  # Required for overlay storage")
-					}
-
-					logger.Info("      --security-opt seccomp=unconfined \\")
-					logger.Info("      --security-opt apparmor=unconfined")
-					logger.Info("")
-
-					if hasSetuidBins && !setuidCanWork {
-						logger.Error("Note: SETUID binaries found but blocked by seccomp/apparmor")
-						logger.Error("      Add: --security-opt seccomp=unconfined")
-					}
-				}
 			}
 		}
 
-		if !isK8s && !isRoot {
-			logger.Info("Alternative: Use Root Mode (Less Secure, Docker only):")
-			logger.Info("  docker run --user 0:0 --privileged")
+		if needsHelp {
+			logger.Info("Kubernetes Configuration Required:")
+			logger.Info("")
+			logger.Info("Some Kubernetes clusters require unconfined seccomp and AppArmor profiles")
+			logger.Info("for user namespace operations to work properly.")
+			logger.Info("")
+			logger.Info("Complete Pod/Job specification:")
+			logger.Info("")
+			logger.Info("---")
+			logger.Info("apiVersion: batch/v1")
+			logger.Info("kind: Job")
+			logger.Info("metadata:")
+			logger.Info("  name: kimia-build")
+			logger.Info("spec:")
+			logger.Info("  template:")
+			logger.Info("    spec:")
+			logger.Info("      restartPolicy: Never")
+			logger.Info("      securityContext:")
+			logger.Info("        runAsUser: 1000")
+			logger.Info("        runAsGroup: 1000")
+			logger.Info("        fsGroup: 1000")
+			logger.Info("        seccompProfile:")
+			logger.Info("          type: Unconfined  # May be required for user namespaces")
+			logger.Info("      containers:")
+			logger.Info("      - name: kimia")
+			logger.Info("        image: ghcr.io/rapidfort/kimia:latest")
+			logger.Info("        securityContext:")
+			logger.Info("          runAsUser: 1000")
+			logger.Info("          runAsGroup: 1000")
+			logger.Info("          allowPrivilegeEscalation: true  # CRITICAL: Required!")
+			logger.Info("          appArmorProfile:")
+			logger.Info("            type: Unconfined  # May be required for user namespaces")
+			logger.Info("          seccompProfile:")
+			logger.Info("            type: Unconfined  # May be required for user namespaces")
+			logger.Info("          capabilities:")
+			logger.Info("            drop: [ALL]")
+			
+			if storageDriver == "overlay" {
+				logger.Info("            add: [SETUID, SETGID, MKNOD, DAC_OVERRIDE]")
+			} else {
+				logger.Info("            add: [SETUID, SETGID]")
+			}
+			
+			logger.Info("")
+			logger.Info("NOTE: seccompProfile and appArmorProfile set to Unconfined may be required")
+			logger.Info("      depending on your cluster's security policies.")
+			logger.Info("")
+
+			// Provide specific guidance based on what's wrong
+			if caps != nil && (!caps.HasSetUID || !caps.HasSetGID) {
+				logger.Error("DIAGNOSIS: Required capabilities (SETUID, SETGID) are missing")
+				logger.Error("  - Capabilities may be granted in YAML but not effective")
+				logger.Error("  - Check: kubectl describe pod <pod-name>")
+				logger.Error("  - Verify capabilities in container securityContext")
+				logger.Error("")
+			}
+
+			if storageDriver == "overlay" && caps != nil {
+				if !caps.HasCapability("CAP_MKNOD") {
+					logger.Error("DIAGNOSIS: CAP_MKNOD capability missing (required for overlay)")
+					logger.Error("  - Add CAP_MKNOD to capabilities.add list")
+					logger.Error("")
+				}
+				if !caps.HasCapability("CAP_DAC_OVERRIDE") {
+					logger.Error("DIAGNOSIS: CAP_DAC_OVERRIDE capability missing (required for overlay)")
+					logger.Error("  - Add CAP_DAC_OVERRIDE to capabilities.add list")
+					logger.Error("")
+				}
+			}
+
+			if hasSetuidBins && !setuidCanWork {
+				logger.Error("DIAGNOSIS: SETUID binaries found but cannot escalate privileges")
+				logger.Error("  - This indicates allowPrivilegeEscalation is set to false")
+				logger.Error("  - OR seccomp/AppArmor profiles are blocking privilege escalation")
+				logger.Error("")
+				logger.Error("FIXES:")
+				logger.Error("  1. Set allowPrivilegeEscalation: true in container securityContext")
+				logger.Error("  2. Add seccompProfile: type: Unconfined (pod and/or container level)")
+				logger.Error("  3. Add appArmorProfile: type: Unconfined (container level)")
+				logger.Error("")
+			}
+
+			if !hasSetuidBins && !hasRequiredCaps {
+				logger.Error("DIAGNOSIS: Neither capabilities nor SETUID binaries available")
+				logger.Error("  - Add capabilities: SETUID, SETGID to container")
+				if storageDriver == "overlay" {
+					logger.Error("  - Add capabilities: MKNOD, DAC_OVERRIDE for overlay storage")
+				}
+				logger.Error("  - Set allowPrivilegeEscalation: true")
+				logger.Error("  - Consider adding seccompProfile: Unconfined if still failing")
+				logger.Error("")
+			}
+			
+			logger.Info("Troubleshooting Steps:")
+			logger.Info("  1. Apply the YAML configuration above")
+			logger.Info("  2. Check pod status: kubectl get pod <pod-name>")
+			logger.Info("  3. Describe pod: kubectl describe pod <pod-name>")
+			logger.Info("  4. View logs: kubectl logs <pod-name>")
+			logger.Info("  5. Run preflight check: kubectl exec <pod-name> -- kimia check-environment")
 			logger.Info("")
 		}
 
@@ -442,7 +470,7 @@ func getEnvironment(isK8s bool) string {
 	if isK8s {
 		return "Kubernetes"
 	}
-	return "Docker/Standalone"
+	return "Standalone"
 }
 
 func checkDependency(name, path string) {
