@@ -597,6 +597,68 @@ run_rootless_tests() {
         \"--verbosity=debug\"]" \
         "buildargs-push"
 
+    # Test 7: Reproducible builds
+    local test_image="${REGISTRY}/${BUILDER}-k8s-reproducible-test-${driver}"
+    
+    run_k8s_test \
+        "Reproducible Build #1" \
+        "$driver" \
+        "[\"--context=https://github.com/rapidfort/smithy.git\", \
+        \"--git-branch=main\", \
+        \"--dockerfile=tests/examples/Dockerfile\", \
+        \"--destination=${test_image}:v1\", \
+        \"--storage-driver=${storage_flag}\", \
+        \"--reproducible\", \
+        \"--insecure\", \
+        \"--verbosity=debug\"]" \
+        "reproducible-build1"
+    
+    echo "Waiting 5 seconds before second build..."
+    sleep 5
+    
+    docker pull ${test_image}:v1 || true
+
+    # Extract digest from first build
+    local digest1=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+    if [ -z "$digest1" ]; then
+        echo "Warning: Could not extract digest from first build"
+        digest1="none"
+    fi
+    echo "First build digest: ${digest1}"
+    
+
+    run_k8s_test \
+        "Reproducible Build #2" \
+        "$driver" \
+        "[\"--context=https://github.com/rapidfort/smithy.git\", \
+        \"--git-branch=main\", \
+        \"--dockerfile=tests/examples/Dockerfile\", \
+        \"--destination=${test_image}:v1\", \
+        \"--storage-driver=${storage_flag}\", \
+        \"--reproducible\", \
+        \"--insecure\", \
+        \"--verbosity=debug\"]" \
+        "reproducible-build2"
+
+    sleep 5
+    docker pull ${test_image}:v1 || true
+    # Extract digest from second build
+    local digest2=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+    if [ -z "$digest2" ]; then
+        echo "Warning: Could not extract digest from second build"
+        digest2="none"
+    fi
+    echo "Second build digest: ${digest2}"
+    
+    # Compare digests
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "\${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
+    echo -e "\${CYAN}  Build #1 digest: ${digest1} ${NC}"
+    echo -e "\${CYAN}  Build #2 digest: ${digest2} ${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo ""
 }
 
 # ============================================================================
