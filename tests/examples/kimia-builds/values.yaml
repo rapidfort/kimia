@@ -17,7 +17,7 @@ global:
       - location: "quay.io"
 
 jobDefaults:
-  backoffLimit: 1
+  backoffLimit: 0
   ttlSecondsAfterFinished: 60
   restartPolicy: Never
   # Pod-level security defaults
