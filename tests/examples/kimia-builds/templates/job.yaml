@@ -48,7 +48,7 @@ metadata:
 {{ toYaml . | indent 4 }}
   {{- end }}
 spec:
-  backoffLimit: {{ default 1 $.Values.jobDefaults.ttlSecondsAfterFinished }}
+  backoffLimit: {{ default 1 $.Values.jobDefaults.backoffLimit }}
   ttlSecondsAfterFinished: {{ default 60 $.Values.jobDefaults.ttlSecondsAfterFinished }}
   template:
     spec:
