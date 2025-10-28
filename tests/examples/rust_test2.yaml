@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  name: smithy-rust-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -13,16 +13,17 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
+        image: ghcr.io/rapidfort/smithy:sha-9e238c2
         imagePullPolicy: Always
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
+          - --context=https://github.com/rust-lang/docker-rust.git 
           - --context-sub-path=""
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
+          - --dockerfile=stable/alpine3.21/Dockerfile 
+          - --destination=rust
           - --no-push
+          - -v debug
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
-            add: [SETUID, SETGID]
+            add: [SETUID, SETGID] 
