@@ -21,8 +21,9 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-supervisor-build
+  generateName: kimia-nodejs-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -37,7 +38,8 @@ spec:
         fsGroup: 1000
       initContainers:
       - name: build-ubuntu
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/dockerfile/ubuntu.git
           - --dockerfile=Dockerfile
@@ -45,7 +47,7 @@ spec:
           - -v
           - --insecure-registry=10.228.96.114:5000
         volumeMounts:
-        - mountPath: /home/smithy/.config/containers/registries.conf
+        - mountPath: /home/kimia/.config/containers/registries.conf
           subPath: registries.conf
           name: registries-conf
         securityContext:
@@ -54,7 +56,8 @@ spec:
             drop: ["ALL"]
             add: ["SETUID","SETGID"]
       - name: build-python
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/dockerfile/python.git
           - --dockerfile=Dockerfile
@@ -62,7 +65,7 @@ spec:
           - -v
           - --insecure-registry=10.228.96.114:5000
         volumeMounts:
-        - mountPath: /home/smithy/.config/containers/registries.conf
+        - mountPath: /home/kimia/.config/containers/registries.conf
           subPath: registries.conf
           name: registries-conf
         securityContext:
@@ -72,7 +75,8 @@ spec:
             add: ["SETUID","SETGID"]
       containers:
       - name: build-nodejs
-        image: ghcr.io/rapidfort/smithy:1.0.10
+        image: ghcr.io/rapidfort/kimia:1.0.10
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/dockerfile/nodejs.git
           - --dockerfile=Dockerfile
@@ -80,7 +84,7 @@ spec:
           - --insecure-registry=10.228.96.114:5000
           - -v
         volumeMounts:
-        - mountPath: /home/smithy/.config/containers/registries.conf
+        - mountPath: /home/kimia/.config/containers/registries.conf
           subPath: registries.conf
           name: registries-conf
         securityContext:

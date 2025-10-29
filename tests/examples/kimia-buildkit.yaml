@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kimia-grafana-build
+  generateName: kimia-kimia-build
 spec:
   backoffLimit: 1
   ttlSecondsAfterFinished: 60
@@ -13,15 +13,15 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia
-        image: ghcr.io/rapidfort/kimia:1.0.18
+      - name: smithy
+        image: ghcr.io/rapidfort/kimia-bud:1.0.18
         imagePullPolicy: Always
         args:
-          - --context=https://github.com/grafana/grafana.git
-          - --dockerfile=Dockerfile
-          - --destination=10.228.96.114:5000/kimia-test:grafana
-          - -v
+          - --context=https://github.com/rapidfort/kimia.git
+          - --dockerfile=Dockerfile.buildkit
+          - --destination=kimia
           - --no-push
+          - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

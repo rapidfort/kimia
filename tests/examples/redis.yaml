@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-redis-build
+  name: kimia-redis-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,8 +13,9 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/redis/docker-library-redis.git
           - --dockerfile=7.4/debian/Dockerfile
@@ -24,4 +26,3 @@ spec:
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
-

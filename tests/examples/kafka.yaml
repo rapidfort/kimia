@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-kafka-build
+  generateName: kimia-kafka-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,12 +13,13 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/wurstmeister/kafka-docker.git
           - --dockerfile=Dockerfile
-          - --destination=10.228.96.114:5000/smithy-test:mykafka
+          - --destination=10.228.96.114:5000/kimia-test:mykafka
           - -v
           - --push-retry=3
         securityContext:

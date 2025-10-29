@@ -21,8 +21,9 @@ data:
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-spark-build
+  generateName: kimia-spark-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -38,7 +39,8 @@ spec:
 
       initContainers:
       - name: build-scala-java
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia:1.0.18
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/apache/spark-docker.git
           - --context-sub-path=4.0.0/scala2.13-java21-ubuntu
@@ -47,7 +49,7 @@ spec:
           - -v
           - --insecure-registry=10.228.96.114:5000
         volumeMounts:
-        - mountPath: /home/smithy/.config/containers/registries.conf
+        - mountPath: /home/kimia/.config/containers/registries.conf
           subPath: registries.conf
           name: registries-conf
         securityContext:
@@ -58,7 +60,8 @@ spec:
 
       containers:
       - name: build-scala-python
-        image: ghcr.io/rapidfort/smithy:1.0.10
+        image: ghcr.io/rapidfort/kimia:1.0.18
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/apache/spark-docker.git \
           - --context-sub-path=4.0.0/scala2.13-java21-python3-ubuntu \
@@ -67,7 +70,7 @@ spec:
           - --insecure-registry=10.228.96.114:5000
           - -v
         volumeMounts:
-        - mountPath: /home/smithy/.config/containers/registries.conf
+        - mountPath: /home/kimia/.config/containers/registries.conf
           subPath: registries.conf
           name: registries-conf
         securityContext:

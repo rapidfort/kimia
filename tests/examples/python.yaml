@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-python-build
+  generateName: kimia-python-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,8 +13,9 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/docker-library/python.git
           - --context-sub-path=3.14/alpine3.22

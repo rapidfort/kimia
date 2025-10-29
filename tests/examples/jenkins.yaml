@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-jenkins-build
+  generateName: kimia-jenkins-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,9 +13,9 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
+      - name: kimia
         imagePullPolicy: Always
-        image: ghcr.io/rapidfort/smithy:latest
+        image: ghcr.io/rapidfort/kimia:latest
         args:
           - --context=https://github.com/jenkinsci/docker.git
 #          - --context-sub-path=debian/trixie/hotspot

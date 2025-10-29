@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-lightstreamer-build
+  generateName: kimia-lightstreamer-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,8 +13,9 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
           - --context=https://github.com/Lightstreamer/Docker.git
           - --dockerfile=7.3/jdk17/Dockerfile

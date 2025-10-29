@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-alpine-build
+  generateName: kimia-alpine-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,14 +13,15 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:1.0.18
         imagePullPolicy: Always
         args:
           - --context=https://github.com/alpinelinux/docker-alpine.git
           - --context-sub-path=""
           - --dockerfile=Dockerfile
           - --destination=10.228.96.114:5000/my-alpine
+          - --no-push
           - -v
         securityContext:
           allowPrivilegeEscalation: true
