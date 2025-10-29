@@ -6,15 +6,15 @@ global:
 
   registries:
     unqualifiedSearch:
-      - "10.228.96.114:5000"
       - "docker.io"
       - "quay.io"
+      - "10.228.96.114:5000"
     entries:
+      - location: "docker.io"
+      - location: "quay.io"
       - location: "10.228.96.114:5000"
         insecure: true
         blocked: false
-      - location: "docker.io"
-      - location: "quay.io"
 
 jobDefaults:
   backoffLimit: 0
