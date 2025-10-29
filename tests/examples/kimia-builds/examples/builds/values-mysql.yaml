@@ -9,4 +9,4 @@ builds:
         destination: 10.228.96.114:5000/mysql
         insecureRegistry: "10.228.96.114:5000"
         verbose: true
-        extraArgs: ["--no-cache", "--no-push"]
+        extraArgs: ["--no-push"]
