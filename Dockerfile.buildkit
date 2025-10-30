@@ -54,8 +54,8 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fksSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" -o buildkit.tar.gz && \
-    curl -fskSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" -o buildkit.tar.gz && \
+    curl -fkSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
     expected=$(jq -r '.subject[0].digest.sha256' provenance.json) && \
     actual=$(sha256sum buildkit.tar.gz | awk '{print $1}') && \
     if [ "$expected" = "$actual" ]; then \
@@ -75,8 +75,8 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "arm64") echo "aarch64" ;; \
         *) echo "x86_64" ;; \
     esac) && \
-    curl -fskSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" -o "rootlesskit-${ARCH}.tar.gz" && \
-    curl -fskSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/SHA256SUMS" -o SHA256SUMS && \
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" -o "rootlesskit-${ARCH}.tar.gz" && \
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/SHA256SUMS" -o SHA256SUMS && \
     grep "rootlesskit-${ARCH}.tar.gz" SHA256SUMS > SHA256SUMS.single && \
     sha256sum -c SHA256SUMS.single && \
     tar -xf "rootlesskit-${ARCH}.tar.gz" bin
