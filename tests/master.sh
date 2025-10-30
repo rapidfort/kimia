@@ -38,6 +38,7 @@ NC='\033[0m'
 TEST_MODE=""
 CLEANUP_AFTER=false
 STORAGE_DRIVER="both"
+TEST_SUITE="all"  # all, simple, reproducible, attestation, signing
 
 # Test counters
 TOTAL_TESTS=0
@@ -61,6 +62,7 @@ usage() {
     echo "    -r, --registry URL          Registry URL (default: ${REGISTRY})"
     echo "    -i, --image IMAGE           Kimia image to test"
     echo "    -b, --builder BUILDER       Builder: buildkit (default), buildah"
+    echo "    -t, --tests SUITE           Test suite: all (default), simple, reproducible, attestation, signing"
     echo "    -s, --storage DRIVER        Storage driver: vfs, overlay, native, both (default: both)"
     echo "    -c, --cleanup               Clean up resources after tests"
     echo "    --namespace NAMESPACE       Kubernetes namespace (default: ${NAMESPACE})"
@@ -69,6 +71,17 @@ usage() {
     echo "    docker                      Run Docker tests only (rootless + rootful)"
     echo "    kubernetes                  Run Kubernetes tests only (rootless + rootful)"
     echo "    both                        Run all tests"
+    echo ""
+    echo -e "${YELLOW}TEST SUITES:${NC}"
+    echo "    all                         Run all tests (default)"
+    echo "    simple                      Basic tests (~5-8 min)"
+    echo "                               - Version, env checks, basic Git builds"
+    echo "    reproducible                Reproducible build tests (~7-10 min)"
+    echo "                               - Build twice, compare digests"
+    echo "    attestation                 Attestation tests (~6-8 min, BuildKit only)"
+    echo "                               - Default, min, max attestation modes"
+    echo "    signing                     Signing tests (~3-4 min, BuildKit only)"
+    echo "                               - Attestation with cosign signing"
     echo ""
     echo -e "${YELLOW}BUILDERS:${NC}"
     echo "    buildkit                    Test BuildKit-based kimia (default, recommended)"
@@ -91,6 +104,15 @@ usage() {
     echo -e "${YELLOW}EXAMPLES:${NC}"
     echo "    # Run all tests with BuildKit (default)"
     echo "    $0 -m both"
+    echo ""
+    echo "    # Quick debug: run only simple tests"
+    echo "    $0 -m both --tests simple"
+    echo ""
+    echo "    # Test reproducible builds specifically"
+    echo "    $0 -m docker --tests reproducible"
+    echo ""
+    echo "    # Test attestation features (BuildKit only)"
+    echo "    $0 -m both --tests attestation -b buildkit"
     echo ""
     echo "    # Run Docker tests only with BuildKit and native storage"
     echo "    $0 -m docker -s native"
@@ -152,6 +174,10 @@ parse_args() {
                 BUILDER="$2"
                 shift 2
                 ;;
+            -t|--tests)
+                TEST_SUITE="$2"
+                shift 2
+                ;;
             -s|--storage)
                 STORAGE_DRIVER="$2"
                 shift 2
@@ -192,6 +218,19 @@ parse_args() {
     # Validate storage driver
     if [[ ! "$STORAGE_DRIVER" =~ ^(native|vfs|overlay|both)$ ]]; then
         echo -e "${RED}Error: Invalid storage driver. Must be: native, vfs, overlay, or both${NC}"
+        usage
+    fi
+
+    # Validate test suite
+    if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing)$ ]]; then
+        echo -e "${RED}Error: Invalid test suite. Must be: all, simple, reproducible, attestation, or signing${NC}"
+        usage
+    fi
+
+    # Validate attestation/signing tests require BuildKit
+    if [[ "$TEST_SUITE" =~ ^(attestation|signing)$ ]] && [ "$BUILDER" != "buildkit" ]; then
+        echo -e "${RED}Error: ${TEST_SUITE} tests require BuildKit builder${NC}"
+        echo -e "${YELLOW}Please use: --builder buildkit${NC}"
         usage
     fi
 
@@ -270,6 +309,7 @@ run_docker_tests() {
     cmd="$cmd --image $KIMIA_IMAGE"
     cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
+    cmd="$cmd --tests $TEST_SUITE"
 
     [ "$CLEANUP_AFTER" = true ] && cmd="$cmd --cleanup"
 
@@ -293,6 +333,7 @@ run_kubernetes_tests() {
     cmd="$cmd --namespace $NAMESPACE"
     cmd="$cmd --builder $BUILDER"
     cmd="$cmd --storage $STORAGE_DRIVER"
+    cmd="$cmd --tests $TEST_SUITE"
 
     [ "$CLEANUP_AFTER" = true ] && cmd="$cmd --cleanup"
 
@@ -316,6 +357,7 @@ main() {
     echo -e "  Builder:        ${BUILDER}"
     echo -e "  Registry:       ${REGISTRY}"
     echo -e "  Image:          ${KIMIA_IMAGE}"
+    echo -e "  Test Suite:     ${TEST_SUITE}"
     echo -e "  Storage:        ${STORAGE_DRIVER}"
     echo -e "  Namespace:      ${NAMESPACE}"
     echo -e "  Cleanup:        ${CLEANUP_AFTER}"

@@ -1,27 +1,25 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: Pod
 metadata:
-  name: kimia-sleep-build
+  name: kimia
 spec:
-  template:
-    spec:
-      restartPolicy: Never
-      securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        seccompProfile:
-          type: Unconfined
-      containers:
-      - name: kimia
-        image: 100.92.16.57:5000/rapidfort/kimia
-        command: [ "sleep", "inf" ]
-        securityContext:
-          runAsUser: 1000
-          runAsGroup: 1000
-          allowPrivilegeEscalation: true
-          appArmorProfile:
-            type: Unconfined
-          seccompProfile:
-            type: Unconfined
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: Unconfined
+  containers:
+  - name: kimia
+    image: 100.92.16.57:5000/rapidfort/kimia
+    command: [ "sleep", "inf" ]
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      allowPrivilegeEscalation: true
+      appArmorProfile:
+        type: Unconfined
+      seccompProfile:
+        type: Unconfined
 

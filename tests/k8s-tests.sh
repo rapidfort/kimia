@@ -26,6 +26,11 @@ NAMESPACE=${NAMESPACE:-"kimia-tests"}
 BUILDER=${BUILDER:-"buildkit"}  # buildkit or buildah
 STORAGE_DRIVER="both"
 CLEANUP_AFTER=false
+TEST_SUITE="all"  # all, simple, reproducible, attestation, signing
+
+# Cosign configuration
+COSIGN_KEY_PATH=${COSIGN_KEY_PATH:-"/tmp/cosign.key"}
+COSIGN_PASSWORD=${COSIGN_PASSWORD:-"1234567890"}
 
 # Script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -49,11 +54,73 @@ declare -a TEST_RESULTS
 JOB_TIMEOUT=600  # 10 minutes
 
 # ============================================================================
+# Usage Function
+# ============================================================================
+
+show_help() {
+    echo -e "${CYAN}Kimia Kubernetes Test Suite${NC}"
+    echo "Tests rootless mode (UID 1000) in Kubernetes"
+    echo ""
+    echo -e "${YELLOW}USAGE:${NC}"
+    echo "    $0 [OPTIONS]"
+    echo ""
+    echo -e "${YELLOW}OPTIONS:${NC}"
+    echo "    -h, --help              Show this help message"
+    echo "    --registry URL          Registry URL (default: ghcr.io)"
+    echo "    --image IMAGE           Kimia image to test"
+    echo "    --namespace NS          Kubernetes namespace (default: kimia-tests)"
+    echo "    --builder TYPE          Builder: buildkit (default) or buildah"
+    echo "    --storage DRIVER        Storage: both (default), native/vfs, overlay"
+    echo "    --tests SUITE           Test suite to run (default: all)"
+    echo "    --cleanup               Clean up namespace after tests"
+    echo ""
+    echo -e "${YELLOW}TEST SUITES:${NC}"
+    echo "    all                     Run all tests (default)"
+    echo "    simple                  Basic tests (7 tests, ~8 min)"
+    echo "                           - Version, env check"
+    echo "                           - Git builds with/without push"
+    echo "    reproducible            Reproducible build tests (3 tests, ~10 min)"
+    echo "                           - Build twice, compare digests"
+    echo "    attestation             Attestation tests (10 tests, ~18 min, BuildKit only)"
+    echo "                           - Simple modes: default, min, max, off"
+    echo "                           - Docker-style: sbom, provenance, scan options"
+    echo "                           - Combined: both attestations, pass-through"
+    echo "    signing                 Signing tests (1 test, ~4 min, BuildKit only)"
+    echo "                           - Attestation with cosign signing"
+    echo ""
+    echo -e "${YELLOW}EXAMPLES:${NC}"
+    echo "    # Run all tests"
+    echo "    $0 --tests all"
+    echo ""
+    echo "    # Quick debug: run simple tests only"
+    echo "    $0 --tests simple"
+    echo ""
+    echo "    # Test reproducible builds in Kubernetes"
+    echo "    $0 --tests reproducible"
+    echo ""
+    echo "    # Test attestation (BuildKit only)"
+    echo "    $0 --tests attestation --builder buildkit"
+    echo ""
+    echo "    # Test signing (requires cosign secrets)"
+    echo "    $0 --tests signing --builder buildkit"
+    echo ""
+    echo -e "${YELLOW}NOTES:${NC}"
+    echo "    - Attestation and signing tests require BuildKit builder"
+    echo "    - Signing tests require cosign-key and cosign-password secrets in namespace"
+    echo "    - Use --tests to run specific test suites for faster debugging"
+    echo ""
+    exit 0
+}
+
+# ============================================================================
 # Argument Parsing
 # ============================================================================
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        -h|--help)
+            show_help
+            ;;
         --registry)
             REGISTRY="$2"
             shift 2
@@ -74,13 +141,17 @@ while [[ $# -gt 0 ]]; do
             STORAGE_DRIVER="$2"
             shift 2
             ;;
+        --tests)
+            TEST_SUITE="$2"
+            shift 2
+            ;;
         --cleanup)
             CLEANUP_AFTER=true
             shift
             ;;
         *)
             echo -e "${RED}Unknown option: $1${NC}"
-            exit 1
+            show_help
             ;;
     esac
 done
@@ -88,6 +159,20 @@ done
 # Validate builder
 if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
     echo -e "${RED}Error: Invalid builder '$BUILDER'. Must be: buildkit or buildah${NC}"
+    exit 1
+fi
+
+# Validate test suite
+if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing)$ ]]; then
+    echo -e "${RED}Error: Invalid test suite '$TEST_SUITE'.${NC}"
+    echo -e "${RED}Must be: all, simple, reproducible, attestation, or signing${NC}"
+    exit 1
+fi
+
+# Validate attestation/signing tests require BuildKit
+if [[ "$TEST_SUITE" =~ ^(attestation|signing)$ ]] && [ "$BUILDER" != "buildkit" ]; then
+    echo -e "${RED}Error: ${TEST_SUITE} tests require BuildKit builder${NC}"
+    echo -e "${YELLOW}Please use: --builder buildkit${NC}"
     exit 1
 fi
 
@@ -100,9 +185,9 @@ mkdir -p "${SUITES_DIR}"
 
 print_section() {
     echo ""
-    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}  $1${NC}"
-    echo -e "${BLUE}══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
     echo ""
 }
 
@@ -132,6 +217,26 @@ get_storage_flag() {
 }
 
 # ============================================================================
+# Test Suite Selection Functions
+# ============================================================================
+
+should_run_simple() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "simple" ]]
+}
+
+should_run_reproducible() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "reproducible" ]]
+}
+
+should_run_attestation() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "attestation" ]] && [ "$BUILDER" = "buildkit" ]
+}
+
+should_run_signing() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "signing" ]] && [ "$BUILDER" = "buildkit" ]
+}
+
+# ============================================================================
 # Setup Namespace
 # ============================================================================
 
@@ -153,10 +258,125 @@ setup_namespace() {
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
 
-    echo -e "${GREEN}✓ Namespace ready${NC}"
+    echo -e "${GREEN}âœ“ Namespace ready${NC}"
 }
 
-# ============================================================================
+# ===========================================================================
+# Cosign Key Generation and Secret Management  
+# ===========================================================================
+
+# Generate cosign key if it doesn't exist
+ensure_cosign_key() {
+    local key_dir=$(dirname "${COSIGN_KEY_PATH}")
+    local key_file="${COSIGN_KEY_PATH}"
+    local pub_file="${key_file%.key}.pub"
+
+    # Check if key already exists
+    if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
+        echo -e "${GREEN}✓ Cosign key already exists: ${key_file}${NC}"
+        return 0
+    fi
+    
+    echo -e "${CYAN}Generating cosign key pair...${NC}"
+    
+    # Create directory if it doesn't exist
+    mkdir -p "${key_dir}"
+
+    # Generate cosign key pair
+    if command -v cosign &> /dev/null; then
+        # Use local cosign if available
+        COSIGN_PASSWORD="${COSIGN_PASSWORD}" cosign generate-key-pair --output-key-prefix="${key_dir}/cosign"
+    else
+        # Use cosign from docker/podman image
+        if command -v docker &> /dev/null; then
+            docker run --rm \
+                -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                -v "${key_dir}:/tmp/cosign" \
+                gcr.io/projectsigstore/cosign:latest \
+                generate-key-pair --output-key-prefix="/tmp/cosign/cosign"
+        elif command -v podman &> /dev/null; then
+            podman run --rm \
+                -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+                -v "${key_dir}:/tmp/cosign:z" \
+                gcr.io/projectsigstore/cosign:latest \
+                generate-key-pair --output-key-prefix="/tmp/cosign/cosign"
+        else
+            echo -e "${RED}✗ cosign binary not found and neither docker nor podman available${NC}"
+            echo -e "${YELLOW}Install cosign: https://docs.sigstore.dev/cosign/installation/${NC}"
+            return 1
+        fi
+    fi
+    
+    # CRITICAL: Fix ownership so any user can access the keys
+    # This is important because the program can be run by any user
+    chown -R $(id -u):$(id -g) "${key_dir}" 2>/dev/null || true
+    chmod -R 755 "${key_dir}" 2>/dev/null || true
+    
+    if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
+        echo -e "${GREEN}✓ Cosign key pair generated successfully${NC}"
+        echo -e "${CYAN}  Private key: ${key_file}${NC}"
+        echo -e "${CYAN}  Public key:  ${pub_file}${NC}"
+        echo -e "${CYAN}  Password:    ${COSIGN_PASSWORD}${NC}"
+        return 0
+    else
+        echo -e "${RED}✗ Failed to generate cosign key pair${NC}"
+        return 1
+    fi
+}
+
+# Create Kubernetes secrets for cosign key and password
+setup_cosign_secrets() {
+    echo -e "${CYAN}Setting up cosign secrets in Kubernetes...${NC}"
+    
+    # Generate cosign key if it doesn't exist
+    if ! ensure_cosign_key; then
+        echo -e "${YELLOW}⚠ Warning: Could not generate cosign key${NC}"
+        echo -e "${YELLOW}⚠ Signing tests will be skipped${NC}"
+        return 1
+    fi
+    
+    local key_file="${COSIGN_KEY_PATH}"
+    local pub_file="${key_file%.key}.pub"
+    
+    # Check if secrets already exist
+    if kubectl get secret cosign-key -n ${NAMESPACE} &>/dev/null; then
+        echo -e "${GREEN}✓ cosign-key secret already exists${NC}"
+    else
+        echo "Creating cosign-key secret..."
+        kubectl create secret generic cosign-key \
+            --from-file=cosign.key="${key_file}" \
+            --from-file=cosign.pub="${pub_file}" \
+            -n ${NAMESPACE}
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓ cosign-key secret created${NC}"
+        else
+            echo -e "${RED}✗ Failed to create cosign-key secret${NC}"
+            return 1
+        fi
+    fi
+    
+    if kubectl get secret cosign-password -n ${NAMESPACE} &>/dev/null; then
+        echo -e "${GREEN}✓ cosign-password secret already exists${NC}"
+    else
+        echo "Creating cosign-password secret..."
+        kubectl create secret generic cosign-password \
+            --from-literal=COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
+            -n ${NAMESPACE}
+        
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓ cosign-password secret created${NC}"
+        else
+            echo -e "${RED}✗ Failed to create cosign-password secret${NC}"
+            return 1
+        fi
+    fi
+    
+    echo -e "${GREEN}✓ Cosign secrets ready for signing tests${NC}"
+    return 0
+}
+
+# ===========================================================================
 # Job YAML Generation (Rootless with storage-specific capabilities)
 # ============================================================================
 
@@ -164,6 +384,7 @@ generate_job_yaml() {
     local job_name="$1"
     local driver="$2"
     local args="$3"
+    local with_signing="${4:-false}"  # Optional: true if signing test
 
     # Get actual storage flag
     local storage_flag=$(get_storage_flag "$driver")
@@ -179,293 +400,249 @@ generate_job_yaml() {
     local container_apparmor=""
     local volume_mounts=""
     local volumes=""
+    local env_vars=""
     local has_volumes=false
 
     # CRITICAL FIX: BuildKit ALWAYS needs Unconfined seccomp + AppArmor for mount syscalls
     # This applies to BOTH native and overlay storage
     if [ "$BUILDER" = "buildkit" ]; then
-        pod_seccomp="seccompProfile:
-          type: Unconfined"
         container_seccomp="seccompProfile:
             type: Unconfined"
-        # AppArmor also blocks mount syscalls - must be Unconfined
-        pod_apparmor="appArmorProfile:
-          type: Unconfined"
         container_apparmor="appArmorProfile:
             type: Unconfined"
     fi
 
-    # Overlay storage needs additional configuration
+    # Overlay storage configuration
     if [ "$driver" = "overlay" ]; then
-        # Add MKNOD and DAC_OVERRIDE for overlay
-        caps_add="[SETUID, SETGID, MKNOD, DAC_OVERRIDE]"
-
-        # Buildah with overlay also needs Unconfined seccomp + AppArmor
-        if [ "$BUILDER" = "buildah" ]; then
-            pod_seccomp="seccompProfile:
-          type: Unconfined"
+        # Overlay needs additional capabilities and profiles
+        if [ "$BUILDER" = "buildkit" ]; then
+            # BuildKit overlay: just DAC_OVERRIDE + Unconfined (already set above)
+            caps_add="[SETUID, SETGID, DAC_OVERRIDE]"
+        else
+            # Buildah overlay: MKNOD + Unconfined + emptyDir
+            caps_add="[SETUID, SETGID, MKNOD]"
             container_seccomp="seccompProfile:
             type: Unconfined"
-            pod_apparmor="appArmorProfile:
-          type: Unconfined"
             container_apparmor="appArmorProfile:
             type: Unconfined"
 
-            # CRITICAL: Buildah overlay needs emptyDir at /home/kimia/.local
-            # Why: Cannot nest kernel overlayfs on top of kernel overlayfs (container root)
-            # Container root = kernel overlayfs, storage needs kernel overlayfs = NESTED = FAILS
-            # Solution: Mount emptyDir (tmpfs) to break the nesting
-            # This allows: tmpfs → kernel overlayfs ✓ (instead of overlayfs → overlayfs ✗)
-            # Note: Uses native kernel overlayfs via user namespaces (no fuse-overlayfs needed)
-            volume_mounts="
-        - name: kimia-local
+            # Buildah overlay REQUIRES emptyDir at /home/kimia/.local
+            # This breaks nested overlayfs since container root is already overlay
+            volume_mounts="        - name: kimia-local
           mountPath: /home/kimia/.local"
-            volumes="
-      - name: kimia-local
+            volumes="      - name: kimia-local
         emptyDir: {}"
             has_volumes=true
         fi
-        # Note: BuildKit overlay doesn't need any volumes (no nesting issue)
     fi
 
-    # Build the YAML - conditionally include volumeMounts and volumes
+    # Signing test needs cosign key and password
+    if [ "$with_signing" = "true" ]; then
+        volume_mounts="${volume_mounts}
+        - name: cosign-key
+          mountPath: /tmp/cosign.key
+          subPath: cosign.key
+          readOnly: true"
+        volumes="${volumes}
+      - name: cosign-key
+        secret:
+          secretName: cosign-key
+          defaultMode: 0400"
+        env_vars="        - name: COSIGN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: cosign-password
+              key: COSIGN_PASSWORD"
+        has_volumes=true
+    fi
+
+    # Generate complete YAML
+    cat > "${yaml_file}" << EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${job_name}
+  namespace: ${NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: kimia
+        image: ${KIMIA_IMAGE}
+        imagePullPolicy: Always
+        args: ${args}
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          runAsNonRoot: true
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: ${caps_add}
+          ${container_seccomp}
+          ${container_apparmor}
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+EOF
+
+    # Add env vars if present
+    if [ -n "$env_vars" ]; then
+        cat >> "${yaml_file}" << EOF
+        env:
+${env_vars}
+EOF
+    fi
+
+    # Add volume mounts if present
     if [ "$has_volumes" = true ]; then
-        cat > "$yaml_file" <<EOF
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: ${job_name}
-  namespace: ${NAMESPACE}
-  labels:
-    app: kimia-test
-    builder: ${BUILDER}
-    mode: rootless
-    driver: ${driver}
-spec:
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        app: kimia-test
-        builder: ${BUILDER}
-        mode: rootless
-        driver: ${driver}
-    spec:
-      restartPolicy: Never
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        ${pod_seccomp}
-        ${pod_apparmor}
-      containers:
-      - name: kimia
-        image: ${KIMIA_IMAGE}
-        args: ${args}
-        env:
-        - name: KIMIA_USER
-          value: "kimia"
-        - name: STORAGE_DRIVER
-          value: "${storage_flag}"
-        securityContext:
-          allowPrivilegeEscalation: true
-          capabilities:
-            add: ${caps_add}
-            drop: [ALL]
-          runAsUser: 1000
-          runAsGroup: 1000
-          ${container_seccomp}
-          ${container_apparmor}
-        volumeMounts:${volume_mounts}
-      volumes:${volumes}
-EOF
-    else
-        cat > "$yaml_file" <<EOF
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: ${job_name}
-  namespace: ${NAMESPACE}
-  labels:
-    app: kimia-test
-    builder: ${BUILDER}
-    mode: rootless
-    driver: ${driver}
-spec:
-  backoffLimit: 0
-  ttlSecondsAfterFinished: 300
-  template:
-    metadata:
-      labels:
-        app: kimia-test
-        builder: ${BUILDER}
-        mode: rootless
-        driver: ${driver}
-    spec:
-      restartPolicy: Never
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        runAsGroup: 1000
-        fsGroup: 1000
-        ${pod_seccomp}
-        ${pod_apparmor}
-      containers:
-      - name: kimia
-        image: ${KIMIA_IMAGE}
-        args: ${args}
-        env:
-        - name: KIMIA_USER
-          value: "kimia"
-        - name: STORAGE_DRIVER
-          value: "${storage_flag}"
-        securityContext:
-          allowPrivilegeEscalation: true
-          capabilities:
-            add: ${caps_add}
-            drop: [ALL]
-          runAsUser: 1000
-          runAsGroup: 1000
-          ${container_seccomp}
-          ${container_apparmor}
+        cat >> "${yaml_file}" << EOF
+        volumeMounts:
+${volume_mounts}
+      volumes:
+${volumes}
 EOF
     fi
 
-    echo "$yaml_file"
+    echo "${yaml_file}"
 }
 
 # ============================================================================
-# Run Kubernetes Test
+# Run Kubernetes Job Test
 # ============================================================================
+
 run_k8s_test() {
     local test_name="$1"
     local driver="$2"
     local args="$3"
-    local test_slug="$4"  # Short identifier for the test type
+    local test_id="$4"
+    local with_signing="${5:-false}"
 
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
-    # Get actual storage flag
-    local storage_flag=$(get_storage_flag "$driver")
-
-    echo -e "${CYAN}[TEST $TOTAL_TESTS]${NC} ${test_name} (${BUILDER}, rootless, ${driver})"
-
-    # Generate meaningful job name: buildah-overlay-git-build-1234567890
-    local timestamp=$(date +%s)
-    local job_name="${BUILDER}-${driver}-${test_slug}-${timestamp}"
-    local yaml_file=$(generate_job_yaml "$job_name" "$driver" "$args")
-
-    echo -e "${CYAN}  Job: ${job_name}${NC}"
-    echo -e "${CYAN}  YAML: $(basename $yaml_file)${NC}"
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Test #${TOTAL_TESTS}: ${test_name}${NC}"
+    echo -e "${CYAN}  Storage: ${driver} | Builder: ${BUILDER}${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
 
     local start_time=$(date +%s)
 
-    # Create job
-    if ! kubectl apply -f "$yaml_file" > /dev/null 2>&1; then
+    # Generate unique job name with timestamp
+    local job_name="${BUILDER}-${driver}-${test_id}-$(date +%s)"
+    
+    # Create log file FIRST (before yaml generation)
+    local log_file="${SUITES_DIR}/test-${job_name}.log"
+    mkdir -p "${SUITES_DIR}"
+    touch "${log_file}"
+
+    # Generate YAML
+    local yaml_file=$(generate_job_yaml "${job_name}" "${driver}" "${args}" "${with_signing}")
+
+    echo -e "${CYAN}  Creating job: ${job_name}${NC}"
+    echo -e "${CYAN}  YAML file: ${yaml_file}${NC}"
+    echo -e "${CYAN}  Log file: ${log_file}${NC}"
+    echo ""
+
+    # Apply the job
+    local apply_result
+    apply_result=$(kubectl apply -f "${yaml_file}" -n ${NAMESPACE} 2>&1)
+    if [ $? -ne 0 ]; then
         echo -e "${RED}✗ FAIL${NC} (Failed to create job)"
+        echo "=== Job Creation Failed ===" | tee -a "${log_file}"
+        echo "${apply_result}" | tee -a "${log_file}"
+        echo "" | tee -a "${log_file}"
         FAILED_TESTS=$((FAILED_TESTS + 1))
-        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
-        echo ""
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Job creation failed")
         return
     fi
+    
+    # Log successful job creation
+    echo "=== Job Created Successfully ===" >> "${log_file}"
+    echo "${apply_result}" >> "${log_file}"
+    echo "" >> "${log_file}"
 
     # Wait for pod to be created
+    echo -e "${CYAN}  Waiting for pod...${NC}"
     local pod_name=""
-    local max_wait=30
-    local elapsed=0
-
-    while [ -z "$pod_name" ] && [ $elapsed -lt $max_wait ]; do
-        pod_name=$(kubectl get pods -n ${NAMESPACE} -l job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-        if [ -z "$pod_name" ]; then
-            sleep 1
-            elapsed=$((elapsed + 1))
+    for i in {1..30}; do
+        pod_name=$(kubectl get pods -n ${NAMESPACE} --selector=job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$pod_name" ]; then
+            break
         fi
+        sleep 1
     done
 
     if [ -z "$pod_name" ]; then
-        echo -e "${RED}✗ FAIL${NC} (Pod not created after ${max_wait}s)"
+        echo -e "${RED}✗ FAIL${NC} (Pod not created)"
+        echo "=== Pod Creation Timeout ===" | tee -a "${log_file}"
+        kubectl describe job ${job_name} -n ${NAMESPACE} | tee -a "${log_file}"
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Pod creation timeout")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-        echo ""
         return
     fi
 
     echo -e "${CYAN}  Pod: ${pod_name}${NC}"
 
-    # Wait for pod to be in a state where we can get logs
-    # Either Running, Succeeded, or Failed
-    echo -e "${CYAN}  Waiting for container...${NC}"
+    # Wait for container to start or complete
+    echo -e "${CYAN}  Waiting for container to start${NC}"
     local ready=false
     for i in {1..60}; do
         local phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
-        local container_state=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state}' 2>/dev/null)
-        
-        # Check if we can get logs
-        if [[ "$phase" == "Running" ]] || [[ "$phase" == "Succeeded" ]] || [[ "$phase" == "Failed" ]]; then
+        local container_ready=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)
+
+        # Container is ready and running
+        if [ "$container_ready" = "true" ]; then
             ready=true
-            echo -e "${CYAN}  Container ready (phase: ${phase}, ${i}s)${NC}"
+            echo ""  # New line after progress
             break
         fi
         
-        # Check for immediate failure conditions
-        if [[ "$container_state" == *"waiting"* ]]; then
+        # Job completed successfully (fast jobs go directly to Succeeded)
+        if [ "$phase" = "Succeeded" ]; then
+            ready=true
+            echo ""  # New line after progress
+            echo -e "${CYAN}  Container completed${NC}"
+            break
+        fi
+
+        # Show progress dots
+        if [ $((i % 5)) -eq 0 ]; then
+            echo -n "."
+        fi
+
+        # Check for failure states
+        if [ "$phase" = "Failed" ]; then
+            echo ""
+            echo -e "${YELLOW}  Container failed to start. Checking reason...${NC}"
             local reason=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
-            local message=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.message}' 2>/dev/null)
-            
-            # Fail immediately on these errors
             case "$reason" in
-                ErrImagePull|ImagePullBackOff)
-                    echo ""
-                    echo -e "${RED}✗ FAIL${NC} (Image pull failed: ${reason})"
-                    echo -e "${RED}  Error: ${message}${NC}"
-                    echo -e "${RED}  Pod events:${NC}"
-                    kubectl get events -n ${NAMESPACE} --field-selector involvedObject.name=${pod_name} --sort-by='.lastTimestamp' | tail -5 | sed 's/^/    /'
-                    FAILED_TESTS=$((FAILED_TESTS + 1))
-                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
-                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-                    echo ""
-                    return
+                ImagePullBackOff|ErrImagePull)
+                    echo -e "${RED}  Error: Cannot pull image ${KIMIA_IMAGE}${NC}"
                     ;;
-                CrashLoopBackOff)
-                    echo ""
-                    echo -e "${RED}✗ FAIL${NC} (Container crash loop: ${reason})"
-                    echo -e "${RED}  Error: ${message}${NC}"
-                    echo -e "${RED}  Pod logs:${NC}"
-                    kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
-                    FAILED_TESTS=$((FAILED_TESTS + 1))
-                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
-                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-                    echo ""
-                    return
-                    ;;
-                CreateContainerConfigError|CreateContainerError|InvalidImageName)
-                    echo ""
-                    echo -e "${RED}✗ FAIL${NC} (Container config error: ${reason})"
-                    echo -e "${RED}  Error: ${message}${NC}"
-                    FAILED_TESTS=$((FAILED_TESTS + 1))
-                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${reason}")
-                    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
-                    echo ""
-                    return
-                    ;;
-                ContainerCreating|PodInitializing)
-                    # Normal startup - show progress
-                    echo -ne "\r${CYAN}  ${reason}... (${i}s)${NC}"
+                *)
+                    echo -e "${YELLOW}  Reason: ${reason}${NC}"
                     ;;
             esac
         fi
-        
+
         sleep 1
     done
     echo ""  # New line after progress
 
     if [ "$ready" = false ]; then
         echo -e "${RED}✗ FAIL${NC} (Container not ready after 60s)"
+        echo "=== Container Start Timeout ===" | tee -a "${log_file}"
         echo -e "${RED}  Pod description:${NC}"
-        kubectl describe pod ${pod_name} -n ${NAMESPACE} | sed 's/^/    /'
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} | tee -a "${log_file}" | sed 's/^/    /'
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Container start timeout")
         kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
@@ -475,33 +652,80 @@ run_k8s_test() {
 
     echo -e "${CYAN}  Streaming logs...${NC}"
 
-    # Stream logs in background
-    kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' &
-    local logs_pid=$!
+    # Check if pod already completed (for fast jobs)
+    local current_phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
+    
+    if [ "$current_phase" = "Succeeded" ] || [ "$current_phase" = "Failed" ]; then
+        # Job already completed, just get the logs
+        kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | tee -a "${log_file}" | sed 's/^/    /'
+        local logs_pid=0
+    else
+        # Job still running, stream logs
+        kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | tee -a "${log_file}" | sed 's/^/    /' &
+        local logs_pid=$!
+    fi
 
-    # Wait for job to complete
-    if kubectl wait --for=condition=complete job/${job_name} -n ${NAMESPACE} --timeout=${JOB_TIMEOUT}s &> /dev/null; then
+    # Wait for job to complete or fail - poll job status
+    local job_status=""
+    local elapsed=0
+    while [ $elapsed -lt ${JOB_TIMEOUT} ]; do
+        # Check job status
+        job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)
+        if [ "$job_status" = "True" ]; then
+            # Job completed successfully
+            break
+        fi
+        
+        job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null)
+        if [ "$job_status" = "True" ]; then
+            # Job failed
+            break
+        fi
+        
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    
+    # Stop log streaming (if it's still running)
+    if [ $logs_pid -ne 0 ]; then
+        kill $logs_pid 2>/dev/null || true
         wait $logs_pid 2>/dev/null || true
-
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
-
+    fi
+    
+    # Give logs a moment to flush
+    sleep 1
+    
+    # Capture final logs to file
+    kubectl logs ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # Check if job completed successfully
+    job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)
+    if [ "$job_status" = "True" ]; then
         echo -e "${GREEN}✓ PASS${NC} (${duration}s)"
+        echo "=== Test PASSED ===" >> "${log_file}"
         PASSED_TESTS=$((PASSED_TESTS + 1))
         TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver})")
     else
-        kill $logs_pid 2>/dev/null || true
-        wait $logs_pid 2>/dev/null || true
-
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
-
         echo -e "${RED}✗ FAIL${NC} (${duration}s)"
+        echo "=== Test FAILED ===" >> "${log_file}"
+        
+        # Get job status and events
+        echo "" >> "${log_file}"
+        echo "=== Job Status ===" >> "${log_file}"
+        kubectl get job ${job_name} -n ${NAMESPACE} -o yaml >> "${log_file}" 2>&1 || true
+        echo "" >> "${log_file}"
+        echo "=== Pod Description ===" >> "${log_file}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
+        
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
 
         echo -e "${RED}  Complete pod logs:${NC}"
         kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
+        echo -e "${YELLOW}  Check log file: ${log_file}${NC}"
     fi
 
     # Cleanup job (but keep YAML file for debugging)
@@ -541,142 +765,253 @@ run_rootless_tests() {
         echo ""
     fi
 
-    # Test 1: Version check
-    run_k8s_test \
-        "Version Check" \
-        "$driver" \
-        "[\"--version\"]" \
-        "version"
+    # ========================================================================
+    # SIMPLE TESTS (Tests 1-7)
+    # ========================================================================
 
-    # Test 2: Environment check
-    run_k8s_test \
-        "Environment Check" \
-        "$driver" \
-        "[\"check-environment\"]" \
-        "envcheck"
+    if should_run_simple; then
+        # Test 1: Version check
+        run_k8s_test \
+            "Version Check" \
+            "$driver" \
+            "[\"--version\"]" \
+            "version"
 
-    # Test 3: Basic build from Git
-    run_k8s_test \
-        "Git Repository Build" \
-        "$driver" \
-        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
-        "git-build"
+        # Test 2: Environment check
+        run_k8s_test \
+            "Environment Check" \
+            "$driver" \
+            "[\"check-environment\"]" \
+            "envcheck"
 
-    # Test 4: Build with arguments from Git
-    run_k8s_test \
-        "Build with Arguments" \
-        "$driver" \
-        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
-        "buildargs"
+        # Test 3: Basic build from Git (no push)
+        run_k8s_test \
+            "Git Repository Build" \
+            "$driver" \
+            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
+            "git-build"
 
+        # Test 4: Build with arguments from Git (no push)
+        run_k8s_test \
+            "Build with Arguments" \
+            "$driver" \
+            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
+            "buildargs"
 
-    # Test 5: Git build WITH push to registry
-    run_k8s_test \
-        "Git Repository Build (Push)" \
-        "$driver" \
-        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \
-        \"--git-branch=master\", \
-        \"--dockerfile=mainline/alpine/Dockerfile\", \
-        \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-git-${driver}:latest\", \
-        \"--storage-driver=${storage_flag}\", \
-        \"--insecure\", \
-        \"--verbosity=debug\"]" \
-        "git-build-push"
+        # Test 5: Git build WITH push to registry
+        run_k8s_test \
+            "Git Repository Build (Push)" \
+            "$driver" \
+            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "git-build-push"
 
-    # Test 6: Build with args AND push to registry
-    run_k8s_test \
-        "Build with Arguments (Push)" \
-        "$driver" \
-        "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \
-        \"--git-branch=master\", \
-        \"--dockerfile=mainline/alpine/Dockerfile\", \
-        \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \
-        \"--build-arg=NGINX_VERSION=1.25\", \
-        \"--storage-driver=${storage_flag}\", \
-        \"--insecure\", \
-        \"--verbosity=debug\"]" \
-        "buildargs-push"
+        # Test 6: Build with args AND push to registry
+        run_k8s_test \
+            "Build with Arguments (Push)" \
+            "$driver" \
+            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "buildargs-push"
 
-   # Test 7: Build with args context-sub-path push to registry
-    run_k8s_test \
-        "Build with Arguments (Push)" \
-        "$driver" \
-        "[\"--context=https://github.com/docker-library/postgres.git\", \
-        \"--context-sub-path=18/alpine3.22\", \
-        \"--dockerfile=Dockerfile\", \
-        \"--destination=${REGISTRY}/${BUILDER}-k8s-postgres-buildargs-${driver}:latest\", \
-        \"--storage-driver=${storage_flag}\", \
-        \"--insecure\", \
-        \"--verbosity=debug\"]" \
-        "buildargs-push"
-
-    # Test 8: Reproducible builds
-    local test_image="${REGISTRY}/${BUILDER}-k8s-reproducible-test-${driver}"
-    
-    run_k8s_test \
-        "Reproducible Build #1" \
-        "$driver" \
-        "[\"--context=https://github.com/rapidfort/kimia.git\", \
-        \"--git-branch=main\", \
-        \"--dockerfile=tests/examples/Dockerfile\", \
-        \"--destination=${test_image}:v1\", \
-        \"--storage-driver=${storage_flag}\", \
-        \"--reproducible\", \
-        \"--insecure\", \
-        \"--verbosity=debug\"]" \
-        "reproducible-build1"
-    
-    echo "Waiting 5 seconds before second build..."
-    sleep 5
-    
-    docker pull ${test_image}:v1 || true
-
-    # Extract digest from first build
-    local digest1=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
-    if [ -z "$digest1" ]; then
-        echo "Warning: Could not extract digest from first build"
-        digest1="none"
+        # Test 7: Build with context-sub-path and push to registry
+        run_k8s_test \
+            "Build with Context Sub-path (Push)" \
+            "$driver" \
+            "[\"--context=https://github.com/docker-library/postgres.git\", \"--context-sub-path=18/alpine3.22\", \"--dockerfile=Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-postgres-buildargs-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "context-subpath-push"
     fi
-    echo "First build digest: ${digest1}"
-    
 
-    run_k8s_test \
-        "Reproducible Build #2" \
-        "$driver" \
-        "[\"--context=https://github.com/rapidfort/kimia.git\", \
-        \"--git-branch=main\", \
-        \"--dockerfile=tests/examples/Dockerfile\", \
-        \"--destination=${test_image}:v1\", \
-        \"--storage-driver=${storage_flag}\", \
-        \"--reproducible\", \
-        \"--insecure\", \
-        \"--verbosity=debug\"]" \
-        "reproducible-build2"
+    # ========================================================================
+    # REPRODUCIBLE BUILD TESTS (Test 8)
+    # ========================================================================
 
-    sleep 5
-    docker pull ${test_image}:v1 || true
-    # Extract digest from second build
-    local digest2=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
-    if [ -z "$digest2" ]; then
-        echo "Warning: Could not extract digest from second build"
-        digest2="none"
+    if should_run_reproducible; then
+        local test_image="${REGISTRY}/${BUILDER}-k8s-reproducible-test-${driver}"
+
+        run_k8s_test \
+            "Reproducible Build #1" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${test_image}:v1\", \"--storage-driver=${storage_flag}\", \"--reproducible\", \"--insecure\", \"--verbosity=debug\"]" \
+            "reproducible-build1"
+
+        echo "Waiting 5 seconds before second build..."
+        sleep 5
+
+        docker pull ${test_image}:v1 || true
+
+        # Extract digest from first build
+        local digest1=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+        if [ -z "$digest1" ]; then
+            echo "Warning: Could not extract digest from first build"
+            digest1="none"
+        fi
+        echo "First build digest: ${digest1}"
+
+        run_k8s_test \
+            "Reproducible Build #2" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${test_image}:v1\", \"--storage-driver=${storage_flag}\", \"--reproducible\", \"--insecure\", \"--verbosity=debug\"]" \
+            "reproducible-build2"
+
+        sleep 5
+        docker pull ${test_image}:v1 || true
+
+        # Extract digest from second build
+        local digest2=$(docker inspect ${test_image}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2)
+        if [ -z "$digest2" ]; then
+            echo "Warning: Could not extract digest from second build"
+            digest2="none"
+        fi
+        echo "Second build digest: ${digest2}"
+
+        # Compare digests
+        echo ""
+        echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+        echo -e "${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
+        echo -e "${CYAN}  Build #1 digest: ${digest1} ${NC}"
+        echo -e "${CYAN}  Build #2 digest: ${digest2} ${NC}"
+        echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+        echo ""
+
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        if [ "$digest1" = "$digest2" ] && [ "$digest1" != "none" ]; then
+            echo -e "${GREEN}✓ SUCCESS: Builds are reproducible!${NC}"
+            PASSED_TESTS=$((PASSED_TESTS + 1))
+            TEST_RESULTS+=("PASS: reproducible-comparison (${BUILDER}, rootless, ${driver})")
+        else
+            echo -e "${RED}✗ FAILURE: Builds are NOT reproducible!${NC}"
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+            TEST_RESULTS+=("FAIL: reproducible-comparison (${BUILDER}, rootless, ${driver})")
+        fi
     fi
-    echo "Second build digest: ${digest2}"
-    
-    # Compare digests
 
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  REPRODUCIBILITY RESULTS ${NC}"
-    echo -e "${CYAN}  Build #1 digest: ${digest1} ${NC}"
-    echo -e "${CYAN}  Build #2 digest: ${digest2} ${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo ""
+    # ========================================================================
+    # ATTESTATION TESTS (Tests 9-11, BuildKit only)
+    # ========================================================================
+
+    if should_run_attestation; then
+        # Test 9: Attestation - default mode (should default to min)
+        run_k8s_test \
+            "Attestation - Default (min)" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-default-${driver}:latest\", \"--attestation\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attestation-default"
+
+        # Test 10: Attestation - explicit min (provenance only)
+        run_k8s_test \
+            "Attestation - Min (provenance)" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-min-${driver}:latest\", \"--attestation=min\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attestation-min"
+
+        # Test 11: Attestation - max (SBOM + provenance)
+        run_k8s_test \
+            "Attestation - Max (SBOM+provenance)" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-max-${driver}:latest\", \"--attestation=max\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attestation-max"
+
+        # ====================================================================
+        # NEW ATTESTATION TESTS - 3-Level System
+        # ====================================================================
+
+        # Test 12: Attestation - explicit off (no attestations)
+        run_k8s_test \
+            "Attestation - Off (none)" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-off-${driver}:latest\", \"--attestation=off\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attestation-off"
+
+        # Test 13: Docker-style - SBOM only
+        run_k8s_test \
+            "Attest - SBOM only" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-only-${driver}:latest\", \"--attest\", \"type=sbom\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attest-sbom-only"
+
+        # Test 14: Docker-style - Provenance only
+        run_k8s_test \
+            "Attest - Provenance only" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-only-${driver}:latest\", \"--attest\", \"type=provenance,mode=max\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attest-prov-only"
+
+        # Test 15: Docker-style - SBOM with scan options
+        run_k8s_test \
+            "Attest - SBOM with scan" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-scan-${driver}:latest\", \"--attest\", \"type=sbom,scan-stage=true\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attest-sbom-scan"
+
+        # Test 16: Docker-style - Provenance with builder-id
+        run_k8s_test \
+            "Attest - Provenance with builder-id" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-builderid-${driver}:latest\", \"--attest\", \"type=provenance,mode=max,builder-id=https://github.com/rapidfort/kimia/actions/runs/test\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attest-prov-builderid"
+
+        # Test 17: Docker-style - Both SBOM and Provenance
+        run_k8s_test \
+            "Attest - Both (SBOM+Prov)" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-both-${driver}:latest\", \"--attest\", \"type=sbom,scan-stage=true\", \"--attest\", \"type=provenance,mode=max,reproducible=true\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "attest-both"
+
+        # Test 18: Pass-through - BuildKit option
+        run_k8s_test \
+            "BuildKit-opt - Pass-through" \
+            "$driver" \
+            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-passthrough-${driver}:latest\", \"--attest\", \"type=sbom\", \"--buildkit-opt\", \"attest:provenance=mode=min\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "buildkit-opt-passthrough"
+    fi
+
+    # ========================================================================
+    # SIGNING TESTS (Test 19, BuildKit only)
+    # ========================================================================
+
+    if should_run_signing; then
+        # Test 19: Signing with attestation (requires cosign secrets)
+        if kubectl get secret cosign-key -n ${NAMESPACE} &>/dev/null && \
+           kubectl get secret cosign-password -n ${NAMESPACE} &>/dev/null; then
+            run_k8s_test \
+                "Attestation + Signing" \
+                "$driver" \
+                "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-sign-${driver}:latest\", \"--attestation=max\", \"--sign\", \"--cosign-key=/tmp/cosign.key\", \"--cosign-password-env=COSIGN_PASSWORD\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+                "attestation-sign" \
+                "true"
+        else
+            echo -e "${YELLOW}Skipping signing test: cosign secrets not found${NC}"
+            echo -e "${YELLOW}Create secrets with: kubectl create secret generic cosign-key ...${NC}"
+        fi
+    fi
 }
 
 # ============================================================================
 # Cleanup Function
 # ============================================================================
+
+cleanup_on_interrupt() {
+    echo ""
+    echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
+    echo -e "${YELLOW}Stopping tests and cleaning up...${NC}"
+    
+    # Delete any running jobs in the namespace
+    echo "Deleting any running jobs..."
+    kubectl delete jobs -n ${NAMESPACE} --all --force --grace-period=0 &>/dev/null || true
+    
+    # Print partial results if any tests were run
+    if [ ${TOTAL_TESTS} -gt 0 ]; then
+        print_test_summary
+    fi
+    
+    # Optionally cleanup namespace
+    if [ "$CLEANUP_AFTER" = true ]; then
+        echo "Deleting namespace: ${NAMESPACE}"
+        kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &>/dev/null || true
+    fi
+    
+    echo -e "${GREEN}Cleanup completed${NC}"
+    exit 130  # Standard exit code for SIGINT
+}
 
 cleanup() {
     if [ "$CLEANUP_AFTER" = true ]; then
@@ -689,162 +1024,142 @@ cleanup() {
     fi
 }
 
-cleanup_on_interrupt() {
+# ============================================================================
+# Test Summary
+# ============================================================================
+
+print_test_summary() {
     echo ""
-    echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
-    echo -e "${YELLOW}Cleaning up...${NC}"
+    print_section "TEST SUMMARY"
 
-    kubectl delete jobs -n ${NAMESPACE} -l app=kimia-test --force --grace-period=0 &> /dev/null || true
-    kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+    echo "Total Tests:  $TOTAL_TESTS"
+    echo -e "${GREEN}Passed:       $PASSED_TESTS${NC}"
+    if [ $FAILED_TESTS -gt 0 ]; then
+        echo -e "${RED}Failed:       $FAILED_TESTS${NC}"
+    else
+        echo -e "${GREEN}Failed:       $FAILED_TESTS${NC}"
+    fi
+    echo ""
 
-    echo -e "${GREEN}✓ Cleanup completed${NC}"
-    exit 130
+    echo "Detailed Results:"
+    for result in "${TEST_RESULTS[@]}"; do
+        if [[ $result == PASS:* ]]; then
+            echo -e "  ${GREEN}$result${NC}"
+        else
+            echo -e "  ${RED}$result${NC}"
+        fi
+    done
+    echo ""
 }
 
 # ============================================================================
-# Main Execution
+# Main
 # ============================================================================
 
 main() {
-    print_section "KUBERNETES TEST SUITE (ROOTLESS ONLY)"
+    local start_time=$(date +%s)
+
+    print_section "KIMIA KUBERNETES TEST SUITE"
 
     echo -e "${CYAN}Configuration:${NC}"
-    echo -e "  Builder:        ${BUILDER}"
-    echo -e "  Registry:       ${REGISTRY}"
-    echo -e "  Image:          ${KIMIA_IMAGE}"
-    echo -e "  Namespace:      ${NAMESPACE}"
-    echo -e "  Storage:        ${STORAGE_DRIVER}"
-    echo -e "  Cleanup:        ${CLEANUP_AFTER}"
-    echo -e "  Job Timeout:    ${JOB_TIMEOUT}s"
-    echo -e "  Suites Dir:     ${SUITES_DIR}"
-    echo ""
-    echo -e "${YELLOW}NOTE: Kimia runs in ROOTLESS mode only (UID 1000)${NC}"
+    echo "  Builder:      $BUILDER"
+    echo "  Registry:     $REGISTRY"
+    echo "  Image:        $KIMIA_IMAGE"
+    echo "  Namespace:    $NAMESPACE"
+    echo "  Storage:      $STORAGE_DRIVER"
+    echo "  Test Suite:   $TEST_SUITE"
     echo ""
 
-    # Describe storage mappings
-    echo -e "${CYAN}Storage Driver Mappings:${NC}"
-    if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  native  → Native snapshotter (default for BuildKit)"
-        echo -e "  overlay → Kernel overlayfs (high performance)"
-    else
-        echo -e "  vfs     → VFS storage (default for Buildah)"
-        echo -e "  overlay → Kernel overlayfs (high performance, requires emptyDir)"
-    fi
+    # Display test suite information
+    case $TEST_SUITE in
+        simple)
+            echo -e "${CYAN}Running: Simple Tests (7 tests)${NC}"
+            echo "  - Version and environment checks"
+            echo "  - Basic Git builds with/without push"
+            ;;
+        reproducible)
+            echo -e "${CYAN}Running: Reproducible Build Tests (3 tests)${NC}"
+            echo "  - Build same image twice"
+            echo "  - Compare digests for reproducibility"
+            ;;
+        attestation)
+            echo -e "${CYAN}Running: Attestation Tests (3 tests, BuildKit only)${NC}"
+            echo "  - Default, min, and max attestation modes"
+            ;;
+        signing)
+            echo -e "${CYAN}Running: Signing Tests (1 test, BuildKit only)${NC}"
+            echo "  - Attestation with cosign signing"
+            ;;
+        all)
+            echo -e "${CYAN}Running: All Tests${NC}"
+            if [ "$BUILDER" = "buildkit" ]; then
+                echo "  - Simple (7 tests)"
+                echo "  - Reproducible (3 tests)"
+                echo "  - Attestation (3 tests)"
+                echo "  - Signing (1 test if cosign secrets available)"
+            else
+                echo "  - Simple (7 tests)"
+                echo "  - Reproducible (3 tests)"
+                echo "  - Attestation and Signing skipped (BuildKit only)"
+            fi
+            ;;
+    esac
     echo ""
-
-    echo -e "${CYAN}SECURITY REQUIREMENTS:${NC}"
-    if [ "$BUILDER" = "buildkit" ]; then
-        echo -e "  Native:"
-        echo -e "    - Capabilities: SETUID, SETGID"
-        echo -e "    - Seccomp: Unconfined (for mount syscalls)"
-        echo -e "    - AppArmor: Unconfined (for mount syscalls)"
-        echo -e "    - Volumes: None"
-        echo -e ""
-        echo -e "  Overlay:"
-        echo -e "    - Capabilities: SETUID, SETGID, MKNOD, DAC_OVERRIDE"
-        echo -e "    - Seccomp: Unconfined (for mount syscalls)"
-        echo -e "    - AppArmor: Unconfined (for mount syscalls)"
-        echo -e "    - Volumes: None"
-    else
-        echo -e "  VFS:"
-        echo -e "    - Capabilities: SETUID, SETGID"
-        echo -e "    - Seccomp: RuntimeDefault"
-        echo -e "    - AppArmor: RuntimeDefault"
-        echo -e "    - Volumes: None"
-        echo -e ""
-        echo -e "  Overlay:"
-        echo -e "    - Capabilities: SETUID, SETGID, MKNOD, DAC_OVERRIDE"
-        echo -e "    - Seccomp: Unconfined"
-        echo -e "    - AppArmor: Unconfined"
-        echo -e "    - Volumes: /home/kimia/.local (emptyDir only)"
-        echo -e "    - Note: emptyDir breaks nested overlayfs (container root = kernel overlay)"
-        echo -e "    - Note: Uses native kernel overlayfs via user namespaces"
-    fi
-    echo ""
-
-    # Start overall timer
-    local overall_start=$(date +%s)
 
     # Setup namespace
     setup_namespace
+    
+    # Setup cosign secrets for signing tests
+    setup_cosign_secrets
 
-    # Determine which drivers to test based on builder and storage selection
-    local drivers=()
-    local primary_driver=$(get_primary_driver)
-
-    if [ "$STORAGE_DRIVER" = "both" ]; then
-        # Test both primary driver and overlay
-        drivers=("$primary_driver" "overlay")
-        echo -e "${GREEN}✓ Will test both ${primary_driver} and overlay storage${NC}"
-    elif [ "$STORAGE_DRIVER" = "overlay" ]; then
-        drivers=("overlay")
-        echo -e "${GREEN}✓ Will test overlay storage${NC}"
-    elif [ "$STORAGE_DRIVER" = "native" ] || [ "$STORAGE_DRIVER" = "vfs" ]; then
-        # Map to primary driver
-        drivers=("$primary_driver")
-        echo -e "${GREEN}✓ Will test ${primary_driver} storage${NC}"
-    else
-        drivers=("$STORAGE_DRIVER")
-        echo -e "${GREEN}✓ Will test ${STORAGE_DRIVER} storage${NC}"
-    fi
-
-    echo ""
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}Starting tests for storage drivers: ${drivers[@]}${NC}"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo ""
-
-    # Run tests for each storage driver (ROOTLESS ONLY)
-    for driver in "${drivers[@]}"; do
-        run_rootless_tests "$driver"
-    done
+    # Determine which storage drivers to test
+    case $STORAGE_DRIVER in
+        both)
+            if [ "$BUILDER" = "buildkit" ]; then
+                run_rootless_tests "native"
+                run_rootless_tests "overlay"
+            else
+                run_rootless_tests "vfs"
+                run_rootless_tests "overlay"
+            fi
+            ;;
+        native|vfs)
+            if [ "$BUILDER" = "buildkit" ]; then
+                run_rootless_tests "native"
+            else
+                run_rootless_tests "vfs"
+            fi
+            ;;
+        overlay)
+            run_rootless_tests "overlay"
+            ;;
+    esac
 
     # Cleanup if requested
     cleanup
 
-    # Calculate total time
-    local overall_end=$(date +%s)
-    local overall_duration=$((overall_end - overall_start))
-    local overall_minutes=$((overall_duration / 60))
-    local overall_seconds=$((overall_duration % 60))
-
     # Print summary
-    print_section "TEST SUMMARY"
+    print_test_summary
 
-    echo -e "Builder:      ${BUILDER}"
-    echo -e "Total Tests:  ${TOTAL_TESTS}"
-    echo -e "${GREEN}Passed:       ${PASSED_TESTS}${NC}"
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    local minutes=$((duration / 60))
+    local seconds=$((duration % 60))
 
-    if [ $FAILED_TESTS -gt 0 ]; then
-        echo -e "${RED}Failed:       ${FAILED_TESTS}${NC}"
-    else
-        echo -e "${GREEN}Failed:       ${FAILED_TESTS}${NC}"
-    fi
-
-    echo -e "Total Time:   ${overall_minutes}m ${overall_seconds}s"
+    echo "Total Time: ${minutes}m ${seconds}s"
     echo ""
 
+    # Exit with appropriate code
     if [ $FAILED_TESTS -gt 0 ]; then
-        echo -e "${RED}Failed tests:${NC}"
-        for result in "${TEST_RESULTS[@]}"; do
-            if [[ $result == FAIL* ]]; then
-                echo -e "${RED}  - $result${NC}"
-            fi
-        done
-        echo ""
-        echo -e "${YELLOW}Re-run individual tests from:${NC}"
-        echo -e "${YELLOW}  ${SUITES_DIR}/${NC}"
+        echo -e "${RED}✗ Some tests failed${NC}"
         exit 1
+    else
+        echo -e "${GREEN}✓ All tests passed!${NC}"
+        exit 0
     fi
-
-    echo -e "${GREEN}✓ All Kubernetes tests passed successfully!${NC}"
-    echo ""
-    echo -e "${CYAN}Generated YAML files in: ${SUITES_DIR}/${NC}"
-    exit 0
 }
 
-# Trap cleanup on exit and interrupt
-trap cleanup EXIT
+# Trap interrupt signal
 trap cleanup_on_interrupt INT TERM
 
 # Run main

@@ -26,7 +26,6 @@ type Config struct {
 	Insecure            bool
 	InsecurePull        bool
 	InsecureRegistry    []string
-	SkipTLSVerify       bool
 	RegistryCertificate string
 	PushRetry           int
 	ImageDownloadRetry  int
@@ -54,4 +53,26 @@ type Config struct {
 	// Enterprise features
 	Scan   bool
 	Harden bool
+
+	// Attestation and signing
+	// Level 1: Simple mode (backward compatible)
+	Attestation string // Attestation mode: "", "off", "min", or "max"
+	
+	// Level 2: Docker-style attestations (advanced)
+	// Parsed from --attest flags
+	AttestationConfigs []AttestationConfig
+	
+	// Level 3: Direct BuildKit options (escape hatch)
+	BuildKitOpts []string // Raw --opt values to pass to buildctl
+	
+	// Signing
+	Sign              bool   // Enable cosign signing
+	CosignKeyPath     string // Path to cosign private key
+	CosignPasswordEnv string // Environment variable for cosign password
+}
+
+// AttestationConfig represents a single --attest flag
+type AttestationConfig struct {
+	Type   string            // "sbom" or "provenance"
+	Params map[string]string // Key-value pairs from the flag
 }

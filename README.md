@@ -16,7 +16,9 @@
 
 ## What is Kimia?
 
-Kimia is a **Kubernetes-native, OCI-compliant container image builder** designed for secure, daemonless builds in cloud environments. Built on proven container technologies, Kimia provides enhanced security through rootless operation and user namespace isolation.
+Kimia is a **Kubernetes-native, OCI-compliant container image builder** designed for secure, daemonless builds in cloud environments.
+
+Built on proven container technologies, Kimia provides enhanced security through rootless operation and user namespace isolation.
 
 ### Key Features
 
@@ -25,6 +27,7 @@ Kimia is a **Kubernetes-native, OCI-compliant container image builder** designed
 - **User Namespace Isolation** - Complete separation from host system
 - **Minimal Capabilities** - Only SETUID & SETGID required
 - **No Privileged Mode** - Works without elevated permissions
+- **Image Signing & Attestations** - Built-in Cosign integration with SBOM & Provenance
 
 ☁️ **Cloud Native**
 - **Kubernetes Native** - Designed for K8s from the ground up
@@ -37,6 +40,27 @@ Kimia is a **Kubernetes-native, OCI-compliant container image builder** designed
 - **Git Integration** - Build directly from repositories
 - **Layer Caching** - Fast, efficient rebuilds
 - **Standard Dockerfiles** - No special syntax required
+
+---
+
+## Documentation
+
+### Core Documentation
+- [Build Isolation & Security Guide](docs/security.md) - Comprehensive security practices
+- [CLI Reference](docs/cli-reference.md) - Complete command-line documentation
+- [Attestation & Signing](docs/attestation-signing.md) - SBOM, Provenance, and Cosign integration
+- [Installation](docs/installation.md) - Platform-specific setup
+- [Examples](docs/examples.md) - Common use cases and patterns
+
+### Advanced Topics
+- [Reproducible Builds](docs/reproducible-builds.md) - Supply chain security
+- [Performance Optimization](docs/performance.md) - Caching and tuning
+- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
+- [Comparison with Kaniko](docs/comparison.md) - Feature comparison
+
+### Integration Guides
+- [GitOps Integration](docs/gitops.md) - ArgoCD, Flux, Tekton, Jenkins
+- [FAQ](docs/faq.md) - Frequently asked questions
 
 ---
 
@@ -53,7 +77,7 @@ UID 100001           ───►  UID 2
      ...                        ...
 UID 165535           ───►  UID 65535
 ```
-![Kimia Architecture](./assets/kimia_architecture.svg)
+![Kimia Architecture](./docs/assets/kimia-architecture.svg)
 
 **Even if a container escapes, it only has unprivileged user access on the host.**
 
@@ -116,11 +140,12 @@ spec:
         fsGroup: 1000
       containers:
       - name: kimia
-        image: ghcr.io/rapidfort/kimia:latest
+        image: ghcr.io/rapidfort/kimia
         args:
         - --context=https://github.com/nginx/docker-nginx.git
         - --dockerfile=mainline/alpine/Dockerfile
         - --destination=myregistry.io/nginx:latest
+        - --no-push
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
@@ -130,13 +155,6 @@ spec:
             type: Unconfined
           seccompProfile:
             type: Unconfined
-        volumeMounts:
-        - name: docker-config
-          mountPath: /home/kimia/.docker
-      volumes:
-      - name: docker-config
-        secret:
-          secretName: registry-credentials
 ```
 
 ### Create Registry Credentials
@@ -173,31 +191,90 @@ kubectl logs job/kimia-build -f
 
 Kimia supports a comprehensive set of command-line arguments. Key options include:
 
-```bash
-# Core arguments
---context=PATH|URL              # Build context (directory or Git URL)
---dockerfile=PATH               # Path to Dockerfile
---destination=IMAGE:TAG         # Target image (repeatable)
+### Core Arguments
 
-# Build options
---build-arg=KEY=VALUE          # Build-time variables
---cache                        # Enable layer caching
---custom-platform=PLATFORM     # Target platform (e.g., linux/arm64)
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `-c, --context` | Build context (directory or Git URL) | `--context=.` |
+| `-f, --dockerfile` | Path to Dockerfile | `--dockerfile=Dockerfile` |
+| `-d, --destination` | Target image (repeatable) | `--destination=myapp:latest` |
+| `-t, --target` | Multi-stage build target | `--target=builder` |
+| `--context-sub-path` | Subdirectory within context | `--context-sub-path=app` |
 
-# Git options
---git-branch=BRANCH            # Git branch to checkout
---git-revision=SHA             # Git commit SHA
+### Build Options
 
-# Registry options
---push-retry=N                 # Push retry attempts
---insecure-registry=REGISTRY   # Allow insecure registry
-```
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--build-arg` | Build-time variables (repeatable) | - |
+| `--cache` | Enable layer caching | `false` |
+| `--cache-dir` | Custom cache directory | - |
+| `--storage-driver` | Storage backend (native\|overlay) | `native` |
+| `--label` | Image labels (repeatable) | - |
+
+### Output Options
+
+| Argument | Description |
+|----------|-------------|
+| `--no-push` | Build without pushing to registry |
+| `--tar-path` | Export image to TAR file |
+| `--digest-file` | Write image digest to file |
+| `--image-name-with-digest-file` | Write full image reference |
+
+### Attestation & Signing
+
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--attestation` | Simple mode (off\|min\|max) | `--attestation=min` |
+| `--attest` | Docker-style attestations | `--attest type=sbom` |
+| `--sign` | Sign image with Cosign | `--sign` |
+| `--cosign-key` | Cosign private key path | `--cosign-key=/keys/key` |
+
+### Git Options
+
+| Argument | Description |
+|----------|-------------|
+| `--git-branch` | Git branch to checkout |
+| `--git-revision` | Git commit SHA |
+| `--git-token-file` | Git token for private repos |
+| `--git-token-user` | Git token username |
+
+### Registry Options
+
+| Argument | Description |
+|----------|-------------|
+| `--insecure` | Allow insecure connections |
+| `--insecure-pull` | Allow insecure base image pulls |
+| `--insecure-registry` | Skip TLS for specific registry |
+| `--push-retry` | Number of push retry attempts |
+| `--image-download-retry` | Number of image download retries |
+| `--registry-certificate` | Custom registry certificate |
+
+### Reproducible Builds
+
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--reproducible` | Enable reproducible builds | `--reproducible` |
+| `--timestamp` | Set build timestamp (Unix epoch) | `--timestamp=1609459200` |
+
+> **Note:** `--timestamp` automatically enables `--reproducible`. Supports `SOURCE_DATE_EPOCH` env var.
+
+### Logging & Debug
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `-v, --verbosity` | Log level (debug\|info\|warn\|error) | `info` |
+| `--log-timestamp` | Add timestamps to logs | `false` |
+
+### Advanced Options
+
+| Argument | Description |
+|----------|-------------|
+| `--buildkit-opt` | Pass options directly to BuildKit |
 
 **Full reference:** See [CLI Reference](docs/cli-reference.md) for complete documentation.
 
-**Kaniko users:** Kimia supports most Kaniko arguments - see [Comparison Guide](docs/comparison.md) for details.
+## Kaniko users: Kimia supports most Kaniko arguments - see [Comparison Guide](docs/comparison.md) for details.
 
----
 
 ## Storage Drivers
 
@@ -311,6 +388,77 @@ kimia --context=. --destination=myapp:v1 --reproducible
 
 ---
 
+## Attestation & Signing
+
+Kimia provides built-in support for generating attestations and signing container images with Cosign, enabling supply chain security and compliance.
+
+### Features
+
+✅ **SBOM (Software Bill of Materials)**
+- Complete inventory of packages and dependencies
+- SPDX 2.3 format
+- Vulnerability scanning support
+
+✅ **Provenance (Build Information)**
+- SLSA compliance
+- Verifiable build metadata
+- Complete audit trail
+
+✅ **Image Signing**
+- Sigstore Cosign integration
+- Cryptographic verification
+- Manifest list signing
+
+### Quick Example
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-build-signed
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kimia
+          image: ghcr.io/rapidfort/kimia:latest
+          args:
+            - --context=https://github.com/myorg/myapp.git
+            - --destination=registry.io/myapp:v1
+            - --attestation=max          # Generate SBOM + Provenance
+            - --sign                     # Sign with Cosign
+            - --cosign-key=/secrets/cosign.key
+            - --cosign-password-env=COSIGN_PASSWORD
+          env:
+            - name: COSIGN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cosign-keys
+                  key: password
+          volumeMounts:
+            - name: cosign-key
+              mountPath: /secrets
+              readOnly: true
+      volumes:
+        - name: cosign-key
+          secret:
+            secretName: cosign-keys
+```
+
+### Verification
+
+```bash
+# Verify image signature
+cosign verify --key cosign.pub registry.io/myapp:v1
+
+# Inspect attestations
+crane manifest registry.io/myapp:v1 | jq .
+```
+
+**Complete guide:** [Attestation & Signing Documentation](docs/attestation-signing.md)
+
+
 ## Installation
 
 ### Platform-Specific Setup
@@ -321,26 +469,6 @@ kimia --context=. --destination=myapp:v1 --reproducible
 - **[Red Hat OpenShift](docs/installation.md#red-hat-openshift)** - Available on OpenShift 4.7+
 
 **Full installation guide:** [Installation Documentation](docs/installation.md)
-
----
-
-## Documentation
-
-### Core Documentation
-- [CLI Reference](docs/cli-reference.md) - Complete command-line documentation
-- [Security Guide](docs/security.md) - Comprehensive security practices
-- [Installation](docs/installation.md) - Platform-specific setup
-- [Examples](docs/examples.md) - Common use cases and patterns
-
-### Advanced Topics
-- [Reproducible Builds](docs/reproducible-builds.md) - Supply chain security
-- [Performance Optimization](docs/performance.md) - Caching and tuning
-- [Troubleshooting](docs/troubleshooting.md) - Common issues and solutions
-- Comparison with Kaniko](docs/comparison.md) - Feature comparison
-
-### Integration Guides
-- [GitOps Integration](docs/gitops.md) - ArgoCD, Flux, Tekton, Jenkins
-- [FAQ](docs/faq.md) - Frequently asked questions
 
 ---
 

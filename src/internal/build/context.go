@@ -12,9 +12,12 @@ import (
 
 // Context manages the build context
 type Context struct {
-	Path      string
-	IsGitRepo bool
-	TempDir   string
+	Path       string
+	IsGitRepo  bool
+	TempDir    string
+	GitURL     string    // Original Git URL (for BuildKit)
+	SubContext string    // Subdirectory within context
+	GitConfig  GitConfig // Git configuration for URL formatting
 }
 
 // Cleanup removes temporary directories created for Git repositories
@@ -35,12 +38,29 @@ type GitConfig struct {
 }
 
 // Prepare prepares the build context from either a Git repository or local directory
-func Prepare(gitConfig GitConfig) (*Context, error) {
-	ctx := &Context{}
+func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
+	ctx := &Context{
+		GitConfig: gitConfig, // Store for later use in BuildKit URL formatting
+	}
 
 	// Check if context is a git URL
 	if isGitURL(gitConfig.Context) {
 		logger.Info("Detected git repository context: %s", gitConfig.Context)
+		
+		// For BuildKit, pass Git URL directly without cloning (for better SBOM generation)
+		if builder == "buildkit" {
+			logger.Info("Using BuildKit native Git support (no local clone)")
+			ctx.IsGitRepo = true
+			ctx.GitURL = gitConfig.Context
+			ctx.Path = "" // No local path needed for BuildKit
+			
+			// BuildKit will handle branch/revision via Git URL syntax
+			logger.Info("Build context prepared (Git URL for BuildKit): %s", ctx.GitURL)
+			return ctx, nil
+		}
+		
+		// For Buildah, clone the repository locally (existing behavior)
+		logger.Info("Cloning repository for Buildah...")
 
 		// Create directory in $HOME/workspace for git clone
 		homeDir := os.Getenv("HOME")
@@ -210,4 +230,78 @@ func checkoutGitRevision(repoDir, revision string) error {
 	}
 
 	return nil
+}
+
+// FormatGitURLForBuildKit formats a Git URL for BuildKit with authentication, branch, revision, and subpath
+// BuildKit Git URL format: git://host/repo.git#ref:subdir
+// Returns the formatted URL and whether authentication was applied
+func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext string) (string, error) {
+	url := gitURL
+	
+	// Add authentication token if provided
+	if gitConfig.TokenFile != "" {
+		token, err := os.ReadFile(gitConfig.TokenFile)
+		if err != nil {
+			return "", fmt.Errorf("failed to read git token file: %v", err)
+		}
+		url = addGitToken(url, string(token), gitConfig.TokenUser)
+		logger.Debug("Added authentication token to Git URL")
+	}
+	
+	// BuildKit Git URL format: URL#<ref>:<subdir>
+	// ref can be: branch name, tag, or commit hash
+	// Examples:
+	//   git://host/repo.git#main:path/to/subdir
+	//   git://host/repo.git#v1.0.0:path/to/subdir
+	//   git://host/repo.git#abc123:path/to/subdir
+	
+	var suffix string
+	
+	// Add branch or revision
+	if gitConfig.Revision != "" {
+		suffix = gitConfig.Revision
+		logger.Debug("Using Git revision: %s", gitConfig.Revision)
+	} else if gitConfig.Branch != "" {
+		suffix = gitConfig.Branch
+		logger.Debug("Using Git branch: %s", gitConfig.Branch)
+	}
+	
+	// Add subcontext path
+	if subContext != "" {
+		if suffix != "" {
+			suffix = suffix + ":" + subContext
+		} else {
+        	// Don't use "HEAD" - let BuildKit use the default branch
+        	suffix = ":" + subContext	
+		}
+		logger.Debug("Using sub-context path: %s", subContext)
+	}
+	
+	// Append suffix if any
+	if suffix != "" {
+		url = url + "#" + suffix
+	}
+	
+	logger.Info("Formatted Git URL for BuildKit: %s", maskToken(url))
+	return url, nil
+}
+
+// maskToken masks the authentication token in a URL for logging
+func maskToken(url string) string {
+	// Mask pattern like "https://user:TOKEN@host" to "https://user:***@host"
+	if strings.Contains(url, "@") && strings.Contains(url, "://") {
+		parts := strings.SplitN(url, "://", 2)
+		if len(parts) == 2 {
+			authAndHost := parts[1]
+			if atIdx := strings.Index(authAndHost, "@"); atIdx > 0 {
+				auth := authAndHost[:atIdx]
+				if colonIdx := strings.Index(auth, ":"); colonIdx > 0 {
+					user := auth[:colonIdx]
+					host := authAndHost[atIdx:]
+					return parts[0] + "://" + user + ":***" + host
+				}
+			}
+		}
+	}
+	return url
 }

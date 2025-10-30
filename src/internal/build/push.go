@@ -30,7 +30,6 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 	// Only buildah needs a separate push step
 	builder := DetectBuilder()
 	if builder == "buildkit" {
-		logger.Debug("Skipping separate push step (BuildKit pushes during build)")
 		return make(map[string]string), nil
 	}
 
