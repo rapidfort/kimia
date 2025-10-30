@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: smithy-nginx-build
+  generateName: kimia-rust-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -12,15 +12,14 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: 10.228.96.114:5000/rapidfort/smithy:1.0.10-dev
-        imagePullPolicy: Always
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia-bud:1.0.15
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
-          - --context-sub-path=""
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
+          - --context=https://github.com/rust-lang/docker-rust.git
+          - --dockerfile=stable/alpine3.21/Dockerfile
+          - --destination=rust
           - --no-push
+          - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

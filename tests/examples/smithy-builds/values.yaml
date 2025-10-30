@@ -1,0 +1,66 @@
+global:
+  smithy:
+    image: ghcr.io/rapidfort/kimia-bud
+    tag: "1.0.15"        # default kimia tag (override per-step if needed)
+    pullPolicy: Always
+
+  registries:
+    unqualifiedSearch:
+      - "10.228.96.114:5000"
+      - "docker.io"
+      - "quay.io"
+    entries:
+      - location: "10.228.96.114:5000"
+        insecure: true
+        blocked: false
+      - location: "docker.io"
+      - location: "quay.io"
+
+jobDefaults:
+  ttlSecondsAfterFinished: 60
+  restartPolicy: Never
+  # Pod-level security defaults
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+
+  # Container-level security defaults
+  containerSecurityContext:
+    allowPrivilegeEscalation: true
+    capabilities:
+      drop: ["ALL"]
+      add: ["SETUID","SETGID"]
+
+volumeNames:
+  registriesConf: registries-conf
+
+# --- Define one or many build jobs in this array ---
+# Each item produces one Kubernetes Job.
+builds: []
+# Example (uncomment and customize):
+# builds:
+#   - name: supervisor
+#     # Optional extra labels/annotations, per Job
+#     labels: {}
+#     annotations: {}
+#     # 0..N init build steps (run in order)
+#     init:
+#       - name: ubuntu
+#         smithyTag: "latest" # if omitted, uses global.smithy.tag
+#         args:
+#           context: "https://github.com/dockerfile/ubuntu.git"
+#           dockerfile: "Dockerfile"
+#           destination: "10.228.96.114:5000/dockerfile/ubuntu"
+#           insecureRegistry: "10.228.96.114:5000"
+#           verbose: true
+#     # Exactly one main build step (final image)
+#     main:
+#       name: supervisor
+#       smithyTag: "1.0.10"
+#       args:
+#         context: "https://github.com/dockerfile/supervisor.git"
+#         dockerfile: "Dockerfile"
+#         destination: "10.228.96.114:5000/dockerfile/supervisor"
+#         insecureRegistry: "10.228.96.114:5000"
+#         verbose: true

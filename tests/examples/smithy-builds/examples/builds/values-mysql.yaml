@@ -1,0 +1,11 @@
+builds:
+  - name: mysql
+    main:
+      name: mysql
+      args:
+        context: https://github.com/docker-library/mysql.git
+        contextSubPath: "8.0"
+        dockerfile: Dockerfile.debian
+        destination: 10.228.96.114:5000/mysql
+        insecureRegistry: "10.228.96.114:5000"
+        verbose: true
