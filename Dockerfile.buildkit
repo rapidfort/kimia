@@ -8,6 +8,7 @@ ARG BRANCH="unknown"
 ARG GOLANG_VERSION=1.25.3
 ARG BUILDKIT_VERSION=v0.25.1
 ARG ROOTLESSKIT_VERSION=v2.3.5
+ARG COSIGN_VERSION=v3.0.2
 ARG TARGETARCH
 
 # Stage 1: Build kimia binary
@@ -35,6 +36,7 @@ FROM alpine:latest
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
 ARG ROOTLESSKIT_VERSION
+ARG COSIGN_VERSION
 
 # Install minimal dependencies
 RUN apk add --no-cache \
@@ -64,10 +66,21 @@ RUN ARCH=$(case ${TARGETARCH} in \
     curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
     | tar xz -C /usr/local/bin
 
+# Download and install Cosign
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fsSL -o /usr/local/bin/cosign \
+        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" && \
+    chmod +x /usr/local/bin/cosign
+
 # Verify installations
 RUN buildkitd --version && \
     buildctl --version && \
-    rootlesskit --version
+    rootlesskit --version && \
+    cosign version
 
 # Copy kimia binary
 COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
@@ -132,7 +145,7 @@ ENV HOME=/home/kimia
 ENV DOCKER_CONFIG=/home/kimia/.docker
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
-LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (self-contained with BuildKit)"
+LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (BuildKit)"
 LABEL org.opencontainers.image.builder="buildkit"
 
 ENTRYPOINT ["/usr/local/bin/kimia"]

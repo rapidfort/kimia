@@ -276,18 +276,6 @@ kimia --context=. \
       --insecure-registry=localhost:5000
 ```
 
-### `--skip-tls-verify`
-
-Skip TLS certificate verification for registry connections.
-
-```bash
-kimia --context=. \
-      --destination=self-signed-registry.io/myapp:latest \
-      --skip-tls-verify
-```
-
-⚠️ **Security warning:** Only use for registries with self-signed certificates.
-
 ### `--push-retry`
 
 Number of retry attempts for pushing images. **Default:** 1
@@ -606,7 +594,6 @@ Most Kaniko arguments work directly with Kimia. Key mappings:
 | `--cache` | `--cache` | ✅ Direct compatibility |
 | `--cache-dir` | `--cache-dir` | ✅ Direct compatibility |
 | `--insecure` | `--insecure` | ✅ Direct compatibility |
-| `--skip-tls-verify` | `--skip-tls-verify` | ✅ Direct compatibility |
 | `--verbosity` | `--verbosity` | ✅ Direct compatibility |
 
 **See also:** [Kaniko Comparison Guide](comparison.md)
