@@ -91,7 +91,7 @@ RUN ARCH=$(case ${TARGETARCH} in \
     chmod +x bin/cosign && \
     curl -fsSL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/sigstore.json" -o sigstore.json && \
     expected=$(jq -r '.verificationMaterial.tlogEntries[0].canonicalizedBody' sigstore.json | base64 -d | jq -r '.spec.data.hash.value') && \
-    actual=$(sha256sum "cosign-linux-${ARCH}" | awk '{print $1}') && \
+    actual=$(sha256sum cosign | awk '{print $1}') && \
     if [ "$expected" = "$actual" ]; then \
         echo "cosign SHA256 OK: $actual"; \
     else \
