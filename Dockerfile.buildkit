@@ -31,12 +31,79 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.Branch=${BRANCH}" \
     -o kimia ./cmd/kimia
 
-# Stage 2: Runtime image with BuildKit + rootlesskit + crun
-FROM alpine:latest
+# Stage 2: Download Buildkit + rootlesskit + cosign
+
+FROM alpine:latest as kimia-deps
+
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
 ARG ROOTLESSKIT_VERSION
 ARG COSIGN_VERSION
+
+WORKDIR /deps
+
+RUN apk update && apk add --no-cache \
+    bash \
+    curl \
+    ca-certificates \
+    jq
+
+# Download and verify BuildKit
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    curl -fksSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" -o buildkit.tar.gz && \
+    curl -fskSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
+    expected=$(jq -r '.subject[0].digest.sha256' provenance.json) && \
+    actual=$(sha256sum buildkit.tar.gz | awk '{print $1}') && \
+    if [ "$expected" = "$actual" ]; then \
+        echo "BuildKit SHA256 OK: $actual"; \
+    else \
+        echo "BuildKit SHA256 FAIL!"; \
+        echo "Expected: $expected"; \
+        echo "Actual:   $actual"; \
+        exit 1; \
+    fi
+
+RUN tar -xf buildkit.tar.gz
+
+# Download and verify RootlessKit
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "x86_64" ;; \
+        "arm64") echo "aarch64" ;; \
+        *) echo "x86_64" ;; \
+    esac) && \
+    curl -fskSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" -o "rootlesskit-${ARCH}.tar.gz" && \
+    curl -fskSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/SHA256SUMS" -o SHA256SUMS && \
+    grep "rootlesskit-${ARCH}.tar.gz" SHA256SUMS > SHA256SUMS.single && \
+    sha256sum -c SHA256SUMS.single && \
+    tar -xf "rootlesskit-${ARCH}.tar.gz" bin
+
+# Download and install Cosign
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "x86_64" ;; \
+        "arm64") echo "aarch64" ;; \
+        *) echo "x86_64" ;; \
+    esac) && \
+    curl -fsSL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/cosign-linux-${ARCH}" -o bin/cosign && \
+    chmod +x bin/cosign && \
+    curl -fsSL "https://github.com/sigstore/cosign/releases/download/v${COSIGN_VERSION}/sigstore.json" -o sigstore.json && \
+    expected=$(jq -r '.verificationMaterial.tlogEntries[0].canonicalizedBody' sigstore.json | base64 -d | jq -r '.spec.data.hash.value') && \
+    actual=$(sha256sum cosign-linux-amd64 | awk '{print $1}') && \
+    if [ "$expected" = "$actual" ]; then \
+        echo "cosign SHA256 OK: $actual"; \
+    else \
+        echo "cosign SHA256 FAIL!"; \
+        echo "Expected: $expected"; \
+        echo "Actual:   $actual"; \
+        exit 1; \
+    fi
+
+# Stage 3: Runtime image with BuildKit + rootlesskit + crun
+FROM alpine:latest
+
 
 # Install minimal dependencies
 RUN apk add --no-cache \
@@ -48,34 +115,7 @@ RUN apk add --no-cache \
     crun \
     git
 
-# Download and install BuildKit
-RUN ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" \
-    | tar xz -C /usr/local
-
-# Download and install RootlessKit
-RUN ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "x86_64" ;; \
-        "arm64") echo "aarch64" ;; \
-        *) echo "x86_64" ;; \
-    esac) && \
-    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
-    | tar xz -C /usr/local/bin
-
-# Download and install Cosign
-RUN ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    curl -fsSL -o /usr/local/bin/cosign \
-        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" && \
-    chmod +x /usr/local/bin/cosign
-
+COPY --from=kimia-deps /deps/bin /usr/local/bin
 # Verify installations
 RUN buildkitd --version && \
     buildctl --version && \
