@@ -55,7 +55,7 @@ RUN ARCH=$(case ${TARGETARCH} in \
         *) echo "amd64" ;; \
     esac) && \
     curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" -o buildkit.tar.gz && \
-    curl -fkSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
     expected=$(jq -r '.subject[0].digest.sha256' provenance.json) && \
     actual=$(sha256sum buildkit.tar.gz | awk '{print $1}') && \
     if [ "$expected" = "$actual" ]; then \
