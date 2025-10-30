@@ -47,11 +47,14 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 	if isGitURL(gitConfig.Context) {
 		logger.Info("Detected git repository context: %s", gitConfig.Context)
 		
+		// Normalize git:// URLs to https:// for known providers (GitHub, GitLab, etc)
+		normalizedURL := normalizeGitURL(gitConfig.Context)
+
 		// For BuildKit, pass Git URL directly without cloning (for better SBOM generation)
 		if builder == "buildkit" {
 			logger.Info("Using BuildKit native Git support (no local clone)")
 			ctx.IsGitRepo = true
-			ctx.GitURL = gitConfig.Context
+			ctx.GitURL = normalizedURL  // Use normalized URL
 			ctx.Path = "" // No local path needed for BuildKit
 			
 			// BuildKit will handle branch/revision via Git URL syntax
@@ -84,8 +87,9 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true
 
-		// Clone the repository
-		if err := cloneGitRepo(gitConfig.Context, tempDir, gitConfig); err != nil {
+		// Clone the repository (use normalized URL)
+		normalizedURL = normalizeGitURL(gitConfig.Context)
+		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -134,6 +138,39 @@ func isGitURL(url string) bool {
 		strings.HasSuffix(url, ".git") ||
 		strings.Contains(url, "git.") ||
 		(strings.HasPrefix(url, "https://") && strings.Contains(url, "/"))
+}
+
+// normalizeGitURL converts deprecated git:// URLs to https:// for known providers
+// GitHub, GitLab, and Bitbucket have all disabled the insecure git:// protocol
+func normalizeGitURL(url string) string {
+	// Only normalize git:// URLs
+	if !strings.HasPrefix(url, "git://") {
+		return url
+	}
+
+	// List of known providers that have disabled git:// protocol
+	knownProviders := []string{
+		"github.com",
+		"gitlab.com",
+		"bitbucket.org",
+	}
+
+	// Check if URL is from a known provider
+	for _, provider := range knownProviders {
+		if strings.Contains(url, provider) {
+			// Convert git:// to https://
+			normalized := strings.Replace(url, "git://", "https://", 1)
+			logger.Warning("Converted deprecated git:// URL to https:// (git:// protocol is disabled on %s)", provider)
+			logger.Debug("Original: %s", url)
+			logger.Debug("Normalized: %s", normalized)
+			return normalized
+		}
+	}
+
+	// For unknown providers, warn but keep original (might be private server)
+	logger.Warning("Using git:// URL: %s", url)
+	logger.Warning("Note: Most modern Git servers have disabled git:// protocol. If build fails, try https:// instead")
+	return url
 }
 
 // cloneGitRepo clones a Git repository to the target directory
@@ -271,8 +308,7 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 		if suffix != "" {
 			suffix = suffix + ":" + subContext
 		} else {
-        	// Don't use "HEAD" - let BuildKit use the default branch
-        	suffix = ":" + subContext	
+			suffix = "HEAD:" + subContext
 		}
 		logger.Debug("Using sub-context path: %s", subContext)
 	}

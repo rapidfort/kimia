@@ -369,7 +369,7 @@ run_rootless_tests() {
     # Base docker run command
     local BASE_CMD="docker run --rm"
     BASE_CMD="$BASE_CMD --user 1000:1000"
-    BASE_CMD="$BASE_CMD -v ${RF_KIMIA_TMPDIR}:/tmp"
+    #BASE_CMD="$BASE_CMD -v ${RF_KIMIA_TMPDIR}:/tmp"
     
     # Add Docker auth if available
     if [ "$DOCKER_AUTH_METHOD" = "env" ]; then
@@ -404,7 +404,7 @@ run_rootless_tests() {
     # ========================================================================
     
     if should_run_simple; then
-        # Test 1: Version check
+        Test 1: Version check
         run_test \
             "version" \
             "rootless" \
@@ -432,24 +432,37 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 4: Build from git with context sub-path - postgres
+        #Test 4: Build from git with context sub-path - postgres
         run_test \
-            "git-postgres-subpath" \
+            "https-alpine-subpath" \
             "rootless" \
             "$driver" \
             $BASE_CMD \
-            --context=https://github.com/docker-library/postgres.git \
-            --context-sub-path=18/alpine3.22 \
+            --context=https://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
             --dockerfile=Dockerfile \
             --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-postgres-${driver}:latest \
-            --build-arg=PG_MAJOR=16 \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        #Test 5: Build from git with context sub-path - postgres
+        run_test \
+            "git-alpine-subpath" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD \
+            --context=git://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
+            --dockerfile=Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-postgres-${driver}:latest \
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
     fi
 
     # ========================================================================
-    # REPRODUCIBLE BUILD TESTS (Test 5)
+    # REPRODUCIBLE BUILD TESTS (Test 6)
     # ========================================================================
     
     if should_run_reproducible; then
@@ -537,11 +550,11 @@ run_rootless_tests() {
     fi
 
     # ========================================================================
-    # ATTESTATION TESTS (Tests 6, BuildKit only)
+    # ATTESTATION TESTS (Tests 7, BuildKit only)
     # ========================================================================
 
     if should_run_attestation; then
-        # Test 6: Attestation - default mode (should default to min)
+        # Test 7: Attestation - default mode (should default to min)
         run_test \
             "attestation-default" \
             "rootless" \
@@ -556,7 +569,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 9: Attestation - explicit min (provenance only)
+        # Test 8: Attestation - explicit min (provenance only)
         run_test \
             "attestation-min" \
             "rootless" \
@@ -571,7 +584,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 10: Attestation - max (SBOM + provenance)
+        # Test 9: Attestation - max (SBOM + provenance)
         run_test \
             "attestation-max" \
             "rootless" \
@@ -590,7 +603,7 @@ run_rootless_tests() {
         # NEW ATTESTATION TESTS - 3-Level System
         # ====================================================================
 
-        # Test 11: Attestation - explicit off (no attestations)
+        # Test 10: Attestation - explicit off (no attestations)
         run_test \
             "attestation-off" \
             "rootless" \
@@ -605,7 +618,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 12: Docker-style - SBOM only
+        # Test 11: Docker-style - SBOM only
         run_test \
             "attest-sbom-only" \
             "rootless" \
@@ -620,7 +633,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 13: Docker-style - Provenance only with mode=max
+        # Test 12: Docker-style - Provenance only with mode=max
         run_test \
             "attest-prov-only" \
             "rootless" \
@@ -635,7 +648,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 14: Docker-style - SBOM with scan options
+        # Test 13: Docker-style - SBOM with scan options
         run_test \
             "attest-sbom-scan" \
             "rootless" \
@@ -650,7 +663,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 15: Docker-style - Provenance with builder-id
+        # Test 14: Docker-style - Provenance with builder-id
         run_test \
             "attest-prov-builderid" \
             "rootless" \
@@ -665,7 +678,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 16: Docker-style - Both SBOM and Provenance
+        # Test 15: Docker-style - Both SBOM and Provenance
         run_test \
             "attest-both" \
             "rootless" \
@@ -681,7 +694,7 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        # Test 17: Pass-through - BuildKit option
+        # Test 16: Pass-through - BuildKit option
         run_test \
             "buildkit-opt-passthrough" \
             "rootless" \
@@ -699,11 +712,11 @@ run_rootless_tests() {
     fi
 
     # ========================================================================
-    # SIGNING TESTS (Test 7, BuildKit only)
+    # SIGNING TESTS (Test 17, BuildKit only)
     # ========================================================================
 
     if should_run_signing; then
-        # Test 7: Signing with attestation (requires cosign key)
+        # Test 17: Signing with attestation (requires cosign key)
         if [ -n "${COSIGN_KEY_PATH}" ] && [ -f "${COSIGN_KEY_PATH}" ]; then
             run_test \
                 "attestation-sign" \
