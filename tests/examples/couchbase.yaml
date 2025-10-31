@@ -17,7 +17,7 @@ spec:
         image: ghcr.io/rapidfort/kimia:latest
         imagePullPolicy: Always
         args:
-          - --context=https://github.com/couchbase/docker.git
+          - --context=git@github.com:couchbase/docker.git
           - --context-sub-path=enterprise/couchbase-server/7.6.7
           - --dockerfile=Dockerfile
           - --destination=couchbase

@@ -3,6 +3,7 @@ kind: Job
 metadata:
   generateName: kimia-rust-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -13,9 +14,10 @@ spec:
         fsGroup: 1000
       containers:
       - name: kimia
-        image: ghcr.io/rapidfort/kimia-bud:1.0.15
+        image: ghcr.io/rapidfort/kimia-bud:1.0.18
+        imagePullPolicy: Always
         args:
-          - --context=git://github.com/rust-lang/docker-rust.git
+          - --context=https://github.com/rust-lang/docker-rust.git
           - --dockerfile=stable/alpine3.21/Dockerfile
           - --destination=rust
           - --no-push

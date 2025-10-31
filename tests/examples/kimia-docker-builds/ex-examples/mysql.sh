@@ -1,6 +1,6 @@
 #!/bin/bash
 docker login
-docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined ghcr.io/rapidfort/kimia:latest \
+docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined ghcr.io/rapidfort/kimia:1.0.18 \
   --context=https://github.com/docker-library/mysql.git \
   --context-sub-path=8.0/ \
   --dockerfile=Dockerfile.debian \

@@ -75,7 +75,7 @@ spec:
             add: ["SETUID","SETGID"]
       containers:
       - name: build-nodejs
-        image: ghcr.io/rapidfort/kimia:1.0.10
+        image: ghcr.io/rapidfort/kimia:latest
         imagePullPolicy: Always
         args:
           - --context=https://github.com/dockerfile/nodejs.git

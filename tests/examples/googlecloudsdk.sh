@@ -1,6 +1,6 @@
 #!/bin/bash
 docker login
-docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined ghcr.io/rapidfort/smithy:1.0.10 \
+docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined ghcr.io/rapidfort/smithy:latest \
   --context=https://github.com/alpinelinux/docker-alpine.git \
   --context-sub-path=/aarch64/ \
   --dockerfile=Dockerfile \

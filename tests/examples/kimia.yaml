@@ -14,12 +14,13 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: ghcr.io/rapidfort/kimia:1.0.18
+        image: ghcr.io/rapidfort/kimia-bud:latest
         imagePullPolicy: Always
         args:
           - --context=https://github.com/rapidfort/kimia.git
           - --dockerfile=Dockerfile.buildah
           - --destination=kimia
+          - --git-branch=tests-kimia
           - --no-push
           - -v
         securityContext:

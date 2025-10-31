@@ -1,8 +1,9 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: smithy-busybox-build
+  generateName: kimia-busybox-build
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,12 +13,13 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: smithy
-        image: ghcr.io/rapidfort/smithy:latest
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
-          - --context=https://github.com/docker-library/busybox.git
-          - --context-sub-path=latest/glibc
-          - --dockerfile=Dockerfile
+          - --context=git://github.com/docker-library/busybox.git
+          - --context-sub-path=latest/uclibc
+          - --dockerfile=Dockerfile.builder
           - --destination=busybox
           - --no-push
           - -v

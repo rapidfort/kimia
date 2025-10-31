@@ -14,7 +14,7 @@ spec:
         fsGroup: 1000
       containers:
       - name: smithy
-        image: ghcr.io/rapidfort/kimia-bud:1.0.18
+        image: ghcr.io/rapidfort/kimia:latest
         imagePullPolicy: Always
         args:
           - --context=https://github.com/rapidfort/kimia.git
