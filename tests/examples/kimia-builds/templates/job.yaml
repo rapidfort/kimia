@@ -34,7 +34,7 @@
 {{- /*
   Locals used across this template
 */ -}}
-{{- $reg := .Values.registryAuth | default dict -}}
+{{- $reg := $.Values.registryAuth | default dict -}}
 {{- $enabled := $reg.enabled | default false -}}
 ---
 apiVersion: batch/v1
