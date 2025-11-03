@@ -1,18 +1,18 @@
 global:
   kimia:
     image: ghcr.io/rapidfort/kimia-bud
-    tag: "1.0.16"        # default kimia tag (override per-step if needed)
+    tag: "latest"        # default kimia tag (override per-step if needed)
     pullPolicy: Always
 
   registries:
     unqualifiedSearch:
       - "docker.io"
       - "quay.io"
-      - "10.228.96.114:5000"
+      - "harbor.rfinnovate.rapidfort.io"
     entries:
       - location: "docker.io"
       - location: "quay.io"
-      - location: "10.228.96.114:5000"
+      - location: "harbor.rfinnovate.rapidfort.io"
         insecure: true
         blocked: false
 
@@ -35,6 +35,16 @@ jobDefaults:
 
 volumeNames:
   registriesConf: registries-conf
+
+# turn ON to mount secret; OFF to omit everything secret related
+registryAuth:
+  enabled: false                 # <-- set to true in override when you want the secret
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker  # dir we mount into
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json  # path the app reads
 
 # --- Define one or many build jobs in this array ---
 # Each item produces one Kubernetes Job.
