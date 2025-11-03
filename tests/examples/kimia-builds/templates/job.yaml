@@ -163,7 +163,7 @@ spec:
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
 
-            {- if .Values.registryAuth.enabled }}
+            {{- if .Values.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" .Values.registryAuth.mountDir (.Values.registryAuth.subPathFile | default "config.json") }}
               subPath: {{ .Values.registryAuth.subPathFile | default "config.json" }}
