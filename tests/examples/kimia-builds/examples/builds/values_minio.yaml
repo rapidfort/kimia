@@ -8,12 +8,11 @@ builds:
         destination: "harbor.rfinnovate.rapidfort.io/kimia-e2e/minio"
         verbose: true
         extraArgs: ["--insecure", "--reproducible", "--build-arg=RELEASE=RELEASE.2025-09-07T16-13-09Z", "--build-arg=TARGETARCH=amd64", "--skip-tls-verify"]
-
-registryAuth:
-  enabled: true
-  secretName: harbor-secret
-  key: .dockerconfigjson
-  subPathFile: config.json
-  mountDir: /home/kimia/.docker
-  envVar: REGISTRY_AUTH_FILE
-  envPath: /home/kimia/.docker/config.json
+        registryAuth:
+          enabled: true
+          secretName: harbor-secret
+          key: .dockerconfigjson
+          subPathFile: config.json
+          mountDir: /home/kimia/.docker
+          envVar: REGISTRY_AUTH_FILE
+          envPath: /home/kimia/.docker/config.json

@@ -21,3 +21,7 @@ blocked = {{ .blocked }}
 
 {{- end }}
 {{- end }}
+
+{{- define "debug.comment" -}}
+# DEBUG {{ .name }}: {{ toJson .value }}
+{{- end -}}

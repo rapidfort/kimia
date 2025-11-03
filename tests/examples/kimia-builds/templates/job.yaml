@@ -51,6 +51,7 @@ metadata:
 spec:
   backoffLimit: {{ default 1 $.Values.jobDefaults.backoffLimit }}
   ttlSecondsAfterFinished: {{ default 60 $.Values.jobDefaults.ttlSecondsAfterFinished }}
+  {{ include "debug.comment" (dict "name" "registryAuth" "value" $.Values.registryAuth) }}
   template:
     spec:
       restartPolicy: {{ default "Never" $.Values.jobDefaults.restartPolicy }}
@@ -60,15 +61,14 @@ spec:
         - name: {{ $.Values.volumeNames.registriesConf }}
           configMap:
             name: {{ $cmName }}
-
-      {{- if $.Values.registryAuth.enabled }}
+{{- if $.Values.registryAuth.enabled }}
         - name: docker-config
           secret:
             secretName: {{ $.Values.registryAuth.secretName }}
             items:
               - key: {{ $.Values.registryAuth.key | default ".dockerconfigjson" }}
                 path: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
-      {{- end }}
+{{- end }}
 
 
       {{- if $b.init }}
@@ -78,19 +78,18 @@ spec:
           image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $step.kimiaTag) }}
           imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
 
-          {{- if $.Values.registryAuth.enabled }}
           env:
+{{- if $.Values.registryAuth.enabled }}
             - name: {{ $.Values.registryAuth.envVar }}
               value: {{ $.Values.registryAuth.envPath }}
-          {{- else }}
-          env:
+{{- else }}
             - name: DOCKER_USERNAME
               value: $DOCKER_USERNAME
             - name: DOCKER_PASSWORD
               value: $DOCKER_PASSWORD
             - name: DOCKER_REGISTRY
               value: $DOCKER_REGISTRY              
-          {{- end }}
+{{- end }}
           args:
             - --context={{ $step.args.context }}
             - --dockerfile={{ $step.args.dockerfile | default "Dockerfile" }}
@@ -117,13 +116,12 @@ spec:
             - name: {{ $.Values.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
-
-          {{- if $.Values.registryAuth.enabled }}
+{{- if $.Values.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $.Values.registryAuth.mountDir ($.Values.registryAuth.subPathFile | default "config.json") }}
               subPath: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
-          {{- end }}
+{{- end }}
 
           securityContext:
 {{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}
@@ -134,19 +132,18 @@ spec:
         - name: {{ printf "build-%s" (default "main" $b.main.name) }}
           image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $b.main.kimiaTag) }}
           imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
-          {{- if $.Values.registryAuth.enabled }}
-          env:
+          env:          
+{{- if $.Values.registryAuth.enabled }}
             - name: {{ $.Values.registryAuth.envVar }}
               value: {{ $.Values.registryAuth.envPath }}
-          {{- else }}
-          env:
+{{- else }}
             - name: DOCKER_USERNAME
               value: $DOCKER_USERNAME
             - name: DOCKER_PASSWORD
               value: $DOCKER_PASSWORD
             - name: DOCKER_REGISTRY
               value: $DOCKER_REGISTRY              
-          {{- end }}      
+{{- end }}      
           args:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
@@ -173,13 +170,12 @@ spec:
             - name: {{ $.Values.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
-
-          {{- if $.Values.registryAuth.enabled }}
+{{- if $.Values.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $.Values.registryAuth.mountDir ($.Values.registryAuth.subPathFile | default "config.json") }}
               subPath: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
-          {{- end }}
+{{- end }}
 
           securityContext:
 {{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}
