@@ -30,6 +30,12 @@
 
 {{/* Now iterate over the combined list */}}
 {{- range $i, $b := $all }}
+
+{{- /*
+  Locals used across this template
+*/ -}}
+{{- $reg := .Values.registryAuth | default dict -}}
+{{- $enabled := $reg.enabled | default false -}}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -59,13 +65,13 @@ spec:
         - name: {{ $.Values.volumeNames.registriesConf }}
           configMap:
             name: {{ $cmName }}
-        {{- if .Values.registryAuth.enabled }}
+        {{- if $enabled }}
         - name: docker-config
           secret:
-            secretName: {{ .Values.registryAuth.secretName }}
+            secretName: {{ $reg.secretName }}
             items:
-              - key: {{ .Values.registryAuth.key | default ".dockerconfigjson" }}
-                path: {{ .Values.registryAuth.subPathFile | default "config.json" }}
+              - key: {{ $reg.key | default ".dockerconfigjson" }}
+                path: {{ $reg.subPathFile | default "config.json" }}
         {{- end }}
 
 
@@ -76,10 +82,10 @@ spec:
           image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $step.kimiaTag) }}
           imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
 
-          {{- if .Values.registryAuth.enabled }}
+          {{- if $enabled }}
           env:
-            - name: {{ .Values.registryAuth.envVar }}
-              value: {{ .Values.registryAuth.envPath }}
+            - name: {{ $reg.envVar }}
+              value: {{ $reg.envPath }}
           {{- else }}
           env:
             - name: DOCKER_USERNAME
@@ -115,10 +121,10 @@ spec:
             - name: {{ $.Values.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
-            {{- if .Values.registryAuth.enabled }}
+            {{- if $enabled }}
             - name: docker-config
-              mountPath: {{ printf "%s/%s" .Values.registryAuth.mountDir (.Values.registryAuth.subPathFile | default "config.json") }}
-              subPath: {{ .Values.registryAuth.subPathFile | default "config.json" }}
+              mountPath: {{ printf "%s/%s" $reg.mountDir ($reg.subPathFile | default "config.json") }}
+              subPath: {{ $reg.subPathFile | default "config.json" }}
               readOnly: true
             {{- end }}
 
@@ -131,10 +137,10 @@ spec:
         - name: {{ printf "build-%s" (default "main" $b.main.name) }}
           image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $b.main.kimiaTag) }}
           imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
-          {{- if .Values.registryAuth.enabled }}
+          {{- if $enabled }}
           env:
-            - name: {{ .Values.registryAuth.envVar }}
-              value: {{ .Values.registryAuth.envPath }}
+            - name: {{ $reg.envVar }}
+              value: {{ $reg.envPath }}
           {{- end }}       
           args:
             - --context={{ $b.main.args.context }}
@@ -163,10 +169,10 @@ spec:
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
 
-            {{- if .Values.registryAuth.enabled }}
+            {{- if $enabled }}
             - name: docker-config
-              mountPath: {{ printf "%s/%s" .Values.registryAuth.mountDir (.Values.registryAuth.subPathFile | default "config.json") }}
-              subPath: {{ .Values.registryAuth.subPathFile | default "config.json" }}
+              mountPath: {{ printf "%s/%s" $reg.mountDir ($reg.subPathFile | default "config.json") }}
+              subPath: {{ $reg.subPathFile | default "config.json" }}
               readOnly: true
             {{- end }}
 
