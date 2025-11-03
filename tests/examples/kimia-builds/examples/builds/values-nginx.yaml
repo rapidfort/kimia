@@ -5,7 +5,6 @@ builds:
       args:
         context: https://github.com/nginx/docker-nginx.git
         dockerfile: mainline/alpine/Dockerfile
-        destination: 10.228.96.114:5000/mynginx
-        insecureRegistry: "10.228.96.114:5000"
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mynginx
         verbose: true
-        extraArgs: ["--no-push"]
+        extraArgs: []

@@ -8,13 +8,6 @@ builds:
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/redis
         verbose: true
         extraArgs: ["--insecure"]
-
-
+        
 registryAuth:
   enabled: true
-  secretName: harbor-secret
-  key: .dockerconfigjson
-  subPathFile: config.json
-  mountDir: /home/kimia/.docker
-  envVar: REGISTRY_AUTH_FILE
-  envPath: /home/kimia/.docker/config.json
