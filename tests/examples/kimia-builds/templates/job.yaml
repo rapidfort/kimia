@@ -25,23 +25,18 @@
 {{- range $path, $_ := .Files.Glob "examples/builds/*.yaml" }}
   {{- $raw := $root.Files.Get $path }}
   {{- $doc := fromYaml $raw }}
+  {{- $ov  := dict }} {{/* IMPORTANT: predeclare so it's in scope for all branches */}}
 
   {{- if kindIs "slice" $doc }}
     {{/* Pure list → treat as a list of build objects (no overrides) */}}
     {{- range $doc }}
-      {{- $items = append $items (dict "build" . "ov" (dict)) }}
+      {{- $items = append $items (dict "build" . "ov" $ov) }}
     {{- end }}
-  {{- else if kindIs "map" $doc }}
 
-    {{/* If you want lists (like global.registries.*) to APPEND instead of REPLACE,
-         you have two options:
-         A) ask authors to provide full final lists in each file, or
-         B) pre-concat with .Values here before attaching to the item.
-         The simple/default is A). For B), add concat logic here. */}}
+  {{- else if kindIs "map" $doc }}
 
     {{/* Start with the raw override fragment (everything but builds) */}}
     {{- $ovRaw := omit $doc "builds" }}
-    {{- $ov := dict }}
 
     {{/* ----- Append logic for global.registries.* ----- */}}
     {{- if hasKey $ovRaw "global" }}
@@ -140,8 +135,6 @@
       {{- range $doc.builds }}
         {{- $items = append $items (dict "build" . "ov" $ov) }}
       {{- end }}
-    {{- else }}
-      {{/* Map with only overrides and no builds → ignore (or handle as you wish) */}}
     {{- end }}
   {{- end }}
 {{- end }}
@@ -150,11 +143,15 @@
 {{- range $i, $it := $items }}
   {{- $vals := merge (deepCopy $.Values) $it.ov }}
   {{- $b := $it.build }}
-
-  {{- /* cmName must use per-job values, so compute it here */ -}}
   {{- $cmName := printf "%s-%s" (include "kimia-builds.fullname" $) $vals.volumeNames.registriesConf -}}
 
----
+  {{- /* Ensure clean YAML doc separation */ -}}
+  {{- if gt $i 0 }}
+{{- print "\n---\n" -}}
+  {{- else }}
+{{- print "---\n" -}}
+  {{- end }}
+
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -193,14 +190,12 @@ spec:
                 path: {{ $vals.registryAuth.subPathFile | default "config.json" }}
 {{- end }}
 
-
-      {{- if $b.init }}
+{{- if $b.init }}
       initContainers:
         {{- range $step := $b.init }}
         - name: {{ printf "build-%s" $step.name }}
           image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $step.kimiaTag) }}
           imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
-
           env:
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
@@ -211,7 +206,7 @@ spec:
             - name: DOCKER_PASSWORD
               value: $DOCKER_PASSWORD
             - name: DOCKER_REGISTRY
-              value: $DOCKER_REGISTRY              
+              value: $DOCKER_REGISTRY
 {{- end }}
           args:
             - --context={{ $step.args.context }}
@@ -245,17 +240,16 @@ spec:
               subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
 {{- end }}
-
           securityContext:
 {{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
         {{- end }}
-      {{- end }}
+{{- end }}
 
       containers:
         - name: {{ printf "build-%s" (default "main" $b.main.name) }}
           image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $b.main.kimiaTag) }}
           imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
-          env:          
+          env:
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
               value: {{ $vals.registryAuth.envPath }}
@@ -265,8 +259,8 @@ spec:
             - name: DOCKER_PASSWORD
               value: $DOCKER_PASSWORD
             - name: DOCKER_REGISTRY
-              value: $DOCKER_REGISTRY              
-{{- end }}      
+              value: $DOCKER_REGISTRY
+{{- end }}
           args:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
@@ -299,7 +293,6 @@ spec:
               subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
 {{- end }}
-
           securityContext:
 {{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
 {{- end }}
