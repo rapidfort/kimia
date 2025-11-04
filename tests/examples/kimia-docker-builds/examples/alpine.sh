@@ -4,6 +4,5 @@ docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt 
   "$KIMIA_IMAGE" \
   --context=git://github.com/alpinelinux/docker-alpine.git \
   --dockerfile=Dockerfile \
-  --destination=10.228.96.114:5000/my-alpine \
-  --no-push
- > kimia-bud_alpine.log 2>&1
+  --destination=harbor.rfinnovate.rapidfort.io/kimia-e2e/alpine \
+  -v
