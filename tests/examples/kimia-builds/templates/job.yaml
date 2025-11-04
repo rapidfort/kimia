@@ -255,11 +255,11 @@ spec:
               value: {{ $vals.registryAuth.envPath }}
 {{- else }}
             - name: DOCKER_USERNAME
-              value: $DOCKER_USERNAME
+              value: {{ $vals.registryAuth.dockerUsername }}
             - name: DOCKER_PASSWORD
-              value: $DOCKER_PASSWORD
+              value: {{ $vals.registryAuth.dockerPassword }}
             - name: DOCKER_REGISTRY
-              value: $DOCKER_REGISTRY
+              value: {{ $vals.registryAuth.dockerRegistry }}
 {{- end }}
           args:
             - --context={{ $b.main.args.context }}
