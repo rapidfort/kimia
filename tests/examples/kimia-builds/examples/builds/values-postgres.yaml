@@ -1,3 +1,12 @@
+registryAuth:
+  enabled: true
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json
+
 builds:
   - name: postgres
     main:
