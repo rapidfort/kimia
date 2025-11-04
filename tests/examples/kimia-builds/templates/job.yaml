@@ -1,35 +1,158 @@
-{{- $cmName := printf "%s-%s" (include "kimia-builds.fullname" .) .Values.volumeNames.registriesConf -}}
+{{- /* 0) Collect (build, overrides) pairs instead of a single global accumulator */ -}}
+{{- $root := . -}}
+{{- $items := list -}}
 
-{{/* Collect builds from values + every file in examples/builds/*.yaml */}}
-{{- $all := list -}}
-
-{{- /* 1) Start with builds from values.yaml (if any) */ -}}
+{{- /* 1) .Values.builds come in with no extra overrides */ -}}
 {{- range .Values.builds }}
-  {{- $all = append $all . }}
+  {{- $items = append $items (dict "build" . "ov" (dict)) }}
 {{- end }}
 
-{{- /* 2) Load each examples/builds/*.yaml and append its builds */ -}}
-{{- $root := . -}}
+{{/* Helper: dedupe list of strings */}}
+{{- define "list.uniq" -}}
+  {{- $in := . -}}
+  {{- $seen := dict -}}
+  {{- $out := list -}}
+  {{- range $v := $in }}
+    {{- if not (has $v $seen) }}
+      {{- $seen = set $seen $v true }}
+      {{- $out = append $out $v }}
+    {{- end }}
+  {{- end }}
+  {{- $out -}}
+{{- end }}
+
+{{- /* 2) Each file in examples/builds/*.yaml contributes builds + per-file overrides */ -}}
 {{- range $path, $_ := .Files.Glob "examples/builds/*.yaml" }}
   {{- $raw := $root.Files.Get $path }}
   {{- $doc := fromYaml $raw }}
-  {{- if kindIs "map" $doc }}
+
+  {{- if kindIs "slice" $doc }}
+    {{/* Pure list → treat as a list of build objects (no overrides) */}}
+    {{- range $doc }}
+      {{- $items = append $items (dict "build" . "ov" (dict)) }}
+    {{- end }}
+  {{- else if kindIs "map" $doc }}
+
+    {{/* If you want lists (like global.registries.*) to APPEND instead of REPLACE,
+         you have two options:
+         A) ask authors to provide full final lists in each file, or
+         B) pre-concat with .Values here before attaching to the item.
+         The simple/default is A). For B), add concat logic here. */}}
+
+    {{/* Start with the raw override fragment (everything but builds) */}}
+    {{- $ovRaw := omit $doc "builds" }}
+    {{- $ov := dict }}
+
+    {{/* ----- Append logic for global.registries.* ----- */}}
+    {{- if hasKey $ovRaw "global" }}
+      {{- $gdoc := $ovRaw.global }}
+      {{- $g := dict }}
+
+      {{- if hasKey $gdoc "registries" }}
+        {{- $rdoc := $gdoc.registries }}
+        {{- $greg := dict }}
+
+        {{/* unqualifiedSearch: base + add → uniq */}}
+        {{- if hasKey $rdoc "unqualifiedSearch" }}
+          {{- $base := default (list) $root.Values.global.registries.unqualifiedSearch }}
+          {{- $add  := default (list) $rdoc.unqualifiedSearch }}
+          {{- $merged := include "list.uniq" (concat $base $add) }}
+          {{- $greg = set $greg "unqualifiedSearch" $merged }}
+        {{- end }}
+
+        {{/* entries: base + add → dedupe by .location (last wins) */}}
+        {{- if hasKey $rdoc "entries" }}
+          {{- $base := default (list) $root.Values.global.registries.entries }}
+          {{- $add  := default (list) $rdoc.entries }}
+          {{- $all := concat $base $add }}
+          {{- $byLoc := dict }} {{- $order := list }}
+          {{- range $e := $all }}
+            {{- $loc := (get $e "location") | default "" }}
+            {{- if not (has $loc $byLoc) }}{{- $order = append $order $loc }}{{- end }}
+            {{- $byLoc = set $byLoc $loc $e }}
+          {{- end }}
+          {{- $merged := list }}
+          {{- range $loc := $order }}
+            {{- $merged = append $merged (get $byLoc $loc) }}
+          {{- end }}
+          {{- $greg = set $greg "entries" $merged }}
+        {{- end }}
+
+        {{- if gt (len $greg) 0 }}
+          {{- $g = set $g "registries" $greg }}
+        {{- end }}
+      {{- end }}
+
+      {{/* copy any other global fields (non-registries) straight through */}}
+      {{- $g = merge $g (omit $gdoc "registries") }}
+      {{- if gt (len $g) 0 }}
+        {{- $ov = set $ov "global" $g }}
+      {{- end }}
+    {{- end }}
+
+    {{/* ----- Append logic for jobDefaults.containerSecurityContext.capabilities add/drop ----- */}}
+    {{- if hasKey $ovRaw "jobDefaults" }}
+      {{- $jd := $ovRaw.jobDefaults }}
+      {{- $jdOut := merge (dict) (omit $jd "containerSecurityContext") }}
+
+      {{- if hasKey $jd "containerSecurityContext" }}
+        {{- $cs := $jd.containerSecurityContext }}
+        {{- $csOut := merge (dict) (omit $cs "capabilities") }}
+
+        {{- if hasKey $cs "capabilities" }}
+          {{- $cap := $cs.capabilities }}
+          {{- $capOut := dict }}
+
+          {{- if hasKey $cap "add" }}
+            {{- $base := default (list) $root.Values.jobDefaults.containerSecurityContext.capabilities.add }}
+            {{- $add  := default (list) $cap.add }}
+            {{- $merged := include "list.uniq" (concat $base $add) }}
+            {{- $capOut = set $capOut "add" $merged }}
+          {{- end }}
+
+          {{- if hasKey $cap "drop" }}
+            {{- $base := default (list) $root.Values.jobDefaults.containerSecurityContext.capabilities.drop }}
+            {{- $add  := default (list) $cap.drop }}
+            {{- $merged := include "list.uniq" (concat $base $add) }}
+            {{- $capOut = set $capOut "drop" $merged }}
+          {{- end }}
+
+          {{- if gt (len $capOut) 0 }}
+            {{- $csOut = set $csOut "capabilities" $capOut }}
+          {{- end }}
+        {{- end }}
+
+        {{- if gt (len $csOut) 0 }}
+          {{- $jdOut = set $jdOut "containerSecurityContext" $csOut }}
+        {{- end }}
+      {{- end }}
+
+      {{- if gt (len $jdOut) 0 }}
+        {{- $ov = set $ov "jobDefaults" $jdOut }}
+      {{- end }}
+    {{- end }}
+
+    {{/* pass-through other top-level keys (registryAuth, volumeNames, etc.) */}}
+    {{- $ov = merge $ov (omit $ovRaw "global" "jobDefaults") }} 
+
+    {{/* finally, attach builds with this per-file $ov */}}
     {{- if hasKey $doc "builds" }}
       {{- range $doc.builds }}
-        {{- $all = append $all . }}
+        {{- $items = append $items (dict "build" . "ov" $ov) }}
       {{- end }}
     {{- else }}
-      {{- $all = append $all $doc }}
-    {{- end }}
-  {{- else if kindIs "slice" $doc }}
-    {{- range $doc }}
-      {{- $all = append $all . }}
+      {{/* Map with only overrides and no builds → ignore (or handle as you wish) */}}
     {{- end }}
   {{- end }}
 {{- end }}
 
-{{/* Now iterate over the combined list */}}
-{{- range $i, $b := $all }}
+{{/* 3) Render each job using its own merged values: .Values + item.ov */}}
+{{- range $i, $it := $items }}
+  {{- $vals := merge (deepCopy $.Values) $it.ov }}
+  {{- $b := $it.build }}
+
+  {{- /* cmName must use per-job values, so compute it here */ -}}
+  {{- $cmName := printf "%s-%s" (include "kimia-builds.fullname" $) $vals.volumeNames.registriesConf -}}
 
 ---
 apiVersion: batch/v1
@@ -49,25 +172,25 @@ metadata:
 {{ toYaml . | indent 4 }}
   {{- end }}
 spec:
-  backoffLimit: {{ default 1 $.Values.jobDefaults.backoffLimit }}
-  ttlSecondsAfterFinished: {{ default 60 $.Values.jobDefaults.ttlSecondsAfterFinished }}
-  {{ include "debug.comment" (dict "name" "registryAuth" "value" $.Values.registryAuth) }}
+  backoffLimit: {{ default 1 $vals.jobDefaults.backoffLimit }}
+  ttlSecondsAfterFinished: {{ default 60 $vals.jobDefaults.ttlSecondsAfterFinished }}
+  {{ include "debug.comment" (dict "name" "registryAuth" "value" $vals.registryAuth) }}
   template:
     spec:
-      restartPolicy: {{ default "Never" $.Values.jobDefaults.restartPolicy }}
+      restartPolicy: {{ default "Never" $vals.jobDefaults.restartPolicy }}
       securityContext:
-{{ toYaml $.Values.jobDefaults.securityContext | indent 8 }}
+{{ toYaml $vals.jobDefaults.securityContext | indent 8 }}
       volumes:
-        - name: {{ $.Values.volumeNames.registriesConf }}
+        - name: {{ $vals.volumeNames.registriesConf }}
           configMap:
             name: {{ $cmName }}
-{{- if $.Values.registryAuth.enabled }}
+{{- if $vals.registryAuth.enabled }}
         - name: docker-config
           secret:
-            secretName: {{ $.Values.registryAuth.secretName }}
+            secretName: {{ $vals.registryAuth.secretName }}
             items:
-              - key: {{ $.Values.registryAuth.key | default ".dockerconfigjson" }}
-                path: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
+              - key: {{ $vals.registryAuth.key | default ".dockerconfigjson" }}
+                path: {{ $vals.registryAuth.subPathFile | default "config.json" }}
 {{- end }}
 
 
@@ -75,13 +198,13 @@ spec:
       initContainers:
         {{- range $step := $b.init }}
         - name: {{ printf "build-%s" $step.name }}
-          image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $step.kimiaTag) }}
-          imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
+          image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $step.kimiaTag) }}
+          imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
 
           env:
-{{- if $.Values.registryAuth.enabled }}
-            - name: {{ $.Values.registryAuth.envVar }}
-              value: {{ $.Values.registryAuth.envPath }}
+{{- if $vals.registryAuth.enabled }}
+            - name: {{ $vals.registryAuth.envVar }}
+              value: {{ $vals.registryAuth.envPath }}
 {{- else }}
             - name: DOCKER_USERNAME
               value: $DOCKER_USERNAME
@@ -113,29 +236,29 @@ spec:
             - -v
             {{- end }}
           volumeMounts:
-            - name: {{ $.Values.volumeNames.registriesConf }}
+            - name: {{ $vals.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
-{{- if $.Values.registryAuth.enabled }}
+{{- if $vals.registryAuth.enabled }}
             - name: docker-config
-              mountPath: {{ printf "%s/%s" $.Values.registryAuth.mountDir ($.Values.registryAuth.subPathFile | default "config.json") }}
-              subPath: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
+              mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
+              subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
 {{- end }}
 
           securityContext:
-{{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}
+{{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
         {{- end }}
       {{- end }}
 
       containers:
         - name: {{ printf "build-%s" (default "main" $b.main.name) }}
-          image: {{ printf "%s:%s" $.Values.global.kimia.image (default $.Values.global.kimia.tag $b.main.kimiaTag) }}
-          imagePullPolicy: {{ $.Values.global.kimia.pullPolicy }}
+          image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $b.main.kimiaTag) }}
+          imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
           env:          
-{{- if $.Values.registryAuth.enabled }}
-            - name: {{ $.Values.registryAuth.envVar }}
-              value: {{ $.Values.registryAuth.envPath }}
+{{- if $vals.registryAuth.enabled }}
+            - name: {{ $vals.registryAuth.envVar }}
+              value: {{ $vals.registryAuth.envPath }}
 {{- else }}
             - name: DOCKER_USERNAME
               value: $DOCKER_USERNAME
@@ -167,16 +290,16 @@ spec:
             - -v
             {{- end }}
           volumeMounts:
-            - name: {{ $.Values.volumeNames.registriesConf }}
+            - name: {{ $vals.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
-{{- if $.Values.registryAuth.enabled }}
+{{- if $vals.registryAuth.enabled }}
             - name: docker-config
-              mountPath: {{ printf "%s/%s" $.Values.registryAuth.mountDir ($.Values.registryAuth.subPathFile | default "config.json") }}
-              subPath: {{ $.Values.registryAuth.subPathFile | default "config.json" }}
+              mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
+              subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
               readOnly: true
 {{- end }}
 
           securityContext:
-{{ toYaml $.Values.jobDefaults.containerSecurityContext | indent 12 }}
+{{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
 {{- end }}
