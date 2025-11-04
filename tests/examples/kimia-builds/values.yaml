@@ -45,7 +45,9 @@ registryAuth:
   mountDir: /home/kimia/.docker  # dir we mount into
   envVar: REGISTRY_AUTH_FILE
   envPath: /home/kimia/.docker/config.json  # path the app reads
-
+  dockerUsername: ""
+  dockerPassword: ""
+  dockerRegistry: ""
 # --- Define one or many build jobs in this array ---
 # Each item produces one Kubernetes Job.
 builds: []
