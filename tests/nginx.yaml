@@ -13,7 +13,8 @@ spec:
         fsGroup: 1000
       containers:
       - name: kimia
-        image: ghcr.io/rapidfort/kimia:latest
+        image: ghcr.io/rapidfort/kimia-bud:latest
+        command: ["sleep", "inf"]
         args:
           - --context=https://github.com/nginx/docker-nginx.git
           - --dockerfile=mainline/alpine/Dockerfile

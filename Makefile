@@ -52,7 +52,7 @@ all: build-all push-all
 .PHONY: help
 help:
 	@echo "╔═══════════════════════════════════════════════════════════════════╗"
-	@echo "║              KIMIA BUILD SYSTEM                                  ║"
+	@echo "║              KIMIA BUILD SYSTEM                                   ║"
 	@echo "╚═══════════════════════════════════════════════════════════════════╝"
 	@echo ""
 	@echo "Version Info:"

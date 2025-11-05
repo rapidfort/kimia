@@ -176,14 +176,14 @@ if [ -f "${SCRIPT_DIR}/.env" ]; then
     set -a
     source "${SCRIPT_DIR}/.env"
     set +a
-    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ] && [ -n "$DOCKER_REGISTRY" ]; then
         DOCKER_AUTH_METHOD="env"
     fi
 fi
 
 # Option 2: Check environment variables
 if [ -z "$DOCKER_AUTH_METHOD" ]; then
-    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ]; then
+    if [ -n "$DOCKER_USERNAME" ] && [ -n "$DOCKER_PASSWORD" ] && [ -n "$DOCKER_REGISTRY" ]; then
         echo -e "${CYAN}Using credentials from environment variables...${NC}"
         DOCKER_AUTH_METHOD="env"
     fi
@@ -200,7 +200,7 @@ fi
 # Option 4: Anonymous mode
 if [ -z "$DOCKER_AUTH_METHOD" ]; then
     echo -e "${YELLOW}Warning: No Docker credentials found. Continuing in anonymous mode...${NC}"
-    echo -e "${YELLOW}Note: You may hit rate limits. Set DOCKER_USERNAME and DOCKER_PASSWORD to avoid this.${NC}"
+    echo -e "${YELLOW}Note: You may hit rate limits. Set DOCKER_USERNAME, DOCKER_PASSWORD, and DOCKER_REGISTRY to avoid this.${NC}"
     DOCKER_AUTH_METHOD="anonymous"
 fi
 
@@ -222,20 +222,16 @@ ensure_cosign_key() {
     local key_file="${COSIGN_KEY_PATH}"
     local pub_file="${key_file%.key}.pub"
 
+    mkdir -p "${key_dir}"
+
     # Check if key already exists
     if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
         echo -e "${GREEN}✓ Cosign key already exists: ${key_file}${NC}"
         return 0
     fi
-    
-    echo -e "${CYAN}Generating cosign key pair...${NC}"
-    
-    # Create directory if it doesn't exist
-    mkdir -p "${key_dir}"
 
-    
-    # Generate cosign key pair
-    # Use docker to run cosign for key generation
+    echo -e "${CYAN}Generating cosign key pair...${NC}"
+
     if command -v cosign &> /dev/null; then
         # Use local cosign if available
         COSIGN_PASSWORD="${COSIGN_PASSWORD}" cosign generate-key-pair --output-key-prefix="${key_dir}/cosign"
@@ -247,9 +243,7 @@ ensure_cosign_key() {
             gcr.io/projectsigstore/cosign:latest \
             generate-key-pair --output-key-prefix="/tmp/cosign/cosign"
     fi
-    
-    chown -R 1000:1000 "${key_dir}"
-    
+    chown -R 1000:1000 "${key_dir}/cosign"
     if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
         echo -e "${GREEN}✓ Cosign key pair generated successfully${NC}"
         echo -e "${CYAN}  Private key: ${key_file}${NC}"
@@ -359,6 +353,7 @@ run_rootless_tests() {
             storage_flag="overlay"
         fi
     else  # buildah
+        KIMIA_IMAGE=$(echo "$KIMIA_IMAGE" | sed 's|/kimia\([:@]\)|/kimia-bud\1|; s|/kimia$|/kimia-bud|')
         if [ "$driver" != "overlay" ]; then
             storage_flag="vfs"
         else
@@ -370,11 +365,15 @@ run_rootless_tests() {
     local BASE_CMD="docker run --rm"
     BASE_CMD="$BASE_CMD --user 1000:1000"
     #BASE_CMD="$BASE_CMD -v ${RF_KIMIA_TMPDIR}:/tmp"
-    
+    BASE_CMD="$BASE_CMD --cap-add SETUID --cap-add SETGID"
+    BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
+    BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
+
     # Add Docker auth if available
     if [ "$DOCKER_AUTH_METHOD" = "env" ]; then
         BASE_CMD="$BASE_CMD -e DOCKER_USERNAME=${DOCKER_USERNAME}"
         BASE_CMD="$BASE_CMD -e DOCKER_PASSWORD=${DOCKER_PASSWORD}"
+        BASE_CMD="$BASE_CMD -e DOCKER_REGISTRY=${DOCKER_REGISTRY}"
     elif [ "$DOCKER_AUTH_METHOD" = "config" ]; then
         BASE_CMD="$BASE_CMD -v $HOME/.docker/config.json:/home/kimia/.docker/config.json:ro"
     fi
@@ -383,28 +382,25 @@ run_rootless_tests() {
     if [ "$BUILDER" = "buildah" ] && [ "$driver" = "overlay" ]; then
         BASE_CMD="$BASE_CMD -v /tmp/kimia-buildah-overlay:/home/kimia/.local"
         mkdir -p /tmp/kimia-buildah-overlay
-    fi
-
-    # Security options for rootless
-    if [ "$BUILDER" = "buildkit" ]; then
-        BASE_CMD="$BASE_CMD --security-opt seccomp=unconfined"
-        BASE_CMD="$BASE_CMD --security-opt apparmor=unconfined"
+        chown 1000:1000 /tmp/kimia-buildah-overlay
     fi
 
     if should_run_signing; then
         ensure_cosign_key
+        chown -R 1000:1000 "$(dirname ${COSIGN_KEY_PATH})"
         BASE_CMD="$BASE_CMD -e COSIGN_PASSWORD=${COSIGN_PASSWORD}"
-        BASE_CMD="$BASE_CMD -v ${COSIGN_KEY_PATH}:/tmp/cosign.key:ro"
+        BASE_CMD="$BASE_CMD -v ${COSIGN_KEY_PATH}:/tmp/cosign/cosign.key:ro"
     fi
 
     BASE_CMD="$BASE_CMD ${KIMIA_IMAGE}"
 
+
     # ========================================================================
     # SIMPLE TESTS (Tests 1-6)
     # ========================================================================
-    
+
     if should_run_simple; then
-        Test 1: Version check
+        #Test 1: Version check
         run_test \
             "version" \
             "rootless" \
@@ -419,6 +415,7 @@ run_rootless_tests() {
             $BASE_CMD check-environment
 
         # Test 3: Build from git - nginx
+        echo $BASE_CMD
         run_test \
             "git-nginx" \
             "rootless" \
@@ -432,7 +429,9 @@ run_rootless_tests() {
             --insecure \
             --verbosity=debug
 
-        #Test 4: Build from git with context sub-path - postgres
+        #Test 4: Build from git with context sub-path - alpine
+        echo $BASE_CMD
+
         run_test \
             "https-alpine-subpath" \
             "rootless" \
@@ -441,12 +440,13 @@ run_rootless_tests() {
             --context=https://github.com/alpinelinux/docker-alpine.git \
             --context-sub-path="" \
             --dockerfile=Dockerfile \
-            --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-postgres-${driver}:latest \
+            --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-alpine-${driver}:latest \
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
 
-        #Test 5: Build from git with context sub-path - postgres
+        #Test 5: Build from git with context sub-path
+        echo $BASE_CMD
         run_test \
             "git-alpine-subpath" \
             "rootless" \
@@ -455,7 +455,7 @@ run_rootless_tests() {
             --context=git://github.com/alpinelinux/docker-alpine.git \
             --context-sub-path="" \
             --dockerfile=Dockerfile \
-            --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-postgres-${driver}:latest \
+            --destination=${REGISTRY}/${BUILDER}-rootless-sub-path-alpine-${driver}:latest \
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
@@ -464,10 +464,10 @@ run_rootless_tests() {
     # ========================================================================
     # REPRODUCIBLE BUILD TESTS (Test 6)
     # ========================================================================
-    
+
     if should_run_reproducible; then
         local test_image="${REGISTRY}/${BUILDER}-reproducible-test-${driver}"
-        
+
         # First build
         echo ""
         echo -e "${CYAN}Building image (first build)...${NC}"
@@ -484,7 +484,7 @@ run_rootless_tests() {
             --reproducible \
             --insecure \
             --verbosity=debug
-        
+
         docker pull ${test_image}:v1 || true
 
         # Extract digest from first build
@@ -514,7 +514,7 @@ run_rootless_tests() {
             --reproducible \
             --insecure \
             --verbosity=debug
-        
+
         docker pull ${test_image}:v2 || true
 
         # Extract digest from second build
@@ -529,7 +529,7 @@ run_rootless_tests() {
         echo ""
         echo -e "${CYAN}Comparing digests...${NC}"
         TOTAL_TESTS=$((TOTAL_TESTS + 1))
-        
+
         if [ "$digest1" = "$digest2" ] && [ "$digest1" != "none" ]; then
             echo -e "${GREEN}✓ SUCCESS: Builds are reproducible!${NC}"
             echo "Digest: $digest1"
@@ -542,7 +542,7 @@ run_rootless_tests() {
             FAILED_TESTS=$((FAILED_TESTS + 1))
             TEST_RESULTS+=("FAIL: reproducible-comparison (${BUILDER}, rootless, ${driver})")
         fi
-        
+
         # Cleanup test images
         docker rmi ${test_image}:v1 2>/dev/null || true
         docker rmi ${test_image}:v2 2>/dev/null || true
@@ -729,7 +729,7 @@ run_rootless_tests() {
                 --destination=${REGISTRY}/${BUILDER}-rootless-attest-sign-${driver}:latest \
                 --attestation=max \
                 --sign \
-                --cosign-key=/tmp/cosign.key \
+                --cosign-key=/tmp/cosign/cosign.key \
                 --cosign-password-env=COSIGN_PASSWORD \
                 --storage-driver=${storage_flag} \
                 --insecure \
@@ -749,16 +749,16 @@ cleanup_on_interrupt() {
     echo ""
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Stopping tests and cleaning up...${NC}"
-    
+
     # Kill any running docker containers
     echo "Stopping any running test containers..."
     docker ps -q --filter "ancestor=${KIMIA_IMAGE}" | xargs -r docker stop 2>/dev/null || true
-    
+
     # Print partial results if any tests were run
     if [ ${TOTAL_TESTS} -gt 0 ]; then
         print_test_summary
     fi
-    
+
     echo -e "${GREEN}Cleanup completed${NC}"
     exit 130  # Standard exit code for SIGINT
 }
@@ -782,7 +782,7 @@ main() {
     local start_time=$(date +%s)
 
     print_section "KIMIA DOCKER TEST SUITE"
-    
+
     echo -e "${CYAN}Configuration:${NC}"
     echo "  Builder:      $BUILDER"
     echo "  Registry:     $REGISTRY"

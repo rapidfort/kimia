@@ -29,8 +29,10 @@ CLEANUP_AFTER=false
 TEST_SUITE="all"  # all, simple, reproducible, attestation, signing
 
 # Cosign configuration
-COSIGN_KEY_PATH=${COSIGN_KEY_PATH:-"/tmp/cosign.key"}
+COSIGN_KEY_PATH=${COSIGN_KEY_PATH:-"/tmp/cosign/cosign.key"}
 COSIGN_PASSWORD=${COSIGN_PASSWORD:-"1234567890"}
+
+mkdir -p "$(dirname "$COSIGN_KEY_PATH")"
 
 # Script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -107,6 +109,10 @@ show_help() {
     echo -e "${YELLOW}NOTES:${NC}"
     echo "    - Attestation and signing tests require BuildKit builder"
     echo "    - Signing tests require cosign-key and cosign-password secrets in namespace"
+    echo "    - Registry authentication is auto-detected:"
+    echo "        1. .env file with REGISTRY_USERNAME/REGISTRY_PASSWORD (highest priority)"
+    echo "        2. Docker config.json at ~/.docker/config.json"
+    echo "        3. Anonymous access (no authentication)"
     echo "    - Use --tests to run specific test suites for faster debugging"
     echo ""
     exit 0
@@ -258,11 +264,11 @@ setup_namespace() {
     echo "Creating namespace: ${NAMESPACE}"
     kubectl create namespace ${NAMESPACE} --dry-run=client -o yaml | kubectl apply -f - > /dev/null
 
-    echo -e "${GREEN}âœ“ Namespace ready${NC}"
+    echo -e "${GREEN}✔ Namespace ready${NC}"
 }
 
 # ===========================================================================
-# Cosign Key Generation and Secret Management  
+# Cosign Key Generation and Secret Management
 # ===========================================================================
 
 # Generate cosign key if it doesn't exist
@@ -273,12 +279,12 @@ ensure_cosign_key() {
 
     # Check if key already exists
     if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
-        echo -e "${GREEN}✓ Cosign key already exists: ${key_file}${NC}"
+        echo -e "${GREEN}✔ Cosign key already exists: ${key_file}${NC}"
         return 0
     fi
-    
+
     echo -e "${CYAN}Generating cosign key pair...${NC}"
-    
+
     # Create directory if it doesn't exist
     mkdir -p "${key_dir}"
 
@@ -293,33 +299,28 @@ ensure_cosign_key() {
                 -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
                 -v "${key_dir}:/tmp/cosign" \
                 gcr.io/projectsigstore/cosign:latest \
-                generate-key-pair --output-key-prefix="/tmp/cosign/cosign"
+                generate-key-pair --output-key-prefix="/opt/rapidfort/local-bucket/cosign/cosign"
         elif command -v podman &> /dev/null; then
             podman run --rm \
                 -e COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
                 -v "${key_dir}:/tmp/cosign:z" \
                 gcr.io/projectsigstore/cosign:latest \
-                generate-key-pair --output-key-prefix="/tmp/cosign/cosign"
+                generate-key-pair --output-key-prefix="/opt/rapidfort/local-bucket/cosign/cosign"
         else
-            echo -e "${RED}✗ cosign binary not found and neither docker nor podman available${NC}"
+            echo -e "${RED}✔ cosign binary not found and neither docker nor podman available${NC}"
             echo -e "${YELLOW}Install cosign: https://docs.sigstore.dev/cosign/installation/${NC}"
             return 1
         fi
     fi
-    
-    # CRITICAL: Fix ownership so any user can access the keys
-    # This is important because the program can be run by any user
-    chown -R $(id -u):$(id -g) "${key_dir}" 2>/dev/null || true
-    chmod -R 755 "${key_dir}" 2>/dev/null || true
-    
+
     if [ -f "${key_file}" ] && [ -f "${pub_file}" ]; then
-        echo -e "${GREEN}✓ Cosign key pair generated successfully${NC}"
+        echo -e "${GREEN}✔ Cosign key pair generated successfully${NC}"
         echo -e "${CYAN}  Private key: ${key_file}${NC}"
         echo -e "${CYAN}  Public key:  ${pub_file}${NC}"
         echo -e "${CYAN}  Password:    ${COSIGN_PASSWORD}${NC}"
         return 0
     else
-        echo -e "${RED}✗ Failed to generate cosign key pair${NC}"
+        echo -e "${RED}✔ Failed to generate cosign key pair${NC}"
         return 1
     fi
 }
@@ -327,17 +328,17 @@ ensure_cosign_key() {
 # Create Kubernetes secrets for cosign key and password
 setup_cosign_secrets() {
     echo -e "${CYAN}Setting up cosign secrets in Kubernetes...${NC}"
-    
+
     # Generate cosign key if it doesn't exist
     if ! ensure_cosign_key; then
         echo -e "${YELLOW}⚠ Warning: Could not generate cosign key${NC}"
         echo -e "${YELLOW}⚠ Signing tests will be skipped${NC}"
         return 1
     fi
-    
+
     local key_file="${COSIGN_KEY_PATH}"
     local pub_file="${key_file%.key}.pub"
-    
+
     # Check if secrets already exist
     if kubectl get secret cosign-key -n ${NAMESPACE} &>/dev/null; then
         echo -e "${GREEN}✓ cosign-key secret already exists${NC}"
@@ -347,7 +348,7 @@ setup_cosign_secrets() {
             --from-file=cosign.key="${key_file}" \
             --from-file=cosign.pub="${pub_file}" \
             -n ${NAMESPACE}
-        
+
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✓ cosign-key secret created${NC}"
         else
@@ -355,7 +356,7 @@ setup_cosign_secrets() {
             return 1
         fi
     fi
-    
+
     if kubectl get secret cosign-password -n ${NAMESPACE} &>/dev/null; then
         echo -e "${GREEN}✓ cosign-password secret already exists${NC}"
     else
@@ -363,7 +364,7 @@ setup_cosign_secrets() {
         kubectl create secret generic cosign-password \
             --from-literal=COSIGN_PASSWORD="${COSIGN_PASSWORD}" \
             -n ${NAMESPACE}
-        
+
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}✓ cosign-password secret created${NC}"
         else
@@ -371,8 +372,79 @@ setup_cosign_secrets() {
             return 1
         fi
     fi
-    
+
     echo -e "${GREEN}✓ Cosign secrets ready for signing tests${NC}"
+    return 0
+}
+
+setup_registry_auth_secret() {
+
+    echo -e "${CYAN}Setting up registry authentication secrets...${NC}"
+
+    local env_file="${SCRIPT_DIR}/.env"
+
+    # Check if secret already exists
+    if kubectl get secret registry-auth -n ${NAMESPACE} &>/dev/null; then
+        kubectl delete secret registry-auth -n ${NAMESPACE}
+    fi
+
+    # 1. Check for .env file
+    if [ -f "$env_file" ]; then
+        echo "Detected .env file - using environment-based authentication"
+
+        # Source the .env file
+        source "$env_file"
+
+        # Validate required variables
+        if [ -z "$DOCKER_USERNAME" ] || [ -z "$DOCKER_PASSWORD" ]; then
+            echo -e "${RED}✗ Error: .env file must contain DOCKER_USERNAME and DOCKER_PASSWORD${NC}"
+            return 1
+        fi
+
+        kubectl create secret generic registry-auth \
+            --from-literal=method="env" \
+            --from-literal=DOCKER_USERNAME="${DOCKER_USERNAME}" \
+            --from-literal=DOCKER_PASSWORD="${DOCKER_PASSWORD}" \
+            --from-literal=DOCKER_REGISTRY="${DOCKER_REGISTRY:-docker.io}" \
+            -n ${NAMESPACE}
+
+        local result=$?
+
+        if [ $result -eq 0 ]; then
+            echo -e "${GREEN}✓ registry-auth secret created (env-based)${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ Failed to create registry-auth secret${NC}"
+            return 1
+        fi
+    fi
+
+    # 2. Check for Docker config.json
+    local docker_config_file="${HOME}/.docker/config.json"
+    if [ -f "$docker_config_file" ]; then
+        echo "Detected Docker config.json - using Docker config authentication"
+
+        # Create secret from docker config with method marker
+        kubectl create secret generic registry-auth \
+            --from-literal=method="docker" \
+            --from-file=config.json="${docker_config_file}" \
+            -n ${NAMESPACE}
+
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}✓ registry-auth secret created (docker config)${NC}"
+            echo -e "${CYAN}  Source: ${docker_config_file}${NC}"
+            echo -e "${CYAN}  Mount path: /home/kimia/.docker/config.json${NC}"
+            return 0
+        else
+            echo -e "${RED}✗ Failed to create registry-auth secret${NC}"
+            return 1
+        fi
+    fi
+
+    # 3. Anonymous access (no authentication found)
+    echo -e "${YELLOW}⚠ No authentication detected (.env or config.json)${NC}"
+    echo -e "${YELLOW}⚠ Running in anonymous mode${NC}"
+
     return 0
 }
 
@@ -393,7 +465,7 @@ generate_job_yaml() {
     local yaml_file="${SUITES_DIR}/${job_name}.yaml"
 
     # Set capabilities based on storage driver and builder
-    local caps_add="[SETUID, SETGID]"
+    local caps_add="[SETUID, SETGID, DAC_OVERRIDE, MKNOD]"
     local pod_seccomp=""
     local pod_apparmor=""
     local container_seccomp=""
@@ -415,17 +487,7 @@ generate_job_yaml() {
     # Overlay storage configuration
     if [ "$driver" = "overlay" ]; then
         # Overlay needs additional capabilities and profiles
-        if [ "$BUILDER" = "buildkit" ]; then
-            # BuildKit overlay: just DAC_OVERRIDE + Unconfined (already set above)
-            caps_add="[SETUID, SETGID, DAC_OVERRIDE]"
-        else
-            # Buildah overlay: MKNOD + Unconfined + emptyDir
-            caps_add="[SETUID, SETGID, MKNOD]"
-            container_seccomp="seccompProfile:
-            type: Unconfined"
-            container_apparmor="appArmorProfile:
-            type: Unconfined"
-
+        if [ "$BUILDER" = "buildah" ]; then
             # Buildah overlay REQUIRES emptyDir at /home/kimia/.local
             # This breaks nested overlayfs since container root is already overlay
             volume_mounts="        - name: kimia-local
@@ -440,8 +502,7 @@ generate_job_yaml() {
     if [ "$with_signing" = "true" ]; then
         volume_mounts="${volume_mounts}
         - name: cosign-key
-          mountPath: /tmp/cosign.key
-          subPath: cosign.key
+          mountPath: /tmp/cosign
           readOnly: true"
         volumes="${volumes}
       - name: cosign-key
@@ -454,6 +515,44 @@ generate_job_yaml() {
               name: cosign-password
               key: COSIGN_PASSWORD"
         has_volumes=true
+    fi
+
+    if kubectl get secret registry-auth -n ${NAMESPACE} &>/dev/null; then
+        # Detect method by checking the 'method' key in the secret
+        auth_method=$(kubectl get secret registry-auth -n ${NAMESPACE} -o jsonpath='{.data.method}' 2>/dev/null | base64 -d 2>/dev/null)
+
+        if [ "$auth_method" = "env" ]; then
+            # Add environment variables from secret
+            env_vars="${env_vars}
+        - name: DOCKER_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: registry-auth
+              key: DOCKER_USERNAME
+        - name: DOCKER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: registry-auth
+              key: DOCKER_PASSWORD
+        - name: DOCKER_REGISTRY
+          valueFrom:
+            secretKeyRef:
+              name: registry-auth
+              key: DOCKER_REGISTRY"
+        elif [ "$auth_method" = "docker" ]; then
+            # Mount Docker config.json
+            volume_mounts="${volume_mounts}
+        - name: registry-auth
+          mountPath: /home/kimia/.docker/config.json
+          subPath: config.json
+          readOnly: true"
+            volumes="${volumes}
+      - name: registry-auth
+        secret:
+          secretName: registry-auth
+          defaultMode: 0400"
+            has_volumes=true
+        fi
     fi
 
     # Generate complete YAML
@@ -469,6 +568,11 @@ spec:
   template:
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        fsGroup: 1000
       containers:
       - name: kimia
         image: ${KIMIA_IMAGE}
@@ -510,7 +614,6 @@ ${volume_mounts}
 ${volumes}
 EOF
     fi
-
     echo "${yaml_file}"
 }
 
@@ -537,7 +640,7 @@ run_k8s_test() {
 
     # Generate unique job name with timestamp
     local job_name="${BUILDER}-${driver}-${test_id}-$(date +%s)"
-    
+
     # Create log file FIRST (before yaml generation)
     local log_file="${SUITES_DIR}/test-${job_name}.log"
     mkdir -p "${SUITES_DIR}"
@@ -546,11 +649,11 @@ run_k8s_test() {
     # Generate YAML
     local yaml_file=$(generate_job_yaml "${job_name}" "${driver}" "${args}" "${with_signing}")
 
-    echo -e "${CYAN}  Creating job: ${job_name}${NC}"
     echo -e "${CYAN}  YAML file: ${yaml_file}${NC}"
     echo -e "${CYAN}  Log file: ${log_file}${NC}"
-    echo ""
+    echo -e "${CYAN}  Creating job: ${job_name}${NC}"
 
+    echo ""
     # Apply the job
     local apply_result
     apply_result=$(kubectl apply -f "${yaml_file}" -n ${NAMESPACE} 2>&1)
@@ -563,12 +666,12 @@ run_k8s_test() {
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Job creation failed")
         return
     fi
-    
+
     # Log successful job creation
     echo "=== Job Created Successfully ===" >> "${log_file}"
     echo "${apply_result}" >> "${log_file}"
     echo "" >> "${log_file}"
-
+    sleep 1
     # Wait for pod to be created
     echo -e "${CYAN}  Waiting for pod...${NC}"
     local pod_name=""
@@ -605,7 +708,7 @@ run_k8s_test() {
             echo ""  # New line after progress
             break
         fi
-        
+
         # Job completed successfully (fast jobs go directly to Succeeded)
         if [ "$phase" = "Succeeded" ]; then
             ready=true
@@ -654,7 +757,7 @@ run_k8s_test() {
 
     # Check if pod already completed (for fast jobs)
     local current_phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
-    
+
     if [ "$current_phase" = "Succeeded" ] || [ "$current_phase" = "Failed" ]; then
         # Job already completed, just get the logs
         kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | tee -a "${log_file}" | sed 's/^/    /'
@@ -675,32 +778,32 @@ run_k8s_test() {
             # Job completed successfully
             break
         fi
-        
+
         job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null)
         if [ "$job_status" = "True" ]; then
             # Job failed
             break
         fi
-        
+
         sleep 2
         elapsed=$((elapsed + 2))
     done
-    
+
     # Stop log streaming (if it's still running)
     if [ $logs_pid -ne 0 ]; then
         kill $logs_pid 2>/dev/null || true
         wait $logs_pid 2>/dev/null || true
     fi
-    
+
     # Give logs a moment to flush
     sleep 1
-    
+
     # Capture final logs to file
     kubectl logs ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
-    
+
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))
-    
+
     # Check if job completed successfully
     job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)
     if [ "$job_status" = "True" ]; then
@@ -711,7 +814,7 @@ run_k8s_test() {
     else
         echo -e "${RED}✗ FAIL${NC} (${duration}s)"
         echo "=== Test FAILED ===" >> "${log_file}"
-        
+
         # Get job status and events
         echo "" >> "${log_file}"
         echo "=== Job Status ===" >> "${log_file}"
@@ -719,7 +822,7 @@ run_k8s_test() {
         echo "" >> "${log_file}"
         echo "=== Pod Description ===" >> "${log_file}"
         kubectl describe pod ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
-        
+
         FAILED_TESTS=$((FAILED_TESTS + 1))
         TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver})")
 
@@ -792,35 +895,77 @@ run_rootless_tests() {
         run_k8s_test \
             "Git Repository Build" \
             "$driver" \
-            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/nginxinc/docker-nginx.git\",
+                \"--git-branch=master\",
+                \"--dockerfile=mainline/alpine/Dockerfile\",
+                \"--destination=test-${BUILDER}-k8s-rootless-git-${driver}:latest\",
+                \"--storage-driver=${storage_flag}\",
+                \"--no-push\",
+                \"--verbosity=debug\"
+            ]" \
             "git-build"
 
         # Test 4: Build with arguments from Git (no push)
         run_k8s_test \
             "Build with Arguments" \
             "$driver" \
-            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=test-${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--no-push\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/nginxinc/docker-nginx.git\",
+                \"--git-branch=master\",
+                \"--dockerfile=mainline/alpine/Dockerfile\",
+                \"--destination=test-${BUILDER}-k8s-rootless-buildargs-${driver}:latest\",
+                \"--build-arg=NGINX_VERSION=1.25\",
+                \"--storage-driver=${storage_flag}\",
+                \"--no-push\",
+                \"--verbosity=debug\"
+            ]" \
             "buildargs"
 
         # Test 5: Git build WITH push to registry
         run_k8s_test \
             "Git Repository Build (Push)" \
             "$driver" \
-            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-git-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/nginxinc/docker-nginx.git\",
+                \"--git-branch=master\",
+                \"--dockerfile=mainline/alpine/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-git-${driver}:latest\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "git-build-push"
 
         # Test 6: Build with args AND push to registry
         run_k8s_test \
             "Build with Arguments (Push)" \
             "$driver" \
-            "[\"--context=https://github.com/nginxinc/docker-nginx.git\", \"--git-branch=master\", \"--dockerfile=mainline/alpine/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-buildargs-${driver}:latest\", \"--build-arg=NGINX_VERSION=1.25\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/nginxinc/docker-nginx.git\",
+                \"--git-branch=master\",
+                \"--dockerfile=mainline/alpine/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-rootless-buildargs-${driver}:latest\",
+                \"--build-arg=NGINX_VERSION=1.25\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "buildargs-push"
 
         # Test 7: Build with context-sub-path and push to registry
         run_k8s_test \
             "Build with Context Sub-path (Push)" \
             "$driver" \
-            "[\"--context=https://github.com/docker-library/postgres.git\", \"--context-sub-path=18/alpine3.22\", \"--dockerfile=Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-postgres-buildargs-${driver}:latest\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/docker-library/postgres.git\",
+                \"--context-sub-path=18/alpine3.22\",
+                \"--dockerfile=Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-postgres-buildargs-${driver}:latest\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "context-subpath-push"
     fi
 
@@ -834,7 +979,16 @@ run_rootless_tests() {
         run_k8s_test \
             "Reproducible Build #1" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${test_image}:v1\", \"--storage-driver=${storage_flag}\", \"--reproducible\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${test_image}:v1\",
+                \"--storage-driver=${storage_flag}\",
+                \"--reproducible\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "reproducible-build1"
 
         echo "Waiting 5 seconds before second build..."
@@ -853,7 +1007,16 @@ run_rootless_tests() {
         run_k8s_test \
             "Reproducible Build #2" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${test_image}:v1\", \"--storage-driver=${storage_flag}\", \"--reproducible\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${test_image}:v1\",
+                \"--storage-driver=${storage_flag}\",
+                \"--reproducible\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "reproducible-build2"
 
         sleep 5
@@ -897,21 +1060,48 @@ run_rootless_tests() {
         run_k8s_test \
             "Attestation - Default (min)" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-default-${driver}:latest\", \"--attestation\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-default-${driver}:latest\",
+                \"--attestation\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attestation-default"
 
         # Test 10: Attestation - explicit min (provenance only)
         run_k8s_test \
             "Attestation - Min (provenance)" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-min-${driver}:latest\", \"--attestation=min\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-min-${driver}:latest\",
+                \"--attestation=min\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attestation-min"
 
         # Test 11: Attestation - max (SBOM + provenance)
         run_k8s_test \
             "Attestation - Max (SBOM+provenance)" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-max-${driver}:latest\", \"--attestation=max\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-max-${driver}:latest\",
+                \"--attestation=max\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attestation-max"
 
         # ====================================================================
@@ -922,49 +1112,122 @@ run_rootless_tests() {
         run_k8s_test \
             "Attestation - Off (none)" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-off-${driver}:latest\", \"--attestation=off\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-off-${driver}:latest\",
+                \"--attestation=off\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attestation-off"
 
         # Test 13: Docker-style - SBOM only
         run_k8s_test \
             "Attest - SBOM only" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-only-${driver}:latest\", \"--attest\", \"type=sbom\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-only-${driver}:latest\",
+                \"--attest\",
+                \"type=sbom\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attest-sbom-only"
 
         # Test 14: Docker-style - Provenance only
         run_k8s_test \
             "Attest - Provenance only" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-only-${driver}:latest\", \"--attest\", \"type=provenance,mode=max\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-only-${driver}:latest\",
+                \"--attest\",
+                \"type=provenance,mode=max\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attest-prov-only"
 
         # Test 15: Docker-style - SBOM with scan options
         run_k8s_test \
             "Attest - SBOM with scan" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-scan-${driver}:latest\", \"--attest\", \"type=sbom,scan-stage=true\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-sbom-scan-${driver}:latest\",
+                \"--attest\",
+                \"type=sbom,scan-stage=true\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attest-sbom-scan"
 
         # Test 16: Docker-style - Provenance with builder-id
         run_k8s_test \
             "Attest - Provenance with builder-id" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-builderid-${driver}:latest\", \"--attest\", \"type=provenance,mode=max,builder-id=https://github.com/rapidfort/kimia/actions/runs/test\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-prov-builderid-${driver}:latest\",
+                \"--attest\",
+                \"type=provenance,mode=max,builder-id=https://github.com/rapidfort/kimia/actions/runs/test\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attest-prov-builderid"
 
         # Test 17: Docker-style - Both SBOM and Provenance
         run_k8s_test \
             "Attest - Both (SBOM+Prov)" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-both-${driver}:latest\", \"--attest\", \"type=sbom,scan-stage=true\", \"--attest\", \"type=provenance,mode=max,reproducible=true\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-both-${driver}:latest\",
+                \"--attest\",
+                \"type=sbom,scan-stage=true\",
+                \"--attest\",
+                \"type=provenance,mode=max,reproducible=true\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "attest-both"
 
         # Test 18: Pass-through - BuildKit option
         run_k8s_test \
             "BuildKit-opt - Pass-through" \
             "$driver" \
-            "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-passthrough-${driver}:latest\", \"--attest\", \"type=sbom\", \"--buildkit-opt\", \"attest:provenance=mode=min\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+            "[
+                \"--context=https://github.com/rapidfort/kimia.git\",
+                \"--git-branch=main\",
+                \"--dockerfile=tests/examples/Dockerfile\",
+                \"--destination=${REGISTRY}/${BUILDER}-k8s-passthrough-${driver}:latest\",
+                \"--attest\",
+                \"type=sbom\",
+                \"--buildkit-opt\",
+                \"attest:provenance=mode=min\",
+                \"--storage-driver=${storage_flag}\",
+                \"--insecure\",
+                \"--verbosity=debug\"
+            ]" \
             "buildkit-opt-passthrough"
     fi
 
@@ -979,7 +1242,19 @@ run_rootless_tests() {
             run_k8s_test \
                 "Attestation + Signing" \
                 "$driver" \
-                "[\"--context=https://github.com/rapidfort/kimia.git\", \"--git-branch=main\", \"--dockerfile=tests/examples/Dockerfile\", \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-sign-${driver}:latest\", \"--attestation=max\", \"--sign\", \"--cosign-key=/tmp/cosign.key\", \"--cosign-password-env=COSIGN_PASSWORD\", \"--storage-driver=${storage_flag}\", \"--insecure\", \"--verbosity=debug\"]" \
+                "[
+                    \"--context=https://github.com/rapidfort/kimia.git\",
+                    \"--git-branch=main\",
+                    \"--dockerfile=tests/examples/Dockerfile\",
+                    \"--destination=${REGISTRY}/${BUILDER}-k8s-attest-sign-${driver}:latest\",
+                    \"--attestation=max\",
+                    \"--sign\",
+                    \"--cosign-key=/tmp/cosign/cosign.key\",
+                    \"--cosign-password-env=COSIGN_PASSWORD\",
+                    \"--storage-driver=${storage_flag}\",
+                    \"--insecure\",
+                    \"--verbosity=debug\"
+                ]" \
                 "attestation-sign" \
                 "true"
         else
@@ -997,22 +1272,22 @@ cleanup_on_interrupt() {
     echo ""
     echo -e "${YELLOW}Interrupted by user (Ctrl+C)${NC}"
     echo -e "${YELLOW}Stopping tests and cleaning up...${NC}"
-    
+
     # Delete any running jobs in the namespace
     echo "Deleting any running jobs..."
     kubectl delete jobs -n ${NAMESPACE} --all --force --grace-period=0 &>/dev/null || true
-    
+
     # Print partial results if any tests were run
     if [ ${TOTAL_TESTS} -gt 0 ]; then
         print_test_summary
     fi
-    
+
     # Optionally cleanup namespace
     if [ "$CLEANUP_AFTER" = true ]; then
         echo "Deleting namespace: ${NAMESPACE}"
         kubectl delete namespace ${NAMESPACE} --force --grace-period=0 &>/dev/null || true
     fi
-    
+
     echo -e "${GREEN}Cleanup completed${NC}"
     exit 130  # Standard exit code for SIGINT
 }
@@ -1112,9 +1387,12 @@ main() {
 
     # Setup namespace
     setup_namespace
-    
+
     # Setup cosign secrets for signing tests
     setup_cosign_secrets
+
+    # Registry authentication setup
+    setup_registry_auth_secret
 
     # Determine which storage drivers to test
     case $STORAGE_DRIVER in

@@ -1,0 +1,47 @@
+# BuildKit Configuration
+# Location: /home/kimia/.config/buildkit/buildkitd.toml
+#
+# This file configures BuildKit daemon settings, including
+# worker configuration, runtime selection, and rootless mode.
+
+[worker.oci]
+# Enable OCI worker (builds container images)
+enabled = true
+
+# Enable rootless mode (required for non-root builds)
+# This allows BuildKit to run without root privileges
+rootless = true
+
+# Container runtime binary
+# crun is faster and lighter than runc
+binary = "crun"
+
+# Disable process sandbox
+# Required for rootless mode to work properly
+noProcessSandbox = true
+
+# Notes:
+# - This configuration is optimized for rootless operation
+# - crun provides better performance than runc
+# - noProcessSandbox is required for rootless builds
+# - BuildKit will use this config automatically when running as non-root user
+
+# Additional options (commented out, uncomment to use):
+
+# [worker.oci.snapshotter]
+# Configure snapshotter (storage driver)
+# name = "overlayfs"  # Options: overlayfs, native
+
+# [worker.containerd]
+# Enable containerd worker (alternative to OCI worker)
+# enabled = false
+# namespace = "buildkit"
+
+# [grpc]
+# Configure gRPC server
+# address = [ "unix:///run/buildkit/buildkitd.sock" ]
+
+# [registry]
+# Configure registry mirrors and certificates
+# [registry."docker.io"]
+# mirrors = ["mirror.example.com"]

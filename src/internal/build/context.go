@@ -43,13 +43,16 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		GitConfig: gitConfig, // Store for later use in BuildKit URL formatting
 	}
 
+	// Expand environment variables in context URL (e.g., ${GITHUB_TOKEN})
+	gitConfig.Context = expandEnvInURL(gitConfig.Context)
+
 	// Check if context is a git URL
 	if isGitURL(gitConfig.Context) {
 		logger.Info("Detected git repository context: %s", gitConfig.Context)
 		
 		// Normalize git:// URLs to https:// for known providers (GitHub, GitLab, etc)
 		normalizedURL := normalizeGitURL(gitConfig.Context)
-
+		
 		// For BuildKit, pass Git URL directly without cloning (for better SBOM generation)
 		if builder == "buildkit" {
 			logger.Info("Using BuildKit native Git support (no local clone)")
@@ -58,7 +61,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			ctx.Path = "" // No local path needed for BuildKit
 			
 			// BuildKit will handle branch/revision via Git URL syntax
-			logger.Info("Build context prepared (Git URL for BuildKit): %s", ctx.GitURL)
+			logger.Debug("Build context prepared (Git URL for BuildKit): %s", ctx.GitURL)
 			return ctx, nil
 		}
 		
@@ -87,7 +90,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true
 
-		// Clone the repository (use normalized URL)
+		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
 			os.RemoveAll(tempDir)
@@ -140,36 +143,67 @@ func isGitURL(url string) bool {
 		(strings.HasPrefix(url, "https://") && strings.Contains(url, "/"))
 }
 
-// normalizeGitURL converts deprecated git:// URLs to https:// for known providers
+// normalizeGitURL converts deprecated git:// URLs and git@ SSH URLs to https:// for known providers
 // GitHub, GitLab, and Bitbucket have all disabled the insecure git:// protocol
+// For automation/CI, HTTPS is preferred over SSH (no key management, no prompts)
 func normalizeGitURL(url string) string {
-	// Only normalize git:// URLs
-	if !strings.HasPrefix(url, "git://") {
+	// Check if user wants to force SSH (skip normalization for git@)
+	preferSSH := os.Getenv("KIMIA_PREFER_SSH") == "true"
+	
+	// Convert git:// to https://
+	if strings.HasPrefix(url, "git://") {
+		knownProviders := []string{
+			"github.com",
+			"gitlab.com",
+			"bitbucket.org",
+		}
+		
+		for _, provider := range knownProviders {
+			if strings.Contains(url, provider) {
+				normalized := strings.Replace(url, "git://", "https://", 1)
+				logger.Warning("Converted deprecated git:// URL to https:// (git:// protocol is disabled on %s)", provider)
+				logger.Debug("Original: %s", url)
+				logger.Debug("Normalized: %s", normalized)
+				return normalized
+			}
+		}
+		
+		logger.Warning("Using git:// URL: %s", url)
+		logger.Warning("Note: Most modern Git servers have disabled git:// protocol. If build fails, try https:// instead")
 		return url
 	}
-
-	// List of known providers that have disabled git:// protocol
-	knownProviders := []string{
-		"github.com",
-		"gitlab.com",
-		"bitbucket.org",
-	}
-
-	// Check if URL is from a known provider
-	for _, provider := range knownProviders {
-		if strings.Contains(url, provider) {
-			// Convert git:// to https://
-			normalized := strings.Replace(url, "git://", "https://", 1)
-			logger.Warning("Converted deprecated git:// URL to https:// (git:// protocol is disabled on %s)", provider)
-			logger.Debug("Original: %s", url)
-			logger.Debug("Normalized: %s", normalized)
-			return normalized
+	
+	// Convert git@ SSH URLs to https:// for automation-friendly non-interactive cloning
+	if strings.HasPrefix(url, "git@") && !preferSSH {
+		// Pattern: git@github.com:user/repo.git -> https://github.com/user/repo.git
+		if strings.Contains(url, "github.com") || 
+		   strings.Contains(url, "gitlab.com") || 
+		   strings.Contains(url, "bitbucket.org") {
+			
+			// Extract host and path
+			// git@github.com:user/repo.git
+			parts := strings.SplitN(url, "@", 2)
+			if len(parts) == 2 {
+				hostAndPath := parts[1]
+				// github.com:user/repo.git
+				hostAndPath = strings.Replace(hostAndPath, ":", "/", 1)
+				normalized := "https://" + hostAndPath
+				
+				logger.Warning("Converted SSH URL (git@) to HTTPS for non-interactive cloning")
+				logger.Info("For automation, HTTPS is preferred over SSH (no keys/prompts required)")
+				logger.Debug("Original: git@...")
+				logger.Debug("Normalized: %s", normalized)
+				logger.Info("Note: To force SSH, set environment variable KIMIA_PREFER_SSH=true")
+				return normalized
+			}
 		}
 	}
-
-	// For unknown providers, warn but keep original (might be private server)
-	logger.Warning("Using git:// URL: %s", url)
-	logger.Warning("Note: Most modern Git servers have disabled git:// protocol. If build fails, try https:// instead")
+	
+	if strings.HasPrefix(url, "git@") && preferSSH {
+		logger.Info("Using SSH URL as requested (KIMIA_PREFER_SSH=true)")
+		logger.Info("Ensure SSH agent is running with keys loaded for non-interactive operation")
+	}
+	
 	return url
 }
 
@@ -219,14 +253,38 @@ func addGitToken(url, token, user string) string {
 
 	// Handle different URL formats
 	if strings.HasPrefix(url, "https://") {
-		// Insert credentials after https://
+		// Check if URL already has credentials (user:pass@host or just @host)
 		parts := strings.SplitN(url, "https://", 2)
 		if len(parts) == 2 {
-			return fmt.Sprintf("https://%s:%s@%s", user, token, parts[1])
+			remainder := parts[1]
+			
+			// Check for existing credentials
+			if strings.Contains(remainder, "@") {
+				// URL already has credentials, don't add more
+				logger.Debug("URL already contains credentials, not adding token")
+				return url
+			}
+			
+			// Insert credentials after https://
+			return fmt.Sprintf("https://%s:%s@%s", user, token, remainder)
 		}
 	}
 
 	return url
+}
+
+// expandEnvInURL expands environment variables in a URL
+// Supports both $VAR and ${VAR} syntax
+func expandEnvInURL(url string) string {
+	// Use os.ExpandEnv which handles both $VAR and ${VAR}
+	expanded := os.ExpandEnv(url)
+	
+	if expanded != url {
+		logger.Debug("Expanded environment variables in URL")
+		// Don't log the actual values for security
+	}
+	
+	return expanded
 }
 
 // checkoutGitBranch checks out a specific Git branch
@@ -308,7 +366,7 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 		if suffix != "" {
 			suffix = suffix + ":" + subContext
 		} else {
-			suffix = "HEAD:" + subContext
+			suffix = ":" + subContext
 		}
 		logger.Debug("Using sub-context path: %s", subContext)
 	}
