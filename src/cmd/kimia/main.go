@@ -152,7 +152,7 @@ func main() {
 		InsecureRegistry: config.InsecureRegistry,
 	}
 
-	authFile, err := auth.Setup(authSetup)
+	err = auth.Setup(authSetup)
 	if err != nil {
 		logger.Fatal("Failed to setup authentication: %v", err)
 	}
@@ -189,7 +189,7 @@ func main() {
 	}
 
 	// Execute build
-	if err := build.Execute(buildConfig, ctx, authFile); err != nil {
+	if err := build.Execute(buildConfig, ctx); err != nil {
 		logger.Fatal("Build failed: %v", err)
 	}
 
@@ -204,7 +204,7 @@ func main() {
 			StorageDriver:       config.StorageDriver,
 		}
 
-		digestMap, err := build.Push(pushConfig, authFile)
+		digestMap, err := build.Push(pushConfig)
 		if err != nil {
 			logger.Fatal("Push failed: %v", err)
 		}

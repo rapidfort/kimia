@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-
+	"github.com/rapidfort/kimia/internal/auth"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -94,7 +94,7 @@ func DetectBuilder() string {
 }
 
 // Execute executes a build using the detected builder (buildah or buildkit)
-func Execute(config Config, ctx *Context, authFile string) error {
+func Execute(config Config, ctx *Context) error {
 	builder := DetectBuilder()
 
 	if builder == "unknown" {
@@ -104,14 +104,14 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	logger.Info("Using builder: %s", strings.ToUpper(builder))
 
 	if builder == "buildkit" {
-		return executeBuildKit(config, ctx, authFile)
+		return executeBuildKit(config, ctx)
 	}
 
-	return executeBuildah(config, ctx, authFile)
+	return executeBuildah(config, ctx)
 }
 
 // executeBuildah executes a buildah build with authentication
-func executeBuildah(config Config, ctx *Context, authFile string) error {
+func executeBuildah(config Config, ctx *Context) error {
 	// Detect if running as root
 	isRoot := os.Getuid() == 0
 
@@ -138,16 +138,6 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	// Construct buildah command
 	args := []string{"bud"}
-
-	// Add auth file if available
-	if authFile != "" {
-		// Validate auth file exists and is readable
-		if _, err := os.Stat(authFile); err != nil {
-			logger.Warning("Auth file not found or not readable: %v", err)
-		} else {
-			args = append(args, "--authfile", authFile)
-		}
-	}
 
 	// Add Dockerfile
 	dockerfilePath := config.Dockerfile
@@ -280,14 +270,9 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
 
-	// Enhanced environment setup for auth
-	if authFile != "" {
-		cmd.Env = append(cmd.Env,
-			fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile),
-			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
-			fmt.Sprintf("BUILDAH_AUTH_FILE=%s", authFile),
-		)
-	}
+	// Set DOCKER_CONFIG for authentication
+	dockerConfigDir := auth.GetDockerConfigDir()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 	// Storage driver configuration
 	storageDriver := config.StorageDriver
@@ -301,7 +286,6 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	for _, env := range cmd.Env {
 		if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
 			strings.HasPrefix(env, "BUILDAH_") ||
-			strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") ||
 			strings.HasPrefix(env, "DOCKER_CONFIG=") {
 			logger.Info("  %s", env)
 		}
@@ -329,7 +313,7 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	return nil
 }
 
-func executeBuildKit(config Config, ctx *Context, authFile string) error {
+func executeBuildKit(config Config, ctx *Context) error {
 	logger.Info("Starting BuildKit build...")
 
 	// ========================================
@@ -494,10 +478,17 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
 		"--net=host",
+		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
 		"--config="+buildkitConfig,
 		"--addr=unix://"+buildkitSocket,
+	)
+
+	daemonCmd.Env = append(os.Environ(),
+		"HOME=/home/kimia",
+		"DOCKER_CONFIG=/home/kimia/.docker",
+		"XDG_RUNTIME_DIR=/tmp/run",
 	)
 
 	daemonCmd.Stdout = os.Stdout
@@ -744,10 +735,9 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// Set BUILDKIT_HOST
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BUILDKIT_HOST=unix://%s", buildkitSocket))
 
-	// Set DOCKER_CONFIG for auth
-	if authFile != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)))
-	}
+	// Set DOCKER_CONFIG for authentication
+	dockerConfigDir := auth.GetDockerConfigDir()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 	// Set SOURCE_DATE_EPOCH for reproducible builds
 	if sourceEpoch != "" {

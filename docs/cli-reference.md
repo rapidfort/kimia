@@ -1,608 +1,644 @@
-# Command Line Reference
+# Kimia CLI Reference
 
-Complete reference for Kimia command-line arguments.
+Complete command-line reference for Kimia container image builder.
 
-## Usage
+## Table of Contents
 
-```bash
-kimia --context=<path|url> --destination=<image:tag> [options]
-kimia check-environment              # Validate build environment
-kimia --help                         # Show help message
-kimia --version                      # Show version info
-```
+- [Core Arguments](#core-arguments)
+- [Build Options](#build-options)
+- [Registry Authentication](#registry-authentication)
+- [Registry Options](#registry-options)
+- [Output Options](#output-options)
+- [Attestation & Signing](#attestation--signing)
+- [Git Options](#git-options)
+- [Reproducible Builds](#reproducible-builds)
+- [Logging & Debug](#logging--debug)
+- [Advanced Options](#advanced-options)
 
 ---
 
 ## Core Arguments
 
-### `--context`, `-c`
+| Argument | Description | Example | Required |
+|----------|-------------|---------|----------|
+| `-c, --context` | Build context (directory or Git URL) | `--context=.` | Yes |
+| `-f, --dockerfile` | Path to Dockerfile | `--dockerfile=Dockerfile` | No (default: Dockerfile) |
+| `-d, --destination` | Target image (repeatable for multiple tags) | `--destination=myapp:latest` | Yes (unless `--no-push`) |
+| `-t, --target` | Multi-stage build target | `--target=builder` | No |
+| `--context-sub-path` | Subdirectory within context | `--context-sub-path=app` | No |
 
-**Required.** Specifies the build context directory or Git URL.
-
-```bash
-# Local directory
-kimia --context=. --destination=myapp:latest
-
-# Git repository
-kimia --context=https://github.com/org/repo.git --destination=myapp:latest
-```
-
-### `--context-sub-path`
-
-Sub-directory within the build context.
+### Examples
 
 ```bash
-# Build from sub-directory in Git repo
-kimia --context=https://github.com/org/repo.git \
-      --context-sub-path=docker/app \
-      --destination=myapp:latest
-```
+# Basic build
+kimia --context=. --destination=myregistry.io/myapp:v1.0
 
-### `--dockerfile`, `-f`
+# Multi-stage build with specific target
+kimia --context=. --dockerfile=Dockerfile.prod --target=production --destination=myapp:prod
 
-Path to Dockerfile relative to context. **Default:** `Dockerfile`
+# Build from subdirectory
+kimia --context=. --context-sub-path=backend --destination=myapp:backend
 
-```bash
-kimia --context=. --dockerfile=docker/Dockerfile.prod --destination=myapp:latest
-```
-
-### `--destination`, `-d`
-
-**Required.** Destination image with tag. Can be specified multiple times.
-
-```bash
-# Single destination
-kimia --context=. --destination=myregistry.io/myapp:latest
-
-# Multiple destinations
+# Multiple destinations (tags)
 kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --destination=myregistry.io/myapp:v1.0.0 \
-      --destination=myregistry.io/myapp:stable
-```
-
-### `--target`, `-t`
-
-Target stage in multi-stage Dockerfile.
-
-```bash
-kimia --context=. --target=production --destination=myapp:latest
+  --destination=myapp:latest \
+  --destination=myapp:v1.0 \
+  --destination=myapp:stable
 ```
 
 ---
 
 ## Build Options
 
-### `--build-arg`
+| Argument | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `--build-arg` | Build-time variables (repeatable) | - | `--build-arg VERSION=1.0` |
+| `--cache` | Enable layer caching | `false` | `--cache` |
+| `--cache-dir` | Custom cache directory | - | `--cache-dir=/cache` |
+| `--storage-driver` | Storage backend (native\|overlay) | `native` | `--storage-driver=overlay` |
+| `--label` | Image labels (repeatable) | - | `--label version=1.0` |
 
-Build-time variables. Can be specified multiple times.
+### Examples
 
 ```bash
+# Build with arguments
 kimia --context=. \
-      --destination=myapp:latest \
-      --build-arg VERSION=1.0.0 \
-      --build-arg ENVIRONMENT=production
-```
+  --build-arg NODE_VERSION=18 \
+  --build-arg APP_ENV=production \
+  --destination=myapp:latest
 
-**In Dockerfile:**
-```dockerfile
-ARG VERSION
-ARG ENVIRONMENT
-RUN echo "Building ${VERSION} for ${ENVIRONMENT}"
-```
-
-### `--label`
-
-Image metadata labels. Can be specified multiple times.
-
-```bash
+# Enable caching for faster rebuilds
 kimia --context=. \
-      --destination=myapp:latest \
-      --label maintainer=team@company.com \
-      --label version=1.0.0 \
-      --label git.commit=abc123
-```
+  --cache \
+  --cache-dir=/workspace/cache \
+  --destination=myapp:latest
 
-### `--no-push`
-
-Build image but skip pushing to registry. Useful for testing.
-
-```bash
-kimia --context=. --destination=myapp:latest --no-push
-```
-
-### `--cache`
-
-Enable layer caching for faster rebuilds.
-
-```bash
-kimia --context=. --destination=myapp:latest --cache --cache-dir=/cache
-```
-
-### `--cache-dir`
-
-Directory path for build cache. Requires `--cache` flag.
-
-```bash
+# Use overlay storage driver for better performance
 kimia --context=. \
-      --destination=myapp:latest \
-      --cache \
-      --cache-dir=/workspace/cache
+  --storage-driver=overlay \
+  --destination=myapp:latest
+
+# Add labels to image
+kimia --context=. \
+  --label version=1.0.0 \
+  --label build-date=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+  --label git-commit=$(git rev-parse HEAD) \
+  --destination=myapp:v1.0
 ```
-
-### `--custom-platform`
-
-Target platform for the build.
-
-```bash
-# Build for ARM64
-kimia --context=. --destination=myapp:latest --custom-platform=linux/arm64
-
-# Build for AMD64
-kimia --context=. --destination=myapp:latest --custom-platform=linux/amd64
-```
-
-### `--storage-driver`
-
-Storage driver to use: `native` (VFS) or `overlay`.
-
-```bash
-# Native driver (default, maximum compatibility)
-kimia --context=. --destination=myapp:latest --storage-driver=native
-
-# Overlay driver (better performance)
-kimia --context=. --destination=myapp:latest --storage-driver=overlay
-```
-
-**Driver Comparison:**
-
-| Driver | Speed | Compatibility | TAR Export | Use Case |
-|--------|-------|---------------|------------|----------|
-| native | Good | ✅ Maximum | ✅ Reliable | Default, TAR exports |
-| overlay | ✅ Faster | Requires kernel support | ⚠️ May have issues | Production builds |
 
 ---
 
-## Reproducible Build Options
+## Registry Authentication
 
-### `--reproducible`
+Kimia has simplified registry authentication that works seamlessly with both Buildah and BuildKit.
 
-Enable reproducible builds for supply chain security.
+### Simple Authentication (Single Registry)
 
-```bash
-# Uses timestamp 0 by default
-kimia --context=. --destination=myapp:v1 --reproducible
+**If `DOCKER_USERNAME`, `DOCKER_PASSWORD`, and optionally `DOCKER_REGISTRY` environment variables are defined, Kimia automatically generates a `config.json` that works with both Buildah and BuildKit.**
 
-# Respects SOURCE_DATE_EPOCH environment variable
-export SOURCE_DATE_EPOCH=1609459200
-kimia --context=. --destination=myapp:v1 --reproducible
-```
+This simplified approach is ideal when pulling and pushing from the same registry.
 
-**What it does:**
-- Uses timestamp 0 by default (or SOURCE_DATE_EPOCH if set)
-- Disables caching
-- Sorts build args and labels alphabetically
-- Rewrites all file timestamps in the image
+#### Environment Variables
 
-### `--timestamp`
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DOCKER_USERNAME` | Registry username | Yes |
+| `DOCKER_PASSWORD` | Registry password or token | Yes |
+| `DOCKER_REGISTRY` | Registry hostname (e.g., `ghcr.io`, `myregistry.io`) | No* |
 
-Custom timestamp for reproducible builds (Unix epoch seconds). Automatically enables reproducible mode.
+*If `DOCKER_REGISTRY` is not specified, credentials will be applied to common registries (docker.io, quay.io, ghcr.io)
+
+#### Examples
 
 ```bash
-# Fixed timestamp
-kimia --context=. --destination=myapp:v1 --timestamp=1609459200
+# Authenticate to specific registry
+export DOCKER_USERNAME=myuser
+export DOCKER_PASSWORD=mytoken
+export DOCKER_REGISTRY=ghcr.io
 
-# Current timestamp
-kimia --context=. --destination=myapp:v1 --timestamp=$(date +%s)
+kimia --context=. --destination=ghcr.io/myorg/myapp:latest
 
-# Git commit timestamp
-kimia --context=. --destination=myapp:v1 --timestamp=$(git log -1 --format=%ct)
+# Authenticate to Docker Hub (no DOCKER_REGISTRY needed)
+export DOCKER_USERNAME=mydockerhubuser
+export DOCKER_PASSWORD=mydockerhubtoken
+
+kimia --context=. --destination=mydockerhubuser/myapp:latest
 ```
 
-**Note:** `--timestamp` overrides `SOURCE_DATE_EPOCH` environment variable.
+#### Kubernetes Example
 
----
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-build
+spec:
+  template:
+    spec:
+      containers:
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        env:
+        - name: DOCKER_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: registry-credentials
+              key: username
+        - name: DOCKER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: registry-credentials
+              key: password
+        - name: DOCKER_REGISTRY
+          value: "ghcr.io"
+        args:
+        - --context=git://github.com/myorg/myapp
+        - --destination=ghcr.io/myorg/myapp:latest
+```
 
-## Git Options
+### Multiple Registry Authentication
 
-### `--git-branch`
+**For multiple registries, mounting a Docker config.json or using Kubernetes secrets is recommended.**
 
-Git branch to checkout when using Git URL as context.
+#### Option 1: Mount Docker Config
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-build
+spec:
+  template:
+    spec:
+      containers:
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        args:
+        - --context=.
+        - --destination=registry1.io/myapp:latest
+        - --destination=registry2.io/myapp:latest
+        volumeMounts:
+        - name: docker-config
+          mountPath: /home/kimia/.docker
+          readOnly: true
+      volumes:
+      - name: docker-config
+        secret:
+          secretName: registry-credentials
+          items:
+          - key: .dockerconfigjson
+            path: config.json
+```
+
+Create the secret:
 
 ```bash
-kimia --context=https://github.com/org/repo.git \
-      --git-branch=develop \
-      --destination=myapp:dev
+# From existing Docker config
+kubectl create secret generic registry-credentials \
+  --from-file=.dockerconfigjson=$HOME/.docker/config.json \
+  --type=kubernetes.io/dockerconfigjson
+
+# Or create manually with multiple registries
+kubectl create secret docker-registry registry-credentials \
+  --docker-server=registry1.io \
+  --docker-username=user1 \
+  --docker-password=pass1
 ```
 
-### `--git-revision`
+#### Option 2: Mount as Generic Secret
 
-Git commit SHA to checkout. Takes precedence over `--git-branch`.
-
-```bash
-kimia --context=https://github.com/org/repo.git \
-      --git-revision=abc123def456 \
-      --destination=myapp:abc123
+```yaml
+volumeMounts:
+- name: docker-config
+  mountPath: /workspace/.docker
+  readOnly: true
+volumes:
+- name: docker-config
+  secret:
+    secretName: docker-config
+    items:
+    - key: config.json
+      path: config.json
 ```
 
-### `--git-token-file`
+### Cloud Registry Authentication
 
-Path to file containing Git authentication token.
+Kimia automatically handles authentication for cloud registries when appropriate credentials are available:
 
-```bash
-kimia --context=https://github.com/org/private-repo.git \
-      --git-token-file=/secrets/github-token \
-      --git-token-user=oauth2 \
-      --destination=myapp:latest
+- **AWS ECR**: Uses AWS credentials or IAM roles
+- **Google GCR/GAR**: Uses Google Cloud credentials or Workload Identity
+- **Azure ACR**: Uses Azure credentials or managed identities
+
+Example for AWS ECR:
+
+```yaml
+env:
+- name: AWS_ACCESS_KEY_ID
+  valueFrom:
+    secretKeyRef:
+      name: aws-credentials
+      key: access-key-id
+- name: AWS_SECRET_ACCESS_KEY
+  valueFrom:
+    secretKeyRef:
+      name: aws-credentials
+      key: secret-access-key
+- name: AWS_REGION
+  value: us-east-1
 ```
 
-**Token file format:**
-```
-ghp_YourGitHubPersonalAccessToken
-```
+### Authentication Priority
 
-### `--git-token-user`
+Kimia checks for authentication in the following order:
 
-Username for Git authentication. **Default:** `oauth2`
-
-```bash
-kimia --context=https://github.com/org/repo.git \
-      --git-token-file=/secrets/token \
-      --git-token-user=myusername \
-      --destination=myapp:latest
-```
+1. `DOCKER_USERNAME` / `DOCKER_PASSWORD` / `DOCKER_REGISTRY` environment variables
+2. Mounted config.json at:
+   - `/home/kimia/.docker/config.json`
+3. Cloud-specific credentials (AWS, GCP, Azure)
+4. Credential helpers (if configured in config.json)
 
 ---
 
 ## Registry Options
 
-### `--insecure`
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--insecure` | Allow insecure connections to all registries | `--insecure` |
+| `--insecure-pull` | Allow insecure base image pulls | `--insecure-pull` |
+| `--insecure-registry` | Skip TLS for specific registry (repeatable) | `--insecure-registry=myregistry:5000` |
+| `--push-retry` | Number of push retry attempts | `--push-retry=3` |
+| `--image-download-retry` | Number of image download retries | `--image-download-retry=3` |
+| `--registry-certificate` | Custom registry certificate directory | `--registry-certificate=/certs` |
 
-Allow insecure connections to all registries (HTTP instead of HTTPS).
-
-```bash
-kimia --context=. --destination=localhost:5000/myapp:latest --insecure
-```
-
-⚠️ **Use with caution:** Only for development/testing.
-
-### `--insecure-registry`
-
-Allow insecure connections to specific registry. Can be specified multiple times.
+### Examples
 
 ```bash
+# Use insecure local registry
 kimia --context=. \
-      --destination=localhost:5000/myapp:latest \
-      --insecure-registry=localhost:5000
-```
+  --destination=localhost:5000/myapp:latest \
+  --insecure-registry=localhost:5000
 
-### `--push-retry`
-
-Number of retry attempts for pushing images. **Default:** 1
-
-```bash
+# Multiple insecure registries
 kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --push-retry=3
-```
+  --destination=registry1:5000/myapp:latest \
+  --insecure-registry=registry1:5000 \
+  --insecure-registry=registry2:5000
 
-### `--image-download-retry`
-
-Number of retry attempts when pulling base images during build. **Default:** 1
-
-```bash
+# Configure retry attempts
 kimia --context=. \
-      --destination=myapp:latest \
-      --image-download-retry=5
-```
+  --destination=myregistry.io/myapp:latest \
+  --push-retry=5 \
+  --image-download-retry=3
 
-### `--registry-certificate`
-
-Directory containing registry TLS certificates.
-
-```bash
+# Use custom certificates
 kimia --context=. \
-      --destination=registry.io/myapp:latest \
-      --registry-certificate=/certs/registry
-```
-
-**Certificate directory structure:**
-```
-/certs/registry/
-├── ca.crt
-├── client.cert
-└── client.key
+  --destination=private-registry.io/myapp:latest \
+  --registry-certificate=/etc/docker/certs.d
 ```
 
 ---
 
 ## Output Options
 
-### `--tar-path`
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--no-push` | Build without pushing to registry | `--no-push` |
+| `--tar-path` | Export image to TAR file | `--tar-path=/output/image.tar` |
+| `--digest-file` | Write image digest to file | `--digest-file=/output/digest.txt` |
+| `--image-name-with-digest-file` | Write full image reference with digest | `--image-name-with-digest-file=/output/image-ref.txt` |
 
-Export built image to TAR archive instead of pushing to registry.
-
-```bash
-kimia --context=. \
-      --destination=myapp:latest \
-      --tar-path=/output/myapp.tar \
-      --no-push
-```
-
-**Recommended:** Use `--storage-driver=native` for reliable TAR exports.
-
-### `--digest-file`
-
-Save image digest to file after successful build.
+### Examples
 
 ```bash
+# Build without pushing
 kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --digest-file=/output/digest.txt
-```
+  --destination=myapp:latest \
+  --no-push
 
-**Output format:**
-```
-sha256:1234567890abcdef...
-```
-
-### `--image-name-with-digest-file`
-
-Save full image reference with digest to file.
-
-```bash
+# Export to TAR file
 kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --image-name-with-digest-file=/output/image-ref.txt
-```
+  --destination=myapp:latest \
+  --tar-path=/workspace/myapp.tar \
+  --no-push
 
-**Output format:**
-```
-myregistry.io/myapp@sha256:1234567890abcdef...
+# Save digest for later use
+kimia --context=. \
+  --destination=myregistry.io/myapp:latest \
+  --digest-file=/workspace/digest.txt
+
+# Save full image reference with digest
+kimia --context=. \
+  --destination=myregistry.io/myapp:latest \
+  --image-name-with-digest-file=/workspace/image-ref.txt
 ```
 
 ---
 
-## Logging Options
+## Attestation & Signing
 
-### `--verbosity`, `-v`
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--attestation` | Simple attestation mode (off\|min\|max) | `--attestation=min` |
+| `--attest` | Docker-style attestations (repeatable) | `--attest type=sbom` |
+| `--sign` | Sign image with Cosign | `--sign` |
+| `--cosign-key` | Cosign private key path | `--cosign-key=/keys/cosign.key` |
 
-Set log level. Options: `debug`, `info`, `warn`, `error`. **Default:** `info`
+### Attestation Modes
+
+- `off`: No attestations
+- `min`: Basic provenance only
+- `max`: Full SBOM + provenance + attestations
+
+### Examples
 
 ```bash
-# Detailed debug output
-kimia --context=. --destination=myapp:latest --verbosity=debug
+# Simple attestation
+kimia --context=. \
+  --destination=myapp:latest \
+  --attestation=min
 
-# Minimal output
-kimia --context=. --destination=myapp:latest --verbosity=error
+# Docker-style SBOM
+kimia --context=. \
+  --destination=myapp:latest \
+  --attest type=sbom
+
+# Docker-style provenance
+kimia --context=. \
+  --destination=myapp:latest \
+  --attest type=provenance,mode=max
+
+# Sign image with Cosign
+kimia --context=. \
+  --destination=myapp:latest \
+  --sign \
+  --cosign-key=/secrets/cosign.key
+
+# Combined: SBOM, provenance, and signing
+kimia --context=. \
+  --destination=myapp:latest \
+  --attestation=max \
+  --sign \
+  --cosign-key=/secrets/cosign.key
 ```
 
-### `--log-timestamp`
+**See [Attestation & Signing Guide](attestation-signing.md) for detailed documentation.**
 
-Add timestamps to log output.
+---
+
+## Git Options
+
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--git-branch` | Git branch to checkout | `--git-branch=main` |
+| `--git-revision` | Git commit SHA | `--git-revision=abc123` |
+| `--git-token-file` | Git token for private repos | `--git-token-file=/secrets/git-token` |
+| `--git-token-user` | Git token username | `--git-token-user=oauth2` |
+
+### Examples
 
 ```bash
-kimia --context=. --destination=myapp:latest --log-timestamp
+# Build from Git repository
+kimia --context=git://github.com/myorg/myapp \
+  --destination=myapp:latest
+
+# Build specific branch
+kimia --context=git://github.com/myorg/myapp \
+  --git-branch=develop \
+  --destination=myapp:dev
+
+# Build specific commit
+kimia --context=git://github.com/myorg/myapp \
+  --git-revision=abc123def456 \
+  --destination=myapp:abc123
+
+# Private repository with token
+kimia --context=git://github.com/myorg/private-app \
+  --git-token-file=/secrets/github-token \
+  --git-token-user=oauth2 \
+  --destination=myapp:latest
 ```
 
 ---
 
-## Other Commands
+## Reproducible Builds
 
-### `check-environment`
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--reproducible` | Enable reproducible builds | `--reproducible` |
+| `--timestamp` | Set build timestamp (Unix epoch seconds) | `--timestamp=1609459200` |
 
-Validate the build environment before attempting a build.
+### Environment Variables
 
-```bash
-kimia check-environment
-```
+- `SOURCE_DATE_EPOCH`: Unix timestamp for reproducible builds (automatically recognized)
 
-**Checks:**
-- User namespace support
-- Required capabilities
-- Storage driver availability
-- Buildah version
-
-### `--version`
-
-Display version information.
+### Examples
 
 ```bash
-kimia --version
+# Enable reproducible builds
+kimia --context=. \
+  --destination=myapp:latest \
+  --reproducible
+
+# Set specific timestamp
+kimia --context=. \
+  --destination=myapp:latest \
+  --timestamp=1609459200
+
+# Use SOURCE_DATE_EPOCH
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+kimia --context=. \
+  --destination=myapp:latest \
+  --reproducible
 ```
 
-**Output:**
-```
-Kimia version: 1.0.13
-Built: 2025-10-27 05:06:43 UTC
-Commit: db272a8
-```
+**Note:** Using `--timestamp` automatically enables `--reproducible`.
 
-### `--help`, `-h`
+**See [Reproducible Builds Guide](reproducible-builds.md) for detailed documentation.**
 
-Display help message with all available options.
+---
+
+## Logging & Debug
+
+| Argument | Description | Default | Values |
+|----------|-------------|---------|--------|
+| `-v, --verbosity` | Log level | `info` | `debug`, `info`, `warn`, `error` |
+| `--log-timestamp` | Add timestamps to logs | `false` | - |
+
+### Examples
 
 ```bash
-kimia --help
+# Debug logging
+kimia --context=. \
+  --destination=myapp:latest \
+  --verbosity=debug
+
+# Quiet logging (errors only)
+kimia --context=. \
+  --destination=myapp:latest \
+  --verbosity=error
+
+# Add timestamps to logs
+kimia --context=. \
+  --destination=myapp:latest \
+  --verbosity=debug \
+  --log-timestamp
 ```
 
 ---
 
-## Environment Variables
+## Advanced Options
 
-Kimia respects several environment variables:
+### BuildKit Options
 
-### `SOURCE_DATE_EPOCH`
-
-Timestamp for reproducible builds (Unix epoch seconds).
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--buildkit-opt` | Pass options directly to BuildKit | `--buildkit-opt=network=host` |
 
 ```bash
-export SOURCE_DATE_EPOCH=1609459200
-kimia --context=. --destination=myapp:v1 --reproducible
+# Use host network
+kimia --context=. \
+  --destination=myapp:latest \
+  --buildkit-opt=network=host
+
+# Multiple BuildKit options
+kimia --context=. \
+  --destination=myapp:latest \
+  --buildkit-opt=network=host \
+  --buildkit-opt=platform=linux/amd64,linux/arm64
 ```
 
-### `STORAGE_DRIVER`
+### Storage Driver
 
-Override default storage driver.
+Kimia supports two storage drivers:
 
-```bash
-export STORAGE_DRIVER=overlay
-kimia --context=. --destination=myapp:latest
-```
-
-### `BUILDAH_FORMAT`
-
-Image format: `oci` (default) or `docker`.
+| Driver | Description | Best For | Requirements |
+|--------|-------------|----------|--------------|
+| `VFS` | VFS-based storage (default for Buildah) | Maximum compatibility, TAR exports | None |
+| `native` | VFS-based storage (default for Buildkit) | Maximum compatibility, TAR exports | None |
+| `overlay` | OverlayFS-based | Performance, production builds | Kernel OverlayFS support |
 
 ```bash
-export BUILDAH_FORMAT=docker
-kimia --context=. --destination=myapp:latest
-```
+# Use overlay driver for better performance
+kimia --context=. \
+  --destination=myapp:latest \
+  --storage-driver=overlay
 
-**When to use `docker` format:**
-- Dockerfile contains `HEALTHCHECK` instruction
-- Dockerfile uses `SHELL` instruction
-- Dockerfile has `STOPSIGNAL`
+# Use native (default) for TAR exports (BuildKit)
+kimia --context=. \
+  --tar-path=/output/image.tar \
+  --no-push
 
-### `DOCKER_CONFIG`
-
-Docker config directory for registry authentication. **Default:** `/home/kimia/.docker`
-
-```bash
-export DOCKER_CONFIG=/custom/docker/config
-kimia --context=. --destination=myregistry.io/myapp:latest
+# Use vfs (default) for TAR exports (Buildah)
+kimia --context=. \
+  --tar-path=/output/image.tar \
+  --no-push
 ```
 
 ---
 
 ## Complete Examples
 
-### Basic Local Build
+### Basic Build and Push
 
 ```bash
-kimia --context=. \
-      --dockerfile=Dockerfile \
-      --destination=myregistry.io/myapp:latest
+kimia \
+  --context=. \
+  --dockerfile=Dockerfile \
+  --destination=myregistry.io/myapp:latest
 ```
 
-### Build from Git with Branch
+### Production Build with All Features
 
 ```bash
-kimia --context=https://github.com/org/repo.git \
-      --git-branch=main \
-      --dockerfile=Dockerfile \
-      --destination=myregistry.io/myapp:v1.0.0
+export DOCKER_USERNAME=myuser
+export DOCKER_PASSWORD=mytoken
+export DOCKER_REGISTRY=ghcr.io
+
+kimia \
+  --context=. \
+  --dockerfile=Dockerfile.prod \
+  --target=production \
+  --destination=ghcr.io/myorg/myapp:v1.0 \
+  --destination=ghcr.io/myorg/myapp:latest \
+  --build-arg VERSION=1.0 \
+  --build-arg ENV=production \
+  --label version=1.0 \
+  --label git-commit=$(git rev-parse HEAD) \
+  --cache \
+  --cache-dir=/workspace/cache \
+  --storage-driver=overlay \
+  --attestation=max \
+  --sign \
+  --cosign-key=/secrets/cosign.key \
+  --reproducible \
+  --timestamp=$(git log -1 --format=%ct) \
+  --digest-file=/workspace/digest.txt \
+  --push-retry=3 \
+  --verbosity=info
 ```
 
-### Multi-Destination Build
+### Multi-Registry Build
 
 ```bash
-kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --destination=myregistry.io/myapp:v1.0.0 \
-      --destination=myregistry.io/myapp:stable
+# With mounted config.json for multiple registries
+kimia \
+  --context=. \
+  --destination=ghcr.io/myorg/myapp:latest \
+  --destination=docker.io/myuser/myapp:latest \
+  --destination=quay.io/myorg/myapp:latest
 ```
 
-### Build with Arguments and Labels
+### Git Repository Build
 
 ```bash
-kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --build-arg VERSION=1.0.0 \
-      --build-arg ENVIRONMENT=production \
-      --label maintainer=team@company.com \
-      --label version=1.0.0
-```
-
-### Build for ARM64
-
-```bash
-kimia --context=. \
-      --destination=myregistry.io/myapp:arm64 \
-      --custom-platform=linux/arm64
-```
-
-### Build with Cache
-
-```bash
-kimia --context=. \
-      --destination=myregistry.io/myapp:latest \
-      --cache \
-      --cache-dir=/workspace/cache
-```
-
-### Export to TAR
-
-```bash
-kimia --context=. \
-      --destination=myapp:latest \
-      --tar-path=/output/myapp.tar \
-      --storage-driver=native \
-      --no-push
-```
-
-### Reproducible Build
-
-```bash
-# With git commit timestamp
-export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-kimia --context=. \
-      --destination=myregistry.io/myapp:v1.0.0 \
-      --reproducible
-```
-
-### Private Git Repository with Authentication
-
-```bash
-kimia --context=https://github.com/org/private-repo.git \
-      --git-branch=main \
-      --git-token-file=/secrets/github-token \
-      --git-token-user=oauth2 \
-      --destination=myregistry.io/myapp:latest
-```
-
-### Multi-Stage Build
-
-```bash
-kimia --context=. \
-      --dockerfile=Dockerfile \
-      --target=production \
-      --destination=myregistry.io/myapp:prod
-```
-
-### Build with Custom Registry Certificates
-
-```bash
-kimia --context=. \
-      --destination=secure-registry.io/myapp:latest \
-      --registry-certificate=/certs/registry
+kimia \
+  --context=git://github.com/myorg/myapp \
+  --git-branch=main \
+  --git-token-file=/secrets/github-token \
+  --git-token-user=oauth2 \
+  --destination=myregistry.io/myapp:$(git rev-parse --short HEAD) \
+  --cache \
+  --attestation=min
 ```
 
 ---
 
-## Kaniko Argument Compatibility
+## Environment Variables
 
-Most Kaniko arguments work directly with Kimia. Key mappings:
+Kimia recognizes the following environment variables:
 
-| Kaniko | Kimia | Notes |
-|--------|-------|-------|
-| `--context` | `--context` | ✅ Direct compatibility |
-| `--dockerfile` | `--dockerfile` | ✅ Direct compatibility |
-| `--destination` | `--destination` | ✅ Direct compatibility |
-| `--build-arg` | `--build-arg` | ✅ Direct compatibility |
-| `--target` | `--target` | ✅ Direct compatibility |
-| `--cache` | `--cache` | ✅ Direct compatibility |
-| `--cache-dir` | `--cache-dir` | ✅ Direct compatibility |
-| `--insecure` | `--insecure` | ✅ Direct compatibility |
-| `--verbosity` | `--verbosity` | ✅ Direct compatibility |
-
-**See also:** [Kaniko Comparison Guide](comparison.md)
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `DOCKER_USERNAME` | Registry username | `myuser` |
+| `DOCKER_PASSWORD` | Registry password/token | `mytoken123` |
+| `DOCKER_REGISTRY` | Registry hostname | `ghcr.io` |
+| `DOCKER_CONFIG` | Docker config directory | `/home/kimia/.docker` |
+| `SOURCE_DATE_EPOCH` | Unix timestamp for reproducible builds | `1609459200` |
+| `AWS_ACCESS_KEY_ID` | AWS credentials for ECR | - |
+| `AWS_SECRET_ACCESS_KEY` | AWS credentials for ECR | - |
+| `AWS_REGION` | AWS region for ECR | `us-east-1` |
 
 ---
 
-## Need Help?
+## Exit Codes
 
-- 📖 [Back to Main README](../README.md)
-- 🎯 [Examples](examples.md)
-- 🔧 [Troubleshooting](troubleshooting.md)
-- ❓ [FAQ](faq.md)
+| Code | Description |
+|------|-------------|
+| `0` | Success |
+| `1` | General error |
+| `2` | Configuration error |
+| `3` | Build error |
+| `4` | Push error |
+| `5` | Authentication error |
+
+---
+
+## See Also
+
+- [Installation Guide](installation.md)
+- [Security Guide](security.md)
+- [Attestation & Signing](attestation-signing.md)
+- [Reproducible Builds](reproducible-builds.md)
+- [Examples](examples.md)
+- [Troubleshooting](troubleshooting.md)
+- [Comparison with Kaniko](comparison.md)

@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kimia
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: Unconfined
+  containers:
+  - name: kimia
+    image: ghcr.io/rapidfort/kimia-bud
+    command: [ "sleep", "inf" ]
+    securityContext:
+      runAsUser: 1000
+      runAsGroup: 1000
+      allowPrivilegeEscalation: true
+      appArmorProfile:
+        type: Unconfined
+      seccompProfile:
+        type: Unconfined
+

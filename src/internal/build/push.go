@@ -25,7 +25,7 @@ type PushConfig struct {
 
 // Push pushes built images to registries with authentication
 // Returns a map of destination->digest for each successfully pushed image
-func Push(config PushConfig, authFile string) (map[string]string, error) {
+func Push(config PushConfig) (map[string]string, error) {
 	// BuildKit pushes during build (via --output with push=true)
 	// Only buildah needs a separate push step
 	builder := DetectBuilder()
@@ -58,17 +58,10 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 
 		// Try to refresh cloud credentials if it's a cloud registry
 		if auth.IsECRRegistry(normalizedRegistry) || auth.IsGCRRegistry(normalizedRegistry) || auth.IsGARRegistry(normalizedRegistry) {
-			// Note: Cloud credential refresh would need auth package
-			// This is a simplified version
 			logger.Debug("Detected cloud registry: %s", normalizedRegistry)
 		}
 
 		args := []string{"push"}
-
-		// Add auth file if available
-		if authFile != "" {
-			args = append(args, "--authfile", authFile)
-		}
 
 		// Add insecure registry option
 		if config.Insecure || isInsecureRegistry(dest, config.InsecureRegistry) {
@@ -108,10 +101,10 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 			// Set up environment
 			cmd.Env = os.Environ()
 
-			// Ensure REGISTRY_AUTH_FILE is set if we have auth
-			if authFile != "" {
-				cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
-			}
+			// Set DOCKER_CONFIG for authentication
+			// Buildah will automatically read from $DOCKER_CONFIG/config.json
+			dockerConfigDir := auth.GetDockerConfigDir()
+			cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 			// Use storage driver from config for buildah
 			if config.StorageDriver != "" {
@@ -157,10 +150,8 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 					fmt.Fprintf(os.Stderr, "     --docker-username=<username> \\\n")
 					fmt.Fprintf(os.Stderr, "     --docker-password=<password>\n")
 					fmt.Fprintf(os.Stderr, "\n")
-					fmt.Fprintf(os.Stderr, "3. Use environment variables:\n")
-					fmt.Fprintf(os.Stderr, "   export DOCKER_USERNAME=<username>\n")
-					fmt.Fprintf(os.Stderr, "   export DOCKER_PASSWORD=<password>\n")
-					fmt.Fprintf(os.Stderr, "   export DOCKER_REGISTRY=%s\n", normalizedRegistry)
+					fmt.Fprintf(os.Stderr, "3. Ensure Docker config is mounted at:\n")
+					fmt.Fprintf(os.Stderr, "   %s/config.json\n", dockerConfigDir)
 					fmt.Fprintf(os.Stderr, "\n")
 
 					// Don't retry on auth errors
@@ -197,7 +188,7 @@ func Push(config PushConfig, authFile string) (map[string]string, error) {
 
 // PushSingle pushes a single image with retries (used by hardening)
 // Returns the manifest digest of the pushed image
-func PushSingle(image string, config PushConfig, authFile string) (string, error) {
+func PushSingle(image string, config PushConfig) (string, error) {
 	// BuildKit pushes during build (via --output with push=true)
 	// Only buildah needs a separate push step
 	builder := DetectBuilder()
@@ -208,11 +199,6 @@ func PushSingle(image string, config PushConfig, authFile string) (string, error
 
 	// Build push command
 	args := []string{"push"}
-
-	// Add auth file if available
-	if authFile != "" {
-		args = append(args, "--authfile", authFile)
-	}
 
 	// Add insecure registry option
 	if config.Insecure || isInsecureRegistry(image, config.InsecureRegistry) {
@@ -247,9 +233,9 @@ func PushSingle(image string, config PushConfig, authFile string) (string, error
 		cmd.Stderr = &stderr
 		cmd.Env = os.Environ()
 
-		if authFile != "" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile))
-		}
+		// Set DOCKER_CONFIG for authentication
+		dockerConfigDir := auth.GetDockerConfigDir()
+		cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 		// Use storage driver from config for buildah
 		if config.StorageDriver != "" {
@@ -259,13 +245,6 @@ func PushSingle(image string, config PushConfig, authFile string) (string, error
 
 		// Log full command for debugging
 		logger.Debug("Buildah push command: buildah %s", strings.Join(args, " "))
-		logger.Debug("Push command environment:")
-		for _, env := range cmd.Env {
-			if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
-				strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") {
-				logger.Debug("  %s", env)
-			}
-		}
 
 		err := cmd.Run()
 

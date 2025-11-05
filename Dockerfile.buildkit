@@ -1,5 +1,5 @@
-# Dockerfile.buildkit - Self-contained Kimia with BuildKit
-# Kimia launches its own rootlesskit + buildkitd
+# Dockerfile.buildkit - Kimia with BuildKit Backend
+# Self-contained OCI image builder using BuildKit + RootlessKit
 
 ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
@@ -9,9 +9,13 @@ ARG GOLANG_VERSION=1.25.3
 ARG BUILDKIT_VERSION=v0.25.1
 ARG ROOTLESSKIT_VERSION=v2.3.5
 ARG COSIGN_VERSION=v3.0.2
+ARG KIMIA_UID=1000
+ARG KIMIA_USER=kimia
 ARG TARGETARCH
 
+# =============================================================================
 # Stage 1: Build kimia binary
+# =============================================================================
 FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
@@ -19,9 +23,15 @@ ARG COMMIT
 ARG BRANCH
 
 WORKDIR /app
+
+# Copy the entire src directory
 COPY src/ .
+
+# The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
+# Build from cmd/kimia
+# Note: ldflags use 'main' because cmd/kimia is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -31,14 +41,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.Branch=${BRANCH}" \
     -o kimia ./cmd/kimia
 
-# Stage 2: Runtime image with BuildKit + rootlesskit + crun
+# =============================================================================
+# Stage 2: Runtime image with BuildKit + RootlessKit + Crun
+# =============================================================================
 FROM alpine:latest
+ARG KIMIA_UID
+ARG KIMIA_USER
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
 ARG ROOTLESSKIT_VERSION
 ARG COSIGN_VERSION
 
-# Install minimal dependencies
+# Install minimal system dependencies
 RUN apk add --no-cache \
     bash \
     curl \
@@ -48,7 +62,9 @@ RUN apk add --no-cache \
     crun \
     git
 
-# Download and install BuildKit
+# =============================================================================
+# Install BuildKit
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
@@ -57,7 +73,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
     curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" \
     | tar xz -C /usr/local
 
-# Download and install RootlessKit
+# =============================================================================
+# Install RootlessKit
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "x86_64" ;; \
         "arm64") echo "aarch64" ;; \
@@ -66,7 +84,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
     curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
     | tar xz -C /usr/local/bin
 
-# Download and install Cosign
+# =============================================================================
+# Install Cosign (for image signing)
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
@@ -76,17 +96,21 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" && \
     chmod +x /usr/local/bin/cosign
 
-# Verify installations
+# Verify all installations
 RUN buildkitd --version && \
     buildctl --version && \
     rootlesskit --version && \
     cosign version
 
-# Copy kimia binary
+# Copy kimia binary from builder stage
 COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
 RUN chmod +x /usr/local/bin/kimia
 
-# Install credential helpers
+# =============================================================================
+# Install Cloud Registry Credential Helpers
+# =============================================================================
+
+# AWS ECR credential helper
 RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -97,6 +121,7 @@ RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-crede
         "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
     chmod +x /usr/local/bin/docker-credential-ecr-login
 
+# Google GCR/GAR credential helper
 RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -107,46 +132,80 @@ RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/dock
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-# Setup SETUID binaries for user namespaces
-RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
+# =============================================================================
+# User and Permission Setup
+# =============================================================================
+# Create kimia user with specified UID
+RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
+    adduser -D -G ${KIMIA_USER} -u ${KIMIA_UID} ${KIMIA_USER}
 
-# Create kimia user with proper subuid/subgid mappings
-RUN adduser -D -u 1000 kimia && \
-    echo "kimia:100000:65536" >> /etc/subuid && \
-    echo "kimia:100000:65536" >> /etc/subgid
+# Setup subuid/subgid for kimia user (required for rootless mode)
+RUN echo "${KIMIA_USER}:100000:65536" >> /etc/subuid && \
+    echo "${KIMIA_USER}:100000:65536" >> /etc/subgid
+
+# Setup SETUID binaries for user namespaces (required for rootless)
+RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
 # Create directories with proper permissions
 RUN mkdir -p /tmp/work /tmp/run && \
     mkdir -p /run/buildkit /var/lib/buildkit && \
     chmod 777 /run/buildkit /var/lib/buildkit && \
-    chown -R kimia:kimia /tmp/work /tmp/run
+    chown -R ${KIMIA_USER}:${KIMIA_USER} /tmp/work /tmp/run
 
-# Configure buildkit to use crun in rootless mode
-RUN mkdir -p /home/kimia/.config/buildkit && \
-    cat > /home/kimia/.config/buildkit/buildkitd.toml <<'EOF'
-[worker.oci]
-  enabled = true
-  rootless = true
-  binary = "crun"
-  noProcessSandbox = true
-EOF
+# =============================================================================
+# BuildKit Configuration
+# =============================================================================
 
-RUN chown -R kimia:kimia /home/kimia/.config
+# Create BuildKit config directory
+RUN mkdir -p /home/kimia/.config/buildkit
 
-# Switch to non-root user
-USER 1000
+# Copy BuildKit configuration file
+# This configures BuildKit to use crun in rootless mode
+COPY configs/buildkit/buildkitd.toml /home/kimia/.config/buildkit/buildkitd.toml
+
+# Create Docker config directory for authentication
+RUN mkdir -p /home/kimia/.docker
+
+# Set ownership
+RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/kimia/.config && \
+    chown -R ${KIMIA_USER}:${KIMIA_USER} /home/kimia/.docker
+
+# =============================================================================
+# Switch to Non-Root User
+# =============================================================================
+USER ${KIMIA_UID}:${KIMIA_UID}
 WORKDIR /tmp/work
 
-# Set environment
+# =============================================================================
+# Environment Configuration
+# =============================================================================
+
+# Binary paths
 ENV PATH=/usr/local/bin:$PATH
+
+# Runtime directory
 ENV XDG_RUNTIME_DIR=/tmp/run
-ENV BUILDKIT_HOST=unix:///run/buildkit/buildkitd.sock
+
+# User directories
 ENV HOME=/home/kimia
-ENV DOCKER_CONFIG=/home/kimia/.docker
+
+# =============================================================================
+# Container Metadata
+# =============================================================================
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
 LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (BuildKit)"
+LABEL org.opencontainers.image.documentation="https://github.com/rapidfort/kimia/blob/main/README.md"
+LABEL org.opencontainers.image.vendor="RapidFort"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.builder="buildkit"
 
+# =============================================================================
+# Entrypoint and Default Command
+# =============================================================================
+
+# Set kimia as the entrypoint
 ENTRYPOINT ["/usr/local/bin/kimia"]
+
+# Default command shows help
 CMD ["--help"]
