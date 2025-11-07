@@ -16,4 +16,4 @@ builds:
         dockerfile: mainline/alpine/Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mynginx
         verbose: true
-        extraArgs: []
+        extraArgs: ["--attestation=max", "--sign", "--cosign-key=/secrets/cosign.key", "--cosign-password-env=COSIGN_PASSWORD"]

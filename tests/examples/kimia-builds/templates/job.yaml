@@ -181,6 +181,12 @@ spec:
         - name: {{ $vals.volumeNames.registriesConf }}
           configMap:
             name: {{ $cmName }}
+        - name: cosign-key
+          secret:
+            secretName: cosign-key
+            items:
+              - key: cosign.key
+                path: cosign.key 
 {{- if $vals.registryAuth.enabled }}
         - name: docker-config
           secret:
@@ -197,6 +203,11 @@ spec:
           image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $step.kimiaTag) }}
           imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
           env:
+            - name: COSIGN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cosign-key
+                  key: password  
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
               value: {{ $vals.registryAuth.envPath }}
@@ -234,6 +245,8 @@ spec:
             - name: {{ $vals.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
+            - name: cosign-key
+              mountPath: /secrets              
 {{- if $vals.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
@@ -250,6 +263,11 @@ spec:
           image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $b.main.kimiaTag) }}
           imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
           env:
+            - name: COSIGN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cosign-key
+                  key: password             
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
               value: {{ $vals.registryAuth.envPath }}
@@ -287,6 +305,8 @@ spec:
             - name: {{ $vals.volumeNames.registriesConf }}
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
+            - name: cosign-key
+              mountPath: /secrets               
 {{- if $vals.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}

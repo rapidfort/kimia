@@ -16,6 +16,7 @@ builds:
         dockerfile: 7.4/debian/Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/redis
         verbose: true
-        extraArgs: ["--insecure"]
+        extraArgs: ["--insecure", "--label=image.version=7.4deb"]
         registryAuth:
           enabled: true
+
