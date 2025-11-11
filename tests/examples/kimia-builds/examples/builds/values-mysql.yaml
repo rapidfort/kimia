@@ -8,4 +8,4 @@ builds:
         dockerfile: Dockerfile.debian
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mysql
         verbose: true
-        extraArgs: []
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

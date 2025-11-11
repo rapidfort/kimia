@@ -17,7 +17,7 @@ builds:
           dockerfile: "Dockerfile"
           destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/ubuntu"
           verbose: true
-          extraArgs: ["--insecure"]
+          extraArgs: []
     main:
       name: supervisor
       kimiaTag: "latest"
@@ -26,4 +26,4 @@ builds:
         dockerfile: "Dockerfile"
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/supervisor"
         verbose: true
-        extraArgs: ["--insecure"]
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
