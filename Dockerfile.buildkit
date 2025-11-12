@@ -137,10 +137,12 @@ RUN apk add --no-cache \
     crun \
     git
 
-# Copy kimia binary from builder stage
-COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
 # Copy dependencies
 COPY --from=kimia-deps /deps/bin /usr/local/bin
+
+# Copy kimia binary from builder stage
+COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
+RUN chmod +x /usr/local/bin/kimia
 
 # Verify all installations
 RUN buildkitd --version && \
@@ -148,7 +150,6 @@ RUN buildkitd --version && \
     rootlesskit --version && \
     cosign version
 
-RUN chmod +x /usr/local/bin/kimia
 
 # =============================================================================
 # Install Cloud Registry Credential Helpers
