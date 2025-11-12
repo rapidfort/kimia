@@ -44,23 +44,20 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =============================================================================
 # Stage 2: Runtime image with BuildKit + RootlessKit + Crun
 # =============================================================================
-FROM alpine:latest
-ARG KIMIA_UID
-ARG KIMIA_USER
+FROM alpine:latest as kimia-deps
+
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
 ARG ROOTLESSKIT_VERSION
 ARG COSIGN_VERSION
 
-# Install minimal system dependencies
-RUN apk add --no-cache \
+WORKDIR /deps
+
+RUN apk update && apk add --no-cache \
     bash \
     curl \
     ca-certificates \
-    shadow \
-    shadow-uidmap \
-    crun \
-    git
+    jq
 
 # =============================================================================
 # Install BuildKit
@@ -70,8 +67,20 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" \
-    | tar xz -C /usr/local
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.tar.gz" -o buildkit.tar.gz && \
+    curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
+    expected=$(jq -r '.subject[0].digest.sha256' provenance.json) && \
+    actual=$(sha256sum buildkit.tar.gz | awk '{print $1}') && \
+    if [ "$expected" = "$actual" ]; then \
+        echo "BuildKit SHA256 OK: $actual"; \
+    else \
+        echo "BuildKit SHA256 FAIL!"; \
+        echo "Expected: $expected"; \
+        echo "Actual:   $actual"; \
+        exit 1; \
+    fi
+
+RUN tar -xf buildkit.tar.gz
 
 # =============================================================================
 # Install RootlessKit
@@ -81,8 +90,12 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "arm64") echo "aarch64" ;; \
         *) echo "x86_64" ;; \
     esac) && \
-    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" \
-    | tar xz -C /usr/local/bin
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" -o "rootlesskit-${ARCH}.tar.gz" && \
+    curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/SHA256SUMS" -o SHA256SUMS && \
+    grep "rootlesskit-${ARCH}.tar.gz" SHA256SUMS > SHA256SUMS.single && \
+    sha256sum -c SHA256SUMS.single && \
+    mkdir -p bin && \
+    tar -xf "rootlesskit-${ARCH}.tar.gz" -C bin
 
 # =============================================================================
 # Install Cosign (for image signing)
@@ -92,9 +105,44 @@ RUN ARCH=$(case ${TARGETARCH} in \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fsSL -o /usr/local/bin/cosign \
-        "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" && \
-    chmod +x /usr/local/bin/cosign
+    curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}" -o bin/cosign && \
+    chmod +x bin/cosign && \
+    curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}.sigstore.json" -o sigstore.json && \
+    expected=$(jq -r '.verificationMaterial.tlogEntries[0].canonicalizedBody' sigstore.json | base64 -d | jq -r '.spec.data.hash.value') && \
+    actual=$(sha256sum bin/cosign | awk '{print $1}') && \
+    if [ "$expected" = "$actual" ]; then \
+        echo "cosign SHA256 OK: $actual"; \
+    else \
+        echo "cosign SHA256 FAIL!"; \
+        echo "Expected: $expected"; \
+        echo "Actual:   $actual"; \
+        exit 1; \
+    fi
+
+# =============================================================================
+# Stage 3: Install Credential Helpers and setup final configurations
+# =============================================================================
+FROM alpine:latest
+ARG KIMIA_UID
+ARG KIMIA_USER
+ARG TARGETARCH
+
+# Install minimal dependencies
+RUN apk add --no-cache \
+    bash \
+    curl \
+    ca-certificates \
+    shadow \
+    shadow-uidmap \
+    crun \
+    git
+
+# Copy dependencies
+COPY --from=kimia-deps /deps/bin /usr/local/bin
+
+# Copy kimia binary from builder stage
+COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
+RUN chmod +x /usr/local/bin/kimia
 
 # Verify all installations
 RUN buildkitd --version && \
@@ -102,9 +150,6 @@ RUN buildkitd --version && \
     rootlesskit --version && \
     cosign version
 
-# Copy kimia binary from builder stage
-COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
-RUN chmod +x /usr/local/bin/kimia
 
 # =============================================================================
 # Install Cloud Registry Credential Helpers
