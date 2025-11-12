@@ -59,7 +59,9 @@ RUN apk update && apk add --no-cache \
     ca-certificates \
     jq
 
-# Download and verify BuildKit
+# =============================================================================
+# Install BuildKit
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
@@ -80,7 +82,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
 
 RUN tar -xf buildkit.tar.gz
 
-# Download and verify RootlessKit
+# =============================================================================
+# Install RootlessKit
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "x86_64" ;; \
         "arm64") echo "aarch64" ;; \
@@ -93,7 +97,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
     mkdir -p bin && \
     tar -xf "rootlesskit-${ARCH}.tar.gz" -C bin
 
-# Download and install Cosign
+# =============================================================================
+# Install Cosign (for image signing)
+# =============================================================================
 RUN ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
@@ -117,6 +123,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
 # Stage 3: Install Credential Helpers and setup final configurations
 # =============================================================================
 FROM alpine:latest
+ARG KIMIA_UID
+ARG KIMIA_USER
+ARG TARGETARCH
 
 # Install minimal dependencies
 RUN apk add --no-cache \
