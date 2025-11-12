@@ -4,33 +4,6 @@ Detailed comparison between Kimia and Kaniko for Kubernetes-native container ima
 
 ---
 
-## Feature Comparison
-
-| Feature | Kimia | Kaniko | Advantage |
-|---------|--------|--------|-----------|
-| **User Context** | Non-root (UID 1000) | Root (UID 0) | ✅ Kimia: Reduced privilege escalation risk |
-| **Capabilities Required** | SETUID, SETGID only | None | ⚖️ Kimia: Explicit minimal caps for user namespaces |
-| **Docker Daemon** | Not required | Not required | ✅ Equal: No daemon dependencies |
-| **Privileged Mode** | Not required | Not required | ✅ Equal: No privileged containers |
-| **User Namespaces** | Required & utilized | Not used | ✅ Kimia: Additional isolation layer |
-| **Complex Dockerfiles** | Full support | Limited (chown issues) | ✅ Kimia: Better compatibility with ownership changes |
-| **Storage Driver** | VFS/Overlay (configurable) | Various | ✅ Kimia: Configurable, consistent |
-| **Build Cache** | Layer caching | Layer caching | ✅ Equal: Efficient rebuilds |
-| **Registry Authentication** | Multiple methods | Multiple methods | ✅ Equal: Flexible auth options |
-| **Multi-stage Builds** | Full support | Full support | ✅ Equal: Modern Dockerfile features |
-| **Git Integration** | Built-in (via args) | Built-in (via executor) | ✅ Equal: Both support Git directly |
-| **Attack Surface** | Minimal (rootless) | Larger (root) | ✅ Kimia: Significantly reduced |
-| **Pod Security Standards** | Restricted-compliant* | Baseline only | ✅ Kimia: Higher security standard |
-| **Build Performance** | Fast (native) | Fast (native) | ✅ Equal: Both performant |
-| **Cross-platform Builds** | ✅ Supported | ✅ Supported | ✅ Equal: Multi-arch capable |
-| **Secrets Handling** | Buildah secrets | Kaniko secrets | ✅ Equal: Secure secret management |
-| **Resource Efficiency** | Lightweight | Lightweight | ✅ Equal: Minimal overhead |
-| **Reproducible Builds** | ✅ Built-in | Manual setup | ✅ Kimia: Native support |
-
-*With `allowPrivilegeEscalation: true` for user namespace operations
-
----
-
 ## Key Security Advantages
 
 ### 1. Rootless Architecture
