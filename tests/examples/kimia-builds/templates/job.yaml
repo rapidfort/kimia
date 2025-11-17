@@ -282,8 +282,8 @@ spec:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
             - --destination={{ $b.main.args.destination }}
-            {{- if $step.args.contextSubPath }}
-            - --context-sub-path={{ $step.args.contextSubPath | quote }}
+            {{- if $b.args.contextSubPath }}
+            - --context-sub-path={{ $b.args.contextSubPath | quote }}
             {{- end }}
             {{- if $b.main.args.insecureRegistry }}
             - --insecure-registry={{ $b.main.args.insecureRegistry }}
