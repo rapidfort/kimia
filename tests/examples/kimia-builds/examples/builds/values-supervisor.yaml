@@ -15,7 +15,7 @@ builds:
         args:
           context: "https://github.com/dockerfile/ubuntu.git"
           dockerfile: "Dockerfile"
-          destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/ubuntu"
+          destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/ubuntu
           verbose: true
           extraArgs: []
     main:
@@ -24,6 +24,6 @@ builds:
       args:
         context: "https://github.com/dockerfile/supervisor.git"
         dockerfile: "Dockerfile"
-        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/supervisor"
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/supervisor
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

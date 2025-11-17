@@ -223,9 +223,8 @@ spec:
             - --context={{ $step.args.context }}
             - --dockerfile={{ $step.args.dockerfile | default "Dockerfile" }}
             - --destination={{ $step.args.destination }}
-            {{- with $step.args.contextSubPath }}
-            - --context-sub-path
-            - {{ . | quote }}
+            {{- if $step.args.contextSubPath }}
+            - --context-sub-path={{ $step.args.contextSubPath | quote }}
             {{- end }}
             {{- if $step.args.insecureRegistry }}
             - --insecure-registry={{ $step.args.insecureRegistry }}
@@ -283,9 +282,8 @@ spec:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
             - --destination={{ $b.main.args.destination }}
-            {{- with $b.main.args.contextSubPath }}
-            - --context-sub-path
-            - {{ . | quote }}
+            {{- if $step.args.contextSubPath }}
+            - --context-sub-path={{ $step.args.contextSubPath | quote }}
             {{- end }}
             {{- if $b.main.args.insecureRegistry }}
             - --insecure-registry={{ $b.main.args.insecureRegistry }}
