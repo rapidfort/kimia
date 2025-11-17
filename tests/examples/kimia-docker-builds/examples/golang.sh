@@ -1,5 +1,6 @@
 #!/bin/bash
-set -Eeuo pipefail
+set -Eeuox pipefail
+printenv
 docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -v "/root/.docker/config.json:/home/kimia/.docker/:ro" \
   "$KIMIA_IMAGE" \
