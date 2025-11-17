@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
-  -v $HOME/.docker/config.json:/home/kimia/.docker:ro \
+  -v $HOME/.docker/config.json:/home/kimia/.docker/config.json:ro \
   "$KIMIA_IMAGE" \
   --context=https://github.com/docker-library/golang.git \
   --context-sub-path=1.24/trixie \
