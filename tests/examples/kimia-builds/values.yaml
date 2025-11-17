@@ -6,15 +6,15 @@ global:
 
   registries:
     unqualifiedSearch:
-      - "docker.io"
       - "quay.io"
       - "harbor.rfinnovate.rapidfort.io"
+      - "docker.io"      
     entries:
-      - location: "docker.io"
-      - location: "quay.io"
       - location: "harbor.rfinnovate.rapidfort.io"
         insecure: true
-        blocked: false
+        blocked: false    
+      - location: "quay.io"        
+      - location: "docker.io"
 
 jobDefaults:
   backoffLimit: 0

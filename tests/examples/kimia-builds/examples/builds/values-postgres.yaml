@@ -12,9 +12,9 @@ builds:
     main:
       name: postgres
       args:
-        context: "https://github.com/docker-library/postgres.git"
-        contextSubPath: "18/alpine3.22"
-        dockerfile: "Dockerfile"
-        destination: "harbor.rfinnovate.rapidfort.io/kimia-e2e/postgres"
+        context: https://github.com/docker-library/postgres.git
+        contextSubPath: 18/alpine3.22
+        dockerfile: Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/postgres
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
