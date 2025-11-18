@@ -1,0 +1,308 @@
+name: E2E Tests (GitLab Integration)
+
+# Trigger on PRs to main branch
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_sha:
+        description: 'Commit SHA to test (defaults to HEAD)'
+        required: false
+        type: string
+
+env:
+  # Harbor registry for PR images
+  HARBOR_REGISTRY: harbor.rfinnovate.rapidfort.io
+  HARBOR_PROJECT: kimia-e2e
+  # GitLab project details
+  GITLAB_PROJECT_ID: ${{ vars.GITLAB_E2E_PROJECT_ID }}  # Set in repo variables
+  GITLAB_API_URL: https://gitlab.rapidfort.io/api/v4
+
+jobs:
+  # ============================================================================
+  # Job 1: Build PR Images and Push to Harbor
+  # ============================================================================
+  build-pr-images:
+    name: Build ${{ matrix.description }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image_name: kimia
+            dockerfile: Dockerfile.buildkit
+            description: "Kimia (BuildKit)"
+          - image_name: kimia-bud
+            dockerfile: Dockerfile.buildah
+            description: "Kimia-Bud (Buildah)"
+
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+      kimia_image: ${{ steps.vars.outputs.kimia_image }}
+      kimia_bud_image: ${{ steps.vars.outputs.kimia_bud_image }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.pr_sha || github.event.pull_request.head.sha }}
+
+      - name: Set build variables
+        id: vars
+        run: |
+          # Use short SHA for image tag
+          SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha || inputs.pr_sha || github.sha }}" | cut -c1-7)
+          PR_NUMBER=${{ github.event.pull_request.number || 'manual' }}
+          IMAGE_TAG="pr-${PR_NUMBER}-${SHORT_SHA}"
+
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "kimia_image=${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/kimia:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "kimia_bud_image=${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/kimia-bud:${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+          echo "Building with tag: ${IMAGE_TAG}"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Harbor Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_REGISTRY }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ matrix.image_name }}
+          tags: |
+            type=raw,value=${{ steps.vars.outputs.image_tag }}
+
+      - name: Build and push ${{ matrix.description }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number || 'manual' }}
+            BUILD_DATE=${{ github.run_id }}
+            COMMIT=${{ github.event.pull_request.head.sha || github.sha }}
+            BRANCH=${{ github.head_ref || github.ref_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify image push
+        run: |
+          echo "Successfully pushed: ${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/${{ matrix.image_name }}:${{ steps.vars.outputs.image_tag }}"
+
+  # ============================================================================
+  # Job 2: Trigger GitLab E2E Pipeline
+  # ============================================================================
+  trigger-gitlab-pipeline:
+    name: Trigger GitLab E2E Pipeline
+    runs-on: ubuntu-latest
+    needs: build-pr-images
+    outputs:
+      pipeline_id: ${{ steps.trigger.outputs.pipeline_id }}
+      pipeline_url: ${{ steps.trigger.outputs.pipeline_url }}
+
+    steps:
+      - name: Trigger GitLab Pipeline
+        id: trigger
+        run: |
+          echo "Triggering GitLab E2E pipeline..."
+
+          # Trigger the pipeline with PR variables
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ env.GITLAB_API_URL }}/projects/${{ env.GITLAB_PROJECT_ID }}/trigger/pipeline" \
+            -F "token=${{ secrets.GITLAB_TRIGGER_TOKEN }}" \
+            -F "ref=wip/github-actions-integration" \
+            -F "variables[BUILD_FROM_PR]=true" \
+            -F "variables[PR_NUMBER]=${{ github.event.pull_request.number || 'manual' }}" \
+            -F "variables[PR_COMMIT_SHA]=${{ github.event.pull_request.head.sha || github.sha }}" \
+            -F "variables[PR_BRANCH]=${{ github.head_ref || github.ref_name }}" \
+            -F "variables[PR_IMAGE_TAG]=${{ needs.build-pr-images.outputs.image_tag }}" \
+            -F "variables[GITHUB_RUN_ID]=${{ github.run_id }}" \
+            -F "variables[GITHUB_RUN_URL]=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "201" ]; then
+            echo "Failed to trigger GitLab pipeline. HTTP $HTTP_CODE"
+            echo "$BODY"
+            exit 1
+          fi
+
+          PIPELINE_ID=$(echo "$BODY" | jq -r '.id')
+          PIPELINE_URL=$(echo "$BODY" | jq -r '.web_url')
+
+          echo "pipeline_id=${PIPELINE_ID}" >> $GITHUB_OUTPUT
+          echo "pipeline_url=${PIPELINE_URL}" >> $GITHUB_OUTPUT
+
+          echo "GitLab Pipeline triggered successfully!"
+          echo "Pipeline ID: ${PIPELINE_ID}"
+          echo "Pipeline URL: ${PIPELINE_URL}"
+
+      - name: Add pipeline link to PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pipelineUrl = '${{ steps.trigger.outputs.pipeline_url }}';
+            const pipelineId = '${{ steps.trigger.outputs.pipeline_id }}';
+            const imageTag = '${{ needs.build-pr-images.outputs.image_tag }}';
+
+            const body = `## E2E Test Pipeline Triggered
+
+            | Detail | Value |
+            |--------|-------|
+            | GitLab Pipeline | [#${pipelineId}](${pipelineUrl}) |
+            | Image Tag | \`${imageTag}\` |
+            | Kimia Image | \`${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/kimia:${imageTag}\` |
+            | Kimia-Bud Image | \`${{ env.HARBOR_REGISTRY }}/${{ env.HARBOR_PROJECT }}/kimia-bud:${imageTag}\` |
+
+            The E2E tests are running. This check will update when complete.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+  # ============================================================================
+  # Job 3: Wait for GitLab Pipeline and Report Status
+  # ============================================================================
+  wait-for-pipeline:
+    name: Wait for E2E Pipeline
+    runs-on: ubuntu-latest
+    needs: [build-pr-images, trigger-gitlab-pipeline]
+    timeout-minutes: 240  # 4 hours
+
+    steps:
+      - name: Poll GitLab Pipeline Status
+        id: poll
+        run: |
+          PIPELINE_ID="${{ needs.trigger-gitlab-pipeline.outputs.pipeline_id }}"
+          MAX_POLLS=480  # 4 hours at 30-second intervals
+          POLL_INTERVAL=30
+
+          echo "Waiting for GitLab pipeline #${PIPELINE_ID} to complete..."
+          echo "Pipeline URL: ${{ needs.trigger-gitlab-pipeline.outputs.pipeline_url }}"
+
+          for i in $(seq 1 $MAX_POLLS); do
+            RESPONSE=$(curl -s -H "PRIVATE-TOKEN: ${{ secrets.GITLAB_API_TOKEN }}" \
+              "${{ env.GITLAB_API_URL }}/projects/${{ env.GITLAB_PROJECT_ID }}/pipelines/${PIPELINE_ID}")
+
+            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Poll $i/$MAX_POLLS - Status: $STATUS"
+
+            case "$STATUS" in
+              "success")
+                echo "pipeline_status=success" >> $GITHUB_OUTPUT
+                echo "Pipeline completed successfully!"
+                exit 0
+                ;;
+              "failed")
+                echo "pipeline_status=failed" >> $GITHUB_OUTPUT
+                echo "Pipeline failed!"
+
+                # Fetch failed jobs for context
+                JOBS=$(curl -s -H "PRIVATE-TOKEN: ${{ secrets.GITLAB_API_TOKEN }}" \
+                  "${{ env.GITLAB_API_URL }}/projects/${{ env.GITLAB_PROJECT_ID }}/pipelines/${PIPELINE_ID}/jobs?scope=failed")
+
+                echo "Failed jobs:"
+                echo "$JOBS" | jq -r '.[] | "  - \(.name): \(.web_url)"'
+
+                exit 1
+                ;;
+              "canceled")
+                echo "pipeline_status=canceled" >> $GITHUB_OUTPUT
+                echo "Pipeline was canceled!"
+                exit 1
+                ;;
+              "skipped")
+                echo "pipeline_status=skipped" >> $GITHUB_OUTPUT
+                echo "Pipeline was skipped!"
+                exit 1
+                ;;
+              "created"|"waiting_for_resource"|"preparing"|"pending"|"running"|"manual"|"scheduled")
+                # Pipeline still in progress
+                sleep $POLL_INTERVAL
+                ;;
+              *)
+                echo "Unknown status: $STATUS"
+                echo "$RESPONSE" | jq '.'
+                sleep $POLL_INTERVAL
+                ;;
+            esac
+          done
+
+          echo "Timeout waiting for pipeline to complete"
+          echo "pipeline_status=timeout" >> $GITHUB_OUTPUT
+          exit 1
+
+      - name: Update PR with final status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pipelineUrl = '${{ needs.trigger-gitlab-pipeline.outputs.pipeline_url }}';
+            const pipelineId = '${{ needs.trigger-gitlab-pipeline.outputs.pipeline_id }}';
+            const status = '${{ steps.poll.outputs.pipeline_status }}' || 'unknown';
+
+            let emoji = '';
+            let statusText = '';
+
+            switch(status) {
+              case 'success':
+                emoji = ':white_check_mark:';
+                statusText = 'PASSED';
+                break;
+              case 'failed':
+                emoji = ':x:';
+                statusText = 'FAILED';
+                break;
+              case 'canceled':
+                emoji = ':no_entry_sign:';
+                statusText = 'CANCELED';
+                break;
+              case 'timeout':
+                emoji = ':hourglass:';
+                statusText = 'TIMED OUT';
+                break;
+              default:
+                emoji = ':question:';
+                statusText = 'UNKNOWN';
+            }
+
+            const body = `## E2E Test Results ${emoji}
+
+            | Detail | Value |
+            |--------|-------|
+            | Status | **${statusText}** |
+            | GitLab Pipeline | [#${pipelineId}](${pipelineUrl}) |
+
+            [View full pipeline details](${pipelineUrl})`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
