@@ -20,7 +20,7 @@ builds:
     main:
       name: build-scala-python
       args:
-        context: "https://github.com/apache/spark-docker.git"
+        context: https://github.com/apache/spark-docker.git
         contextSubPath: 4.0.0/scala2.13-java21-python3-ubuntu
         dockerfile: Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/myspark

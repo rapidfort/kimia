@@ -234,7 +234,7 @@ spec:
             {{- end }}
             {{- if $step.args.extraArgs }}
             {{- range $ea := $step.args.extraArgs }}
-            - {{ $ea | quote }}
+            - {{ $ea }}
             {{- end }}
             {{- end }}
             {{- if $step.args.verbose }}
@@ -293,7 +293,7 @@ spec:
             {{- end }}
             {{- if $b.main.args.extraArgs }}
             {{- range $ea := $b.main.args.extraArgs }}
-            - {{ $ea | quote }}
+            - {{ $ea }}
             {{- end }}
             {{- end }}
             {{- if $b.main.args.verbose }}

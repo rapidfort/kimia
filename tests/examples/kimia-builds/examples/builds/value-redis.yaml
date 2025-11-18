@@ -16,7 +16,7 @@ builds:
         dockerfile: 7.4/debian/Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/redis
         verbose: true
-        extraArgs: ["--insecure", "--label=image.version=7.4deb", "--attestation=max", "--sign", "--cosign-key=/secrets/cosign.key", "--cosign-password-env=COSIGN_PASSWORD"]
+        extraArgs: [--insecure, --label=image.version=7.4deb, --attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
         registryAuth:
           enabled: true
 
