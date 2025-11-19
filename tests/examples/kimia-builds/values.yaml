@@ -39,8 +39,8 @@ volumeNames:
 # turn ON to mount secret; OFF to omit everything secret related
 registryAuth:
   enabled: false                 # <-- set to true in override when you want the secret
-  secretName: harbor-secret
-  key: .dockerconfigjson
+  secretName: docker-registry-creds
+  key: config.json
   subPathFile: config.json
   mountDir: /home/kimia/.docker  # dir we mount into
   envVar: REGISTRY_AUTH_FILE
