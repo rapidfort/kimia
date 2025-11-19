@@ -40,7 +40,7 @@ volumeNames:
 registryAuth:
   enabled: false                 # <-- set to true in override when you want the secret
   secretName: docker-registry-creds
-  key: config.json
+  key: .dockerconfigjson
   subPathFile: config.json
   mountDir: /home/kimia/.docker  # dir we mount into
   envVar: REGISTRY_AUTH_FILE
