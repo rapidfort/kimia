@@ -289,7 +289,7 @@ spec:
           args:
             - --context={{ $b.main.args.context }}
             - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
-            - --destination={{ printf "%s:%s" $b.main.args.destination $b.main.args.tag }}
+            - --destination={{ printf "%s:%s" $b.main.args.destination $vals.global.kimia.destinationTag }}
             {{- if $b.main.args.contextSubPath }}
             - --context-sub-path={{ $b.main.args.contextSubPath }}
             {{- end }}

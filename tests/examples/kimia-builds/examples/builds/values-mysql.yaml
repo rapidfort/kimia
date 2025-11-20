@@ -7,6 +7,5 @@ builds:
         contextSubPath: !!str 8.0
         dockerfile: Dockerfile.debian
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mysql
-        tag: latest
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

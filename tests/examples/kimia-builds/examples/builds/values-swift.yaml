@@ -6,6 +6,5 @@ builds:
         context: https://github.com/swiftlang/swift-docker.git
         dockerfile: nightly-5.10/ubuntu/22.04/Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/swift
-        tag: latest
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

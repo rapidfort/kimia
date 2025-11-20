@@ -15,6 +15,5 @@ builds:
         context: https://github.com/minio/minio.git
         dockerfile: Dockerfile.release
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/minio
-        tag: latest
         verbose: true
         extraArgs: [--build-arg=RELEASE=RELEASE.2025-09-07T16-13-09Z, --build-arg=TARGETARCH=amd64, --attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

@@ -2,6 +2,7 @@ global:
   kimia:
     image: ghcr.io/rapidfort/kimia-bud
     tag: "latest"        # default kimia tag (override per-step if needed)
+    destinationTag: "latest"
     pullPolicy: Always
 
   registries:
