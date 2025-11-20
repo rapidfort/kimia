@@ -16,7 +16,7 @@ location = "{{ .location }}"
 insecure = {{ .insecure }}
 {{- end }}
 {{- if hasKey . "prefix" }}
-prefix = {{ .prefix }}
+prefix = "{{ .prefix }}"
 {{- end }}
 {{- if hasKey . "blocked" }}
 blocked = {{ .blocked }}
