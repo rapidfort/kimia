@@ -10,8 +10,9 @@ global:
       - "harbor.rfinnovate.rapidfort.io"
       - "docker.io"      
     entries:
-      - location: "harbor.rfinnovate.rapidfort.io"
-        insecure: true
+      - location: "harbor.rfinnovate.rapidfort.io/kimia-e2e"
+        prefix: "harbor.rfinnovate.rapidfort.io"
+        insecure: false
         blocked: false    
       - location: "quay.io"        
       - location: "docker.io"
