@@ -25,5 +25,6 @@ builds:
         context: https://github.com/dockerfile/supervisor.git
         dockerfile: Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/dockerfile/supervisor
+        tag: latest
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
