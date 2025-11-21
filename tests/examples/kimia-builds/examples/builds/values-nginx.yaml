@@ -14,6 +14,6 @@ builds:
       args:
         context: https://github.com/nginx/docker-nginx.git
         dockerfile: mainline/alpine/Dockerfile
-        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mynginx
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/nginx
         verbose: true
         extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
