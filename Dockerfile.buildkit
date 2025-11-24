@@ -12,11 +12,13 @@ ARG COSIGN_VERSION=v3.0.2
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
+ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
+ARG ALPINE_IMAGE="alpine:latest"
 
 # =============================================================================
 # Stage 1: Build kimia binary
 # =============================================================================
-FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
+FROM ${GO_IMAGE} AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -44,7 +46,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =============================================================================
 # Stage 2: Runtime image with BuildKit + RootlessKit + Crun
 # =============================================================================
-FROM alpine:latest as kimia-deps
+FROM ${ALPINE_IMAGE} as kimia-deps
 
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
@@ -122,7 +124,7 @@ RUN ARCH=$(case ${TARGETARCH} in \
 # =============================================================================
 # Stage 3: Install Credential Helpers and setup final configurations
 # =============================================================================
-FROM alpine:latest
+FROM ${ALPINE_IMAGE}
 ARG KIMIA_UID
 ARG KIMIA_USER
 ARG TARGETARCH
