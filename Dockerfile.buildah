@@ -10,11 +10,13 @@ ARG GOLANG_VERSION=1.25.3
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
+ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
+ARG ALPINE_IMAGE="alpine:latest"
 
 # =============================================================================
 # Stage 1: Build kimia binary
 # =============================================================================
-FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
+FROM ${GO_IMAGE} AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -42,7 +44,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # =============================================================================
 # Stage 2: Runtime image with Buildah
 # =============================================================================
-FROM alpine AS run-prep-image
+FROM ${ALPINE_IMAGE} AS run-prep-image
 ARG KIMIA_UID
 ARG KIMIA_USER
 ARG TARGETARCH
