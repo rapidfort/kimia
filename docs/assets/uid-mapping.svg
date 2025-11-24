@@ -1,0 +1,95 @@
+<svg width="700" height="350" viewBox="0 0 700 350" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="0" y="0" width="700" height="350" fill="#ffffff" rx="8"/>
+  
+  <!-- Title -->
+  <text x="350" y="30" text-anchor="middle" font-family="monospace" font-size="16" font-weight="bold" fill="#2c3e50">
+    User Namespace UID/GID Mapping
+  </text>
+  
+  <!-- Container Namespace Box -->
+  <rect x="40" y="55" width="270" height="260" fill="none" stroke="#2c3e50" stroke-width="2"/>
+  <text x="175" y="80" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    Container Namespace
+  </text>
+  <text x="175" y="100" text-anchor="middle" font-family="monospace" font-size="10" fill="#7f8c8d">
+    (What process sees)
+  </text>
+  
+  <!-- Host System Box -->
+  <rect x="390" y="55" width="270" height="260" fill="none" stroke="#2c3e50" stroke-width="2"/>
+  <text x="525" y="80" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    Host Reality
+  </text>
+  <text x="525" y="100" text-anchor="middle" font-family="monospace" font-size="10" fill="#7f8c8d">
+    (Kubernetes node)
+  </text>
+  
+  <!-- Mapping entries -->
+  <!-- UID 0 -> 1000 -->
+  <rect x="60" y="125" width="220" height="28" fill="#ecf0f1" stroke="#3498db" stroke-width="1"/>
+  <text x="170" y="145" text-anchor="middle" font-family="monospace" font-size="11" font-weight="bold" fill="#2c3e50">
+    UID 0 (root)
+  </text>
+  
+  <rect x="410" y="125" width="220" height="28" fill="#ecf0f1" stroke="#3498db" stroke-width="1"/>
+  <text x="520" y="145" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 1000 (kimia)
+  </text>
+  
+  <!-- Arrow with smaller tip -->
+  <defs>
+    <marker id="arrow1" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <polygon points="0 0, 6 3, 0 6" fill="#3498db"/>
+    </marker>
+  </defs>
+  <line x1="285" y1="139" x2="405" y2="139" stroke="#3498db" stroke-width="2" marker-end="url(#arrow1)"/>
+  
+  <!-- UID 1 -> 100000 -->
+  <rect x="60" y="165" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="170" y="185" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 1
+  </text>
+  
+  <rect x="410" y="165" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="520" y="185" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 100000
+  </text>
+  
+  <line x1="285" y1="179" x2="405" y2="179" stroke="#3498db" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  
+  <!-- UID 2 -> 100001 -->
+  <rect x="60" y="205" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="170" y="225" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 2
+  </text>
+  
+  <rect x="410" y="205" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="520" y="225" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 100001
+  </text>
+  
+  <line x1="285" y1="219" x2="405" y2="219" stroke="#3498db" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  
+  <!-- Ellipsis -->
+  <text x="170" y="255" text-anchor="middle" font-family="monospace" font-size="16" fill="#7f8c8d">...</text>
+  <text x="520" y="255" text-anchor="middle" font-family="monospace" font-size="16" fill="#7f8c8d">...</text>
+  
+  <!-- UID 65535 -> 165535 -->
+  <rect x="60" y="270" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="170" y="290" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 65535
+  </text>
+  
+  <rect x="410" y="270" width="220" height="28" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="520" y="290" text-anchor="middle" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 165535
+  </text>
+  
+  <line x1="285" y1="284" x2="405" y2="284" stroke="#3498db" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  
+  <!-- Bottom note -->
+  <text x="350" y="330" text-anchor="middle" font-family="monospace" font-size="10" font-style="italic" fill="#7f8c8d">
+    65,536 UIDs mapped from container namespace to host subordinate range
+  </text>
+</svg>

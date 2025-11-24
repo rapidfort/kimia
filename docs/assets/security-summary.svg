@@ -1,0 +1,148 @@
+<svg width="800" height="500" viewBox="0 0 800 500" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="0" y="0" width="800" height="500" fill="#ffffff" rx="8"/>
+  
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-family="monospace" font-size="18" font-weight="bold" fill="#2c3e50">
+    Kimia Build Isolation: Complete Security Model
+  </text>
+  
+  <!-- Left side: Core Mechanisms -->
+  <text x="200" y="65" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    🔒 Key Security Mechanisms
+  </text>
+  
+  <!-- Mechanism 1 -->
+  <rect x="20" y="75" width="360" height="70" fill="none" stroke="#2c3e50" stroke-width="2"/>
+  <text x="35" y="95" font-family="monospace" font-size="11" font-weight="bold" fill="#2c3e50">
+    1. User Namespace Isolation
+  </text>
+  <text x="35" y="115" font-family="monospace" font-size="10" fill="#34495e">
+    • UID 0 (root) inside → UID 1000 outside
+  </text>
+  <text x="35" y="132" font-family="monospace" font-size="10" fill="#34495e">
+    • Complete isolation from host system
+  </text>
+  
+  <!-- Mechanism 2 -->
+  <rect x="20" y="155" width="360" height="70" fill="none" stroke="#34495e" stroke-width="1.5"/>
+  <text x="35" y="175" font-family="monospace" font-size="11" font-weight="bold" fill="#2c3e50">
+    2. Minimal Privilege Model
+  </text>
+  <text x="35" y="195" font-family="monospace" font-size="10" fill="#34495e">
+    • Only SETUID &amp; SETGID capabilities
+  </text>
+  <text x="35" y="212" font-family="monospace" font-size="10" fill="#34495e">
+    • No privileged mode required
+  </text>
+  
+  <!-- Mechanism 3 -->
+  <rect x="20" y="235" width="360" height="70" fill="none" stroke="#34495e" stroke-width="1.5"/>
+  <text x="35" y="255" font-family="monospace" font-size="11" font-weight="bold" fill="#2c3e50">
+    3. Defense in Depth (5 Layers)
+  </text>
+  <text x="35" y="275" font-family="monospace" font-size="10" fill="#34495e">
+    • Network policies + Seccomp + Capabilities
+  </text>
+  <text x="35" y="292" font-family="monospace" font-size="10" fill="#34495e">
+    • User namespaces + Rootless execution
+  </text>
+  
+  <!-- Right side: Threat Protection -->
+  <text x="600" y="65" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    🛡️ Threat Protection
+  </text>
+  
+  <!-- Threat table -->
+  <rect x="420" y="75" width="360" height="230" fill="none" stroke="#7f8c8d" stroke-width="1"/>
+  
+  <!-- Header -->
+  <rect x="425" y="80" width="350" height="28" fill="#34495e"/>
+  <text x="490" y="100" font-family="monospace" font-size="11" font-weight="bold" fill="#ffffff">
+    Threat
+  </text>
+  <text x="680" y="100" font-family="monospace" font-size="11" font-weight="bold" fill="#ffffff">
+    Outcome
+  </text>
+  
+  <!-- Row 1: Container Escape -->
+  <rect x="425" y="113" width="350" height="26" fill="none" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="131" font-family="monospace" font-size="10" fill="#34495e">
+    Container escape
+  </text>
+  <circle cx="695" cy="126" r="6" fill="#3498db"/>
+  <text x="710" y="131" font-family="monospace" font-size="9" fill="#34495e">
+    UID 1000 only
+  </text>
+  
+  <!-- Row 2: Privilege Escalation -->
+  <rect x="425" y="143" width="350" height="26" fill="#ffffff" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="161" font-family="monospace" font-size="10" fill="#34495e">
+    Privilege escalation
+  </text>
+  <circle cx="695" cy="156" r="6" fill="#3498db"/>
+  <text x="710" y="161" font-family="monospace" font-size="9" fill="#34495e">
+    Blocked
+  </text>
+  
+  <!-- Row 3: File Access -->
+  <rect x="425" y="173" width="350" height="26" fill="none" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="191" font-family="monospace" font-size="10" fill="#34495e">
+    Read /etc/shadow
+  </text>
+  <circle cx="695" cy="186" r="6" fill="#3498db"/>
+  <text x="710" y="191" font-family="monospace" font-size="9" fill="#34495e">
+    Denied
+  </text>
+  
+  <!-- Row 4: Process Kill -->
+  <rect x="425" y="203" width="350" height="26" fill="#ffffff" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="221" font-family="monospace" font-size="10" fill="#34495e">
+    Kill host processes
+  </text>
+  <circle cx="695" cy="216" r="6" fill="#3498db"/>
+  <text x="710" y="221" font-family="monospace" font-size="9" fill="#34495e">
+    Blocked
+  </text>
+  
+  <!-- Row 5: Network -->
+  <rect x="425" y="233" width="350" height="26" fill="none" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="251" font-family="monospace" font-size="10" fill="#34495e">
+    Bind privileged port
+  </text>
+  <circle cx="695" cy="246" r="6" fill="#3498db"/>
+  <text x="710" y="251" font-family="monospace" font-size="9" fill="#34495e">
+    Denied
+  </text>
+  
+  <!-- Row 6: Kernel -->
+  <rect x="425" y="263" width="350" height="26" fill="#ffffff" stroke="#ecf0f1" stroke-width="0.5"/>
+  <text x="435" y="281" font-family="monospace" font-size="10" fill="#34495e">
+    Load kernel module
+  </text>
+  <circle cx="695" cy="276" r="6" fill="#3498db"/>
+  <text x="710" y="281" font-family="monospace" font-size="9" fill="#34495e">
+    Blocked
+  </text>
+  
+  <!-- Bottom: Production Ready -->
+  <rect x="20" y="330" width="760" height="120" fill="none" stroke="#2c3e50" stroke-width="2"/>
+  <text x="400" y="355" text-anchor="middle" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    ✅ Production Ready
+  </text>
+  
+  <text x="50" y="385" font-family="monospace" font-size="11" fill="#34495e">
+    • Battle-tested: Based on proven Linux user namespace technology
+  </text>
+  <text x="50" y="405" font-family="monospace" font-size="11" fill="#34495e">
+    • Kubernetes-native: Follows Pod Security Standards (Restricted)
+  </text>
+  <text x="50" y="425" font-family="monospace" font-size="11" fill="#34495e">
+    • Compliance-friendly: Meets NIST 800-190 and CIS benchmarks
+  </text>
+  
+  <!-- Result banner -->
+  <text x="400" y="475" text-anchor="middle" font-family="monospace" font-size="11" font-style="italic" fill="#7f8c8d">
+    Secure container builds with true isolation in multi-tenant Kubernetes clusters
+  </text>
+</svg>

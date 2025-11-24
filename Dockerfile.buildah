@@ -1,16 +1,22 @@
-# Stage 1: Build kimia binary
+# Dockerfile.buildah - Kimia with Buildah Backend
+# Self-contained OCI image builder using Buildah
+
 ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
 ARG COMMIT="unknown"
 ARG BRANCH="unknown"
 ARG RELEASE="0"
-
 ARG GOLANG_VERSION=1.25.3
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
+ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
+ARG ALPINE_IMAGE="alpine:latest"
 
-FROM golang:${GOLANG_VERSION}-alpine AS kimia-builder
+# =============================================================================
+# Stage 1: Build kimia binary
+# =============================================================================
+FROM ${GO_IMAGE} AS kimia-builder
 ARG VERSION
 ARG BUILD_DATE
 ARG COMMIT
@@ -35,15 +41,18 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
         -X main.Branch=${BRANCH}" \
     -o kimia ./cmd/kimia
 
-# Build running image binary
-FROM alpine AS run-prep-image
+# =============================================================================
+# Stage 2: Runtime image with Buildah
+# =============================================================================
+FROM ${ALPINE_IMAGE} AS run-prep-image
 ARG KIMIA_UID
 ARG KIMIA_USER
 ARG TARGETARCH
 
+# Install system dependencies
 RUN apk update && apk add gnutls
 
-# Install runtime dependencies
+# Install runtime dependencies for Buildah
 RUN apk add --no-cache \
     bash \
     ca-certificates \
@@ -62,78 +71,45 @@ RUN apk add --no-cache \
     netavark \
     aardvark-dns \
     xz \
+    jq \
     buildah && \
     update-ca-certificates && \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Copy kimia binary
+# Copy kimia binary from builder stage
 COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
 RUN chmod +x /usr/local/bin/kimia
 
-# Create kimia user
+# Create kimia user with specified UID
 RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
     adduser -D -G ${KIMIA_USER} -u ${KIMIA_UID} ${KIMIA_USER}
 
-# Setup subuid/subgid for kimia user (for rootless mode)
+# Setup subuid/subgid for kimia user (required for rootless mode)
 RUN echo "${KIMIA_USER}:100000:65536" >> /etc/subuid && \
     echo "${KIMIA_USER}:100000:65536" >> /etc/subgid
 
-# ============================================================================
-# Rootless-Only Configuration (UID 1000 only)
-# ============================================================================
+# =============================================================================
+# Rootless Configuration (UID 1000)
+# =============================================================================
 
-# Create user directories for kimia
+# Create user directories
 RUN mkdir -p /home/${KIMIA_USER}/.local/share/containers/storage && \
     mkdir -p /home/${KIMIA_USER}/.config/containers && \
     mkdir -p /home/${KIMIA_USER}/.docker && \
     mkdir -p /tmp/lock
 
-# User-specific storage config - Native kernel overlayfs
-RUN cat > /home/${KIMIA_USER}/.config/containers/storage.conf <<'EOF'
-[storage]
-driver="vfs"
-runroot="/tmp/containers/run"
-graphroot="/home/kimia/.local/share/containers/storage"
+# Copy Buildah configuration files
+# These files configure storage, registries, policies, and container runtime
+COPY configs/buildah/storage.conf /home/${KIMIA_USER}/.config/containers/storage.conf
+COPY configs/buildah/registries.conf /home/${KIMIA_USER}/.config/containers/registries.conf
+COPY configs/buildah/policy.json /home/${KIMIA_USER}/.config/containers/policy.json
+COPY configs/buildah/containers.conf /home/${KIMIA_USER}/.config/containers/containers.conf
 
-[storage.options]
-vfs.ignore_chown_errors="true"
+# =============================================================================
+# Install Cloud Registry Credential Helpers
+# =============================================================================
 
-[storage.options.overlay]
-# Use native kernel overlayfs (empty mount_program)
-mount_program=""
-mountopt="nodev,metacopy=on"
-EOF
-
-# Registries config (user-specific)
-RUN cat > /home/${KIMIA_USER}/.config/containers/registries.conf <<'EOF'
-unqualified-search-registries = ['docker.io', 'quay.io']
-
-[[registry]]
-location = "docker.io"
-
-[[registry]]
-location = "quay.io"
-EOF
-
-# Policy (user-specific)
-RUN cat > /home/${KIMIA_USER}/.config/containers/policy.json <<'EOF'
-{
-    "default": [{"type": "insecureAcceptAnything"}]
-}
-EOF
-
-# Containers config (user-specific)
-RUN cat > /home/${KIMIA_USER}/.config/containers/containers.conf <<'EOF'
-[engine]
-events_logger="file"
-network_backend="netavark"
-
-[engine.runtimes]
-runc = ["/usr/bin/runc"]
-crun = ["/usr/bin/crun"]
-EOF
-
-# ECR helper
+# AWS ECR credential helper
 RUN ECR_VERSION=$(curl -s https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -144,7 +120,7 @@ RUN ECR_VERSION=$(curl -s https://api.github.com/repos/awslabs/amazon-ecr-creden
     -o /usr/local/bin/docker-credential-ecr-login && \
     chmod +x /usr/local/bin/docker-credential-ecr-login
 
-# GCR helper
+# Google GCR/GAR credential helper
 RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
@@ -155,12 +131,30 @@ RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docke
     | tar xz -C /usr/local/bin/ docker-credential-gcr && \
     chmod +x /usr/local/bin/docker-credential-gcr
 
-# Environment variables
+# =============================================================================
+# Environment Configuration
+# =============================================================================
+
+# Buildah settings
 ENV BUILDAH_LOG_LEVEL=error
+
+# User directories
 ENV HOME=/home/kimia
+
+# Docker config location for authentication
+# Mount your Docker config.json here: /home/kimia/.docker/config.json
+# Example: -v ~/.docker/config.json:/home/kimia/.docker/config.json:ro
 ENV DOCKER_CONFIG=/home/kimia/.docker
+
+# Runtime directory for rootless operations
 ENV XDG_RUNTIME_DIR=/run/user/${KIMIA_UID}
+
+# Network locking
 ENV NETAVARK_LOCK_PATH=/tmp/lock/netavark.lock
+
+# =============================================================================
+# Finalize Permissions
+# =============================================================================
 
 # Set ownership for kimia user directories
 RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER} && \
@@ -168,14 +162,26 @@ RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER} && \
     chown -R ${KIMIA_USER}:${KIMIA_USER} "${XDG_RUNTIME_DIR}" && \
     chmod 1777 /tmp/lock
 
-# Run as non-root user (rootless mode only)
+# Run as non-root user (rootless mode)
 USER ${KIMIA_UID}:${KIMIA_UID}
 WORKDIR /home/${KIMIA_USER}
 
+# Add rapidfort directory to PATH (for potential extensions)
 ENV PATH="/home/${KIMIA_USER}/rapidfort:${PATH}"
+
+# =============================================================================
+# Container Metadata
+# =============================================================================
 
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
 LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (Buildah)"
+LABEL org.opencontainers.image.documentation="https://github.com/rapidfort/kimia/blob/main/README.md"
+LABEL org.opencontainers.image.vendor="RapidFort"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# =============================================================================
+# Entrypoint and Default Command
+# =============================================================================
 
 # Set kimia as the entrypoint
 ENTRYPOINT ["/usr/local/bin/kimia"]

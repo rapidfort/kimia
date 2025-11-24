@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/rapidfort/kimia/internal/auth"
@@ -106,6 +107,13 @@ func main() {
 	// Setup logging
 	logger.Setup(config.Verbosity, config.LogTimestamp)
 
+	// Detect which builder is available early (needed for context preparation)
+	builder := build.DetectBuilder()
+	if builder == "unknown" {
+		logger.Fatal("No builder found (expected buildkitd or buildah)")
+	}
+	logger.Info("Detected builder: %s", strings.ToUpper(builder))
+
 	// Prepare build context
 	gitConfig := build.GitConfig{
 		Context:   config.Context,
@@ -115,11 +123,28 @@ func main() {
 		TokenUser: config.GitTokenUser,
 	}
 
-	ctx, err := build.Prepare(gitConfig)
+	ctx, err := build.Prepare(gitConfig, builder)
 	if err != nil {
 		logger.Fatal("Failed to prepare build context: %v", err)
 	}
 	defer ctx.Cleanup()
+	
+	// Store SubContext in context for BuildKit Git URL formatting
+	ctx.SubContext = config.SubContext
+
+	// Apply context-sub-path for local contexts (not Git URLs)
+	// For Git URLs with BuildKit, SubContext is handled in FormatGitURLForBuildKit
+	if config.SubContext != "" && ctx.Path != "" {
+		subPath := filepath.Join(ctx.Path, config.SubContext)
+		
+		// Verify the subdirectory exists
+		if _, err := os.Stat(subPath); err != nil {
+			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
+		}
+		
+		logger.Info("Using context sub-path: %s", config.SubContext)
+		ctx.Path = subPath
+	}
 
 	// Setup authentication
 	authSetup := auth.SetupConfig{
@@ -127,7 +152,7 @@ func main() {
 		InsecureRegistry: config.InsecureRegistry,
 	}
 
-	authFile, err := auth.Setup(authSetup)
+	err = auth.Setup(authSetup)
 	if err != nil {
 		logger.Fatal("Failed to setup authentication: %v", err)
 	}
@@ -146,7 +171,6 @@ func main() {
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,
 		InsecureRegistry:           config.InsecureRegistry,
-		SkipTLSVerify:              config.SkipTLSVerify,
 		RegistryCertificate:        config.RegistryCertificate,
 		ImageDownloadRetry:         config.ImageDownloadRetry,
 		NoPush:                     config.NoPush,
@@ -156,10 +180,16 @@ func main() {
 		ImageNameTagWithDigestFile: config.ImageNameTagWithDigestFile,
 		Reproducible:               config.Reproducible,
 		Timestamp:                  config.Timestamp,
+		Attestation:                config.Attestation,
+		AttestationConfigs:         convertAttestationConfigs(config.AttestationConfigs),
+		BuildKitOpts:               config.BuildKitOpts,
+		Sign:                       config.Sign,
+		CosignKeyPath:              config.CosignKeyPath,
+		CosignPasswordEnv:          config.CosignPasswordEnv,
 	}
 
 	// Execute build
-	if err := build.Execute(buildConfig, ctx, authFile); err != nil {
+	if err := build.Execute(buildConfig, ctx); err != nil {
 		logger.Fatal("Build failed: %v", err)
 	}
 
@@ -169,13 +199,12 @@ func main() {
 			Destinations:        config.Destination,
 			Insecure:            config.Insecure,
 			InsecureRegistry:    config.InsecureRegistry,
-			SkipTLSVerify:       config.SkipTLSVerify,
 			RegistryCertificate: config.RegistryCertificate,
 			PushRetry:           config.PushRetry,
 			StorageDriver:       config.StorageDriver,
 		}
 
-		digestMap, err := build.Push(pushConfig, authFile)
+		digestMap, err := build.Push(pushConfig)
 		if err != nil {
 			logger.Fatal("Push failed: %v", err)
 		}
@@ -187,4 +216,16 @@ func main() {
 	}
 
 	logger.Info("Build completed successfully!")
+}
+
+// convertAttestationConfigs converts main package AttestationConfig to build package AttestationConfig
+func convertAttestationConfigs(mainConfigs []AttestationConfig) []build.AttestationConfig {
+	buildConfigs := make([]build.AttestationConfig, len(mainConfigs))
+	for i, mainConfig := range mainConfigs {
+		buildConfigs[i] = build.AttestationConfig{
+			Type:   mainConfig.Type,
+			Params: mainConfig.Params,
+		}
+	}
+	return buildConfigs
 }

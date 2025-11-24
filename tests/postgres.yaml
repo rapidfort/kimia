@@ -1,7 +1,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: kimia-nginx-build
+  generateName: kimia-postgres-build
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -12,17 +12,17 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia
-        image: ghcr.io/rapidfort/kimia-bud:latest
-        command: ["sleep", "inf"]
+      - name: kimia-bud
+        image: 100.92.16.57:5000/rapidfort/kimia-bud
         args:
-          - --context=https://github.com/nginx/docker-nginx.git
-          - --dockerfile=mainline/alpine/Dockerfile
-          - --destination=mynginx
+          - --context=https://github.com/docker-library/postgres.git
+          - --context-sub-path=18/alpine3.22
+          - --dockerfile=Dockerfile
+          - --destination=postgres
           - --no-push
+          - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
-

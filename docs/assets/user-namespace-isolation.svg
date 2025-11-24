@@ -1,0 +1,95 @@
+<svg width="800" height="450" viewBox="0 0 800 450" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect x="0" y="0" width="800" height="450" fill="#ffffff" rx="8"/>
+  
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-family="monospace" font-size="16" font-weight="bold" fill="#2c3e50">
+    User Namespace Isolation in Kubernetes
+  </text>
+  
+  <!-- Kubernetes Node Box -->
+  <rect x="20" y="50" width="760" height="380" fill="none" stroke="#2c3e50" stroke-width="2"/>
+  <text x="40" y="75" font-family="monospace" font-size="14" font-weight="bold" fill="#2c3e50">
+    Kubernetes Node (Host System)
+  </text>
+  
+  <!-- Host UIDs with connection points -->
+  <rect x="480" y="95" width="280" height="30" fill="#ecf0f1" stroke="#3498db" stroke-width="1"/>
+  <text x="490" y="116" font-family="monospace" font-size="12" fill="#2c3e50">
+    UID 1000 (unprivileged kimia)
+  </text>
+  
+  <rect x="480" y="135" width="280" height="30" fill="#ecf0f1" stroke="#34495e" stroke-width="1"/>
+  <text x="490" y="156" font-family="monospace" font-size="12" fill="#7f8c8d">
+    UID 100000 - 165535 (subordinate)
+  </text>
+  
+  <!-- Container Pod Box -->
+  <rect x="50" y="185" width="700" height="225" fill="none" stroke="#34495e" stroke-width="1.5"/>
+  <text x="70" y="210" font-family="monospace" font-size="13" font-weight="bold" fill="#2c3e50">
+    Kimia Pod Container
+  </text>
+  
+  <!-- User Namespace Box -->
+  <rect x="80" y="230" width="300" height="160" fill="#ecf0f1" stroke="#3498db" stroke-width="1"/>
+  <text x="100" y="255" font-family="monospace" font-size="12" font-weight="bold" fill="#2c3e50">
+    User Namespace (Isolated View)
+  </text>
+  
+  <!-- Namespace UIDs with connection points -->
+  <rect x="100" y="275" width="240" height="28" fill="#ffffff" stroke="#3498db" stroke-width="1"/>
+  <text x="110" y="295" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 0 (root)
+  </text>
+  
+  <rect x="100" y="315" width="240" height="28" fill="#ffffff" stroke="#34495e" stroke-width="1"/>
+  <text x="110" y="335" font-family="monospace" font-size="11" fill="#2c3e50">
+    UID 1-65535
+  </text>
+  
+  <!-- Square/bracket-style mapping arrows -->
+  <defs>
+    <marker id="arrowSmall" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <polygon points="0 0, 6 3, 0 6" fill="#3498db"/>
+    </marker>
+  </defs>
+  
+  <!-- UID 0 -> UID 1000 mapping with square path -->
+  <path d="M 340 289 L 400 289 L 400 110 L 475 110" 
+        stroke="#3498db" stroke-width="2" fill="none" marker-end="url(#arrowSmall)"/>
+  <text x="410" y="200" font-family="monospace" font-size="10" font-weight="bold" fill="#3498db">
+    Maps to
+  </text>
+  
+  <!-- UID 1-65535 -> subordinate range mapping with square path -->
+  <path d="M 340 329 L 430 329 L 430 150 L 475 150" 
+        stroke="#3498db" stroke-width="1.5" fill="none" marker-end="url(#arrowSmall)"/>
+  
+  <!-- Build process perspective box -->
+  <rect x="420" y="240" width="310" height="150" fill="#ffffff" stroke="#7f8c8d" stroke-width="1"/>
+  <text x="440" y="265" font-family="monospace" font-size="12" font-weight="bold" fill="#2c3e50">
+    What Process Sees vs Reality
+  </text>
+  
+  <text x="440" y="295" font-family="monospace" font-size="11" fill="#2c3e50">
+    Inside Container:
+  </text>
+  <text x="450" y="315" font-family="monospace" font-size="10" fill="#34495e">
+    • Appears as root (UID 0)
+  </text>
+  <text x="450" y="332" font-family="monospace" font-size="10" fill="#34495e">
+    • Root privileges in namespace
+  </text>
+  
+  <text x="440" y="360" font-family="monospace" font-size="11" fill="#2c3e50">
+    On Host:
+  </text>
+  <text x="450" y="380" font-family="monospace" font-size="10" fill="#34495e">
+    • Actually UID 1000 (unprivileged)
+  </text>
+  
+  <!-- Legend -->
+  <text x="400" y="425" text-anchor="middle" font-family="monospace" font-size="10" font-style="italic" fill="#7f8c8d">
+    Complete isolation: Container root = Host unprivileged user
+  </text>
+</svg>

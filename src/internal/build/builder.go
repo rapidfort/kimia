@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
-
+	"github.com/rapidfort/kimia/internal/auth"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -40,7 +40,6 @@ type Config struct {
 	Insecure            bool
 	InsecurePull        bool
 	InsecureRegistry    []string
-	SkipTLSVerify       bool
 	RegistryCertificate string
 	ImageDownloadRetry  int
 
@@ -54,6 +53,27 @@ type Config struct {
 	// Reproducible builds
 	Reproducible bool
 	Timestamp    string
+
+	// Attestation and signing (BuildKit only)
+	// Level 1: Simple mode (backward compatible)
+	Attestation string // "off", "min" or "max"
+	
+	// Level 2: Docker-style attestations (advanced)
+	AttestationConfigs []AttestationConfig
+	
+	// Level 3: Direct BuildKit options (escape hatch)
+	BuildKitOpts []string
+	
+	// Signing
+	Sign              bool   // Enable signing with cosign
+	CosignKeyPath     string // Path to cosign private key
+	CosignPasswordEnv string // Environment variable for cosign password
+}
+
+// AttestationConfig represents a single --attest flag
+type AttestationConfig struct {
+	Type   string            // "sbom" or "provenance"
+	Params map[string]string // Key-value pairs from the flag
 }
 
 // DetectBuilder determines which builder is available
@@ -74,7 +94,7 @@ func DetectBuilder() string {
 }
 
 // Execute executes a build using the detected builder (buildah or buildkit)
-func Execute(config Config, ctx *Context, authFile string) error {
+func Execute(config Config, ctx *Context) error {
 	builder := DetectBuilder()
 
 	if builder == "unknown" {
@@ -84,14 +104,14 @@ func Execute(config Config, ctx *Context, authFile string) error {
 	logger.Info("Using builder: %s", strings.ToUpper(builder))
 
 	if builder == "buildkit" {
-		return executeBuildKit(config, ctx, authFile)
+		return executeBuildKit(config, ctx)
 	}
 
-	return executeBuildah(config, ctx, authFile)
+	return executeBuildah(config, ctx)
 }
 
 // executeBuildah executes a buildah build with authentication
-func executeBuildah(config Config, ctx *Context, authFile string) error {
+func executeBuildah(config Config, ctx *Context) error {
 	// Detect if running as root
 	isRoot := os.Getuid() == 0
 
@@ -118,16 +138,6 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 
 	// Construct buildah command
 	args := []string{"bud"}
-
-	// Add auth file if available
-	if authFile != "" {
-		// Validate auth file exists and is readable
-		if _, err := os.Stat(authFile); err != nil {
-			logger.Warning("Auth file not found or not readable: %v", err)
-		} else {
-			args = append(args, "--authfile", authFile)
-		}
-	}
 
 	// Add Dockerfile
 	dockerfilePath := config.Dockerfile
@@ -260,14 +270,9 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 		logger.Debug("Using existing BUILDAH_ISOLATION=%s", os.Getenv("BUILDAH_ISOLATION"))
 	}
 
-	// Enhanced environment setup for auth
-	if authFile != "" {
-		cmd.Env = append(cmd.Env,
-			fmt.Sprintf("REGISTRY_AUTH_FILE=%s", authFile),
-			fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)),
-			fmt.Sprintf("BUILDAH_AUTH_FILE=%s", authFile),
-		)
-	}
+	// Set DOCKER_CONFIG for authentication
+	dockerConfigDir := auth.GetDockerConfigDir()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 	// Storage driver configuration
 	storageDriver := config.StorageDriver
@@ -281,7 +286,6 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	for _, env := range cmd.Env {
 		if strings.HasPrefix(env, "STORAGE_DRIVER=") ||
 			strings.HasPrefix(env, "BUILDAH_") ||
-			strings.HasPrefix(env, "REGISTRY_AUTH_FILE=") ||
 			strings.HasPrefix(env, "DOCKER_CONFIG=") {
 			logger.Info("  %s", env)
 		}
@@ -309,7 +313,7 @@ func executeBuildah(config Config, ctx *Context, authFile string) error {
 	return nil
 }
 
-func executeBuildKit(config Config, ctx *Context, authFile string) error {
+func executeBuildKit(config Config, ctx *Context) error {
 	logger.Info("Starting BuildKit build...")
 
 	// ========================================
@@ -335,51 +339,68 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	logger.Debug("  Config file: %s", buildkitConfig)
 
 	// ========================================
-	// CONTEXT HANDLING: Copy bind mounts to real filesystem
+	// CONTEXT HANDLING: Use Git URL for BuildKit or copy bind mounts to real filesystem
 	// ========================================
-	buildContext := ctx.Path
+	var buildContext string
+	var isGitContext bool
 	var tempContext string
 	workspaceMount := filepath.Join(homeDir, "workspace")
 
-	// Only copy if it's a bind mount, not a git clone
-	isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
-	if isBindMount {
-		logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
-
-		// Create cache directory
-		cacheDir := filepath.Join(homeDir, ".cache/buildkit")
-		if err := os.MkdirAll(cacheDir, 0755); err != nil {
-			return fmt.Errorf("failed to create cache directory: %v", err)
-		}
-
-		// Create temp directory for context copy
-		tempDir, err := os.MkdirTemp(cacheDir, "context-*")
+	// Check if this is a Git context (BuildKit native Git support)
+	if ctx.IsGitRepo && ctx.GitURL != "" {
+		logger.Info("Using BuildKit native Git context (no local clone)")
+		isGitContext = true
+		
+		// Format Git URL with authentication, branch/revision, and subcontext
+		formattedURL, err := FormatGitURLForBuildKit(ctx.GitURL, ctx.GitConfig, ctx.SubContext)
 		if err != nil {
-			return fmt.Errorf("failed to create temp context directory: %v", err)
+			return fmt.Errorf("failed to format Git URL for BuildKit: %v", err)
 		}
-		tempContext = tempDir
-
-		defer func() {
-			logger.Debug("Cleaning up temp context directory: %s", tempContext)
-			os.RemoveAll(tempContext)
-		}()
-
-		// Copy context to temp directory
-		logger.Debug("Copying context from %s to %s", ctx.Path, tempContext)
-		if err := copyDir(ctx.Path, tempContext); err != nil {
-			return fmt.Errorf("failed to copy context: %v", err)
-		}
-
-		buildContext = tempContext
-		logger.Debug("Using copied context at: %s", buildContext)
+		buildContext = formattedURL
 	} else {
-		logger.Debug("Using original context at: %s", buildContext)
+		// Local context handling
+		buildContext = ctx.Path
+		
+		// Only copy if it's a bind mount, not a git clone
+		isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
+		if isBindMount {
+			logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
+
+			// Create cache directory
+			cacheDir := filepath.Join(homeDir, ".cache/buildkit")
+			if err := os.MkdirAll(cacheDir, 0755); err != nil {
+				return fmt.Errorf("failed to create cache directory: %v", err)
+			}
+
+			// Create temp directory for context copy
+			tempDir, err := os.MkdirTemp(cacheDir, "context-*")
+			if err != nil {
+				return fmt.Errorf("failed to create temp context directory: %v", err)
+			}
+			tempContext = tempDir
+
+			defer func() {
+				logger.Debug("Cleaning up temp context directory: %s", tempContext)
+				os.RemoveAll(tempContext)
+			}()
+
+			// Copy context to temp directory
+			logger.Debug("Copying context from %s to %s", ctx.Path, tempContext)
+			if err := copyDir(ctx.Path, tempContext); err != nil {
+				return fmt.Errorf("failed to copy context: %v", err)
+			}
+
+			buildContext = tempContext
+			logger.Debug("Using copied context at: %s", buildContext)
+		} else {
+			logger.Debug("Using original context at: %s", buildContext)
+		}
 	}
 
 	// ========================================
 	// INSECURE REGISTRY CONFIGURATION
 	// ========================================
-	if config.Insecure {
+	if config.Insecure || len(config.InsecureRegistry) > 0 {
 		// Read existing config (should always exist from Dockerfile)
 		var existingConfig string
 		if data, err := os.ReadFile(buildkitConfig); err == nil {
@@ -402,13 +423,22 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 			}
 		}
 
-		// Extract registries from destinations
+		// Collect all registries that need insecure config
 		registries := make(map[string]bool)
-		for _, dest := range config.Destination {
-			if idx := strings.Index(dest, "/"); idx > 0 {
-				registry := dest[:idx]
-				registries[registry] = true
+		
+		// If --insecure is set, add all destination registries
+		if config.Insecure {
+			for _, dest := range config.Destination {
+				if idx := strings.Index(dest, "/"); idx > 0 {
+					registry := dest[:idx]
+					registries[registry] = true
+				}
 			}
+		}
+		
+		// Add specific insecure registries from --insecure-registry
+		for _, registry := range config.InsecureRegistry {
+			registries[registry] = true
 		}
 
 		// Append insecure config for each registry
@@ -448,10 +478,17 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
 		"--net=host",
+		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
 		"--config="+buildkitConfig,
 		"--addr=unix://"+buildkitSocket,
+	)
+
+	daemonCmd.Env = append(os.Environ(),
+		"HOME=/home/kimia",
+		"DOCKER_CONFIG=/home/kimia/.docker",
+		"XDG_RUNTIME_DIR=/tmp/run",
 	)
 
 	daemonCmd.Stdout = os.Stdout
@@ -516,14 +553,14 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	}
 
 	// Handle dockerfile path for copied contexts
-	if buildContext != ctx.Path {
+	if !isGitContext && buildContext != ctx.Path {
 		// Context was copied to temp directory
 		if filepath.IsAbs(dockerfilePath) {
 			if relPath, err := filepath.Rel(ctx.Path, dockerfilePath); err == nil {
 				dockerfilePath = relPath
 			}
 		}
-	} else {
+	} else if !isGitContext {
 		// Context not copied, use normal relative path logic
 		if filepath.IsAbs(dockerfilePath) {
 			relPath, err := filepath.Rel(buildContext, dockerfilePath)
@@ -535,9 +572,18 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 	args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
 
-	// Add context
-	args = append(args, "--local", fmt.Sprintf("context=%s", buildContext))
-	args = append(args, "--local", fmt.Sprintf("dockerfile=%s", buildContext))
+	// Add context: Git URL or local path
+	if isGitContext {
+		// Use Git URL for BuildKit native Git support
+		// BuildKit requires Git URLs to be passed as --opt context=
+		logger.Debug("Using Git context: %s", buildContext)
+		args = append(args, "--opt", fmt.Sprintf("context=%s", buildContext))
+		args = append(args, "--opt", fmt.Sprintf("dockerfile=%s", buildContext))
+	} else {
+		// Use local context
+		args = append(args, "--local", fmt.Sprintf("context=%s", buildContext))
+		args = append(args, "--local", fmt.Sprintf("dockerfile=%s", buildContext))
+	}
 
 	// ========================================
 	// REPRODUCIBLE BUILDS: Sort build arguments
@@ -646,6 +692,37 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	}
 
 	// ========================================
+	// ATTESTATION: Configure attestations for BuildKit
+	// ========================================
+	
+	// Determine which attestation mode to use
+	var attestOpts []string
+	
+	if len(config.AttestationConfigs) > 0 {
+		// Level 2: Docker-style attestations
+		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args)
+		logger.Info("Attestation mode: advanced (--attest)")
+	} else if config.Attestation != "off" && config.Attestation != "" {
+		// Level 1: Simple mode
+		attestOpts = buildAttestationOptsFromSimpleMode(config.Attestation)
+		logger.Info("Attestation mode: %s", config.Attestation)
+	} else {
+		// No attestations
+		logger.Debug("Attestations disabled")
+	}
+	
+	// Add attestation options to args
+	for _, opt := range attestOpts {
+		args = append(args, "--opt", opt)
+	}
+	
+	// Level 3: Direct BuildKit options (pass-through)
+	for _, opt := range config.BuildKitOpts {
+		args = append(args, "--opt", opt)
+		logger.Debug("Added direct BuildKit opt: %s", opt)
+	}
+
+	// ========================================
 	// EXECUTE BUILDCTL
 	// ========================================
 	// Create command with output capture for digest extraction
@@ -658,10 +735,9 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// Set BUILDKIT_HOST
 	cmd.Env = append(cmd.Env, fmt.Sprintf("BUILDKIT_HOST=unix://%s", buildkitSocket))
 
-	// Set DOCKER_CONFIG for auth
-	if authFile != "" {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", filepath.Dir(authFile)))
-	}
+	// Set DOCKER_CONFIG for authentication
+	dockerConfigDir := auth.GetDockerConfigDir()
+	cmd.Env = append(cmd.Env, fmt.Sprintf("DOCKER_CONFIG=%s", dockerConfigDir))
 
 	// Set SOURCE_DATE_EPOCH for reproducible builds
 	if sourceEpoch != "" {
@@ -691,6 +767,8 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 	// ========================================
 	// REPRODUCIBLE BUILDS: Extract digest from output
 	// ========================================
+	digestMap := make(map[string]string) // Map tag -> digest
+	
 	if !config.NoPush && len(config.Destination) > 0 {
 		stderrOutput := stderrBuf.String()
 		stdoutOutput := stdoutBuf.String()
@@ -698,13 +776,15 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 		for _, dest := range config.Destination {
 			var digest string
 
-			// Pattern 1: Look for "exporting manifest sha256:xxx" in stderr
+			// Pattern 1: Look for "exporting manifest list sha256:xxx" in stderr (PRIORITY)
+			// This is the correct digest to sign when attestations are present
 			for _, line := range strings.Split(stderrOutput, "\n") {
-				if strings.Contains(line, "exporting manifest sha256:") {
+				if strings.Contains(line, "exporting manifest list sha256:") {
 					parts := strings.Fields(line)
 					for _, part := range parts {
 						if strings.HasPrefix(part, "sha256:") {
 							digest = part
+							logger.Debug("Found manifest list digest: %s", digest)
 							break
 						}
 					}
@@ -714,7 +794,27 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 				}
 			}
 
-			// Pattern 2: Look for digest in stdout (fallback)
+			// Pattern 2: Look for "exporting manifest sha256:xxx" in stderr (fallback)
+			// This is for images without attestations (single manifest)
+			if digest == "" {
+				for _, line := range strings.Split(stderrOutput, "\n") {
+					if strings.Contains(line, "exporting manifest sha256:") {
+						parts := strings.Fields(line)
+						for _, part := range parts {
+							if strings.HasPrefix(part, "sha256:") {
+								digest = part
+								logger.Debug("Found platform manifest digest: %s", digest)
+								break
+							}
+						}
+					}
+					if digest != "" {
+						break
+					}
+				}
+			}
+
+			// Pattern 3: Look for digest in stdout (last resort fallback)
 			if digest == "" {
 				for _, line := range strings.Split(stdoutOutput, "\n") {
 					if strings.Contains(line, "sha256:") {
@@ -734,9 +834,51 @@ func executeBuildKit(config Config, ctx *Context, authFile string) error {
 
 			if digest != "" {
 				logger.Debug("Extracted digest for %s: %s", dest, digest)
-				logger.Debug("Using digest from push output: %s", digest)
+				digestMap[dest] = digest
 			} else {
 				logger.Debug("Could not extract digest from BuildKit output for %s", dest)
+			}
+		}
+	}
+
+	// ========================================
+	// SIGNING: Sign images with cosign if requested
+	// ========================================
+	if config.Sign && !config.NoPush {
+		if config.CosignKeyPath == "" {
+			logger.Warning("Signing requested but no cosign key provided (--cosign-key), skipping signature")
+		} else {
+			logger.Info("Signing images with cosign...")
+			
+			for _, dest := range config.Destination {
+				// Use digest-based reference if available
+				imageToSign := dest
+				if digest, ok := digestMap[dest]; ok {
+					// Remove tag but keep registry:port/repo
+					// Find the last ':' which separates the tag
+					if idx := strings.LastIndex(dest, ":"); idx > 0 {
+						// Check if this is actually a tag (not a port number)
+						// Port numbers come before '/', tags come after
+						afterColon := dest[idx+1:]
+						if !strings.Contains(afterColon, "/") {
+							// This is a tag, remove it
+							imageToSign = dest[:idx] + "@" + digest
+						} else {
+							// This is a port, append digest to the full reference
+							imageToSign = dest + "@" + digest
+						}
+					} else {
+						imageToSign = dest + "@" + digest
+					}
+					logger.Info("Signing with digest reference: %s", imageToSign)
+				} else {
+					logger.Warning("No digest found for %s, signing with tag (not recommended)", dest)
+				}
+				
+				if err := signImageWithCosign(imageToSign, config); err != nil {
+					return fmt.Errorf("failed to sign image %s: %v", imageToSign, err)
+				}
+				logger.Info("Successfully signed: %s", imageToSign)
 			}
 		}
 	}
@@ -765,6 +907,7 @@ func exportToTar(config Config) error {
 	logger.Debug("Attempting TAR export with buildah push...")
 	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
 
+	
 	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = &stderr
@@ -947,6 +1090,172 @@ func copyFile(src, dst string) error {
 	// Write to destination with same permissions
 	if err := os.WriteFile(dst, srcData, srcInfo.Mode()); err != nil {
 		return fmt.Errorf("failed to write destination: %v", err)
+	}
+
+	return nil
+}
+
+// buildAttestationOptsFromSimpleMode converts simple mode to BuildKit opts
+func buildAttestationOptsFromSimpleMode(mode string) []string {
+	var opts []string
+	
+	switch mode {
+	case "min":
+		// Provenance only, minimal info
+		// CRITICAL: Explicitly disable SBOM to fix bug where BuildKit enables it by default
+		opts = append(opts, "attest:sbom=false")
+		opts = append(opts, "attest:provenance=mode=min")
+		logger.Debug("Simple mode 'min': provenance only (SBOM explicitly disabled)")
+		
+	case "max":
+		// SBOM + Provenance, maximum info
+		opts = append(opts, "attest:sbom=true")
+		opts = append(opts, "attest:provenance=mode=max")
+		logger.Debug("Simple mode 'max': SBOM + provenance")
+		
+	default:
+		logger.Fatal("Invalid attestation mode: %s", mode)
+	}
+	
+	return opts
+}
+
+// buildAttestationOptsFromConfigs converts --attest configs to BuildKit opts
+func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string) []string {
+	var opts []string
+	
+	for _, config := range configs {
+		switch config.Type {
+		case "sbom":
+			opt := buildSBOMOpt(config)
+			opts = append(opts, opt)
+			
+			// Handle scan options as build args
+			if config.Params["scan-context"] == "true" {
+				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_CONTEXT=1")
+				logger.Debug("Added SBOM scan build arg: BUILDKIT_SBOM_SCAN_CONTEXT=1")
+			}
+			if config.Params["scan-stage"] == "true" {
+				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_STAGE=1")
+				logger.Debug("Added SBOM scan build arg: BUILDKIT_SBOM_SCAN_STAGE=1")
+			}
+			
+		case "provenance":
+			opts = append(opts, buildProvenanceOpt(config))
+		default:
+			logger.Fatal("Unknown attestation type: %s", config.Type)
+		}
+	}
+	
+	return opts
+}
+
+// buildSBOMOpt builds a single SBOM attestation opt
+func buildSBOMOpt(config AttestationConfig) string {
+	// If no params, just enable with defaults
+	if len(config.Params) == 0 {
+		return "attest:sbom=true"
+	}
+	
+	// Build comma-separated params
+	var parts []string
+	
+	// Special handling for generator param
+	if generator, ok := config.Params["generator"]; ok {
+		parts = append(parts, fmt.Sprintf("generator=%s", generator))
+	} else {
+		parts = append(parts, "true") // Enable with default generator
+	}
+	
+	// Add any other params as-is (except scan-context and scan-stage which are handled separately)
+	for key, value := range config.Params {
+		if key != "generator" && key != "scan-context" && key != "scan-stage" {
+			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	
+	return fmt.Sprintf("attest:sbom=%s", strings.Join(parts, ","))
+}
+
+// buildProvenanceOpt builds a single provenance attestation opt
+func buildProvenanceOpt(config AttestationConfig) string {
+	var parts []string
+	
+	// Mode (default to max if not specified)
+	mode := config.Params["mode"]
+	if mode == "" {
+		mode = "max"
+	}
+	parts = append(parts, fmt.Sprintf("mode=%s", mode))
+	
+	// Add all other parameters in a consistent order
+	paramOrder := []string{"builder-id", "reproducible", "inline-only", "version", "filename"}
+	for _, key := range paramOrder {
+		if value, ok := config.Params[key]; ok {
+			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	
+	// Add any remaining params not in the order list
+	for key, value := range config.Params {
+		if key != "mode" && !contains(paramOrder, key) {
+			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	
+	return fmt.Sprintf("attest:provenance=%s", strings.Join(parts, ","))
+}
+
+// contains checks if a string slice contains a specific item
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+// signImageWithCosign signs a container image using cosign
+func signImageWithCosign(image string, config Config) error {
+	logger.Debug("Signing image with cosign: %s", image)
+
+	// Prepare cosign command
+	args := []string{"sign", "--key", config.CosignKeyPath}
+
+	// Add insecure registry flag if needed
+	if config.Insecure || len(config.InsecureRegistry) > 0 {
+		args = append(args, "--allow-insecure-registry")
+		logger.Debug("Added --allow-insecure-registry flag for insecure registry")
+	}
+
+	// Add the image reference
+	args = append(args, image)
+
+	// Create the command
+	cmd := exec.Command("cosign", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	
+	cmd.Env = append(cmd.Env, "COSIGN_EXPERIMENTAL=1")
+
+	// Set cosign password from environment variable if specified
+	if config.CosignPasswordEnv != "" {
+		password := os.Getenv(config.CosignPasswordEnv)
+		if password == "" {
+			logger.Warning("Cosign password environment variable %s is not set or empty", config.CosignPasswordEnv)
+		} else {
+			cmd.Env = append(cmd.Env, fmt.Sprintf("COSIGN_PASSWORD=%s", password))
+			logger.Debug("Set COSIGN_PASSWORD from %s", config.CosignPasswordEnv)
+		}
+	}
+
+	logger.Debug("Executing: cosign %s", strings.Join(args, " "))
+
+	// Execute cosign
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("cosign signing failed: %v", err)
 	}
 
 	return nil
