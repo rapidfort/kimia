@@ -8,19 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- New features here
+- Dependency verification stage with hash checking
+- Support for arguments in image sources
+- Attestation and signing support with multiple modes
 
 ### Changed
-- Changes in existing functionality
+- Improved Git repository handling in provenance
+- Enhanced registry authentication cleanup
 
 ### Fixed
-- Bug fixes
+- Environment configuration checks for building images
+- git:// protocol issue in Kimia
+- --context-sub-path handling for Git URLs (now uses #:subdir syntax)
+- --insecure-registry flag to work properly with BuildKit
+
+### Removed
+- Redundant --skip-tls-verify flag (consolidated with --insecure-registry)
 
 ## [1.0.13] - 2025-10-23
-
-### Added
-
-### Changed
 
 ### Fixed
 - Fix --context-sub-path arg parsing when the context sub-path is an empty string "" for Kubernetes manifest files
@@ -30,15 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added --image-download-retry flag for controlling retry attempts when pulling base images during build
 
-### Changed
-
-### Fixed
-
 ## [1.0.11] - 2025-10-22
-
-### Added
-
-### Changed
 
 ### Fixed
 - Fix --context-sub-path arg parsing when the context sub-path is an empty string ""
@@ -48,31 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added --reproducible option
 
-### Changed
-
-### Fixed
-
 ## [1.0.9] - 2025-10-13
-
-### Added
 
 ### Changed
 - Added examples (community nginx & redis)
 
-### Fixed
-
 ## [1.0.8] - 2025-10-12
-
-### Added
 
 ### Changed
 - Minor cleanup
 
-### Fixed
-
 ## [1.0.7] - 2025-10-12
-
-### Added
 
 ### Changed
 - buildah version tagged with -rf for patch
@@ -103,4 +86,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial public release
 - Basic build functionality
-
