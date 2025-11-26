@@ -225,8 +225,12 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 		url = addGitToken(url, string(token), gitConfig.TokenUser)
 	}
 
-	// Add depth 1 for faster cloning if no specific revision is needed
-	if gitConfig.Revision == "" {
+	if gitConfig.Branch != "" {
+		// Clone specific branch with --single-branch to ensure the branch is fetched
+		// This avoids issues with shallow clones not having the branch available for checkout
+		args = append(args, "--branch", gitConfig.Branch, "--single-branch")
+	} else if gitConfig.Revision == "" {
+		// Add depth 1 for faster cloning if no specific revision is needed
 		args = append(args, "--depth", "1")
 	}
 
@@ -291,21 +295,31 @@ func expandEnvInURL(url string) string {
 func checkoutGitBranch(repoDir, branch string) error {
 	logger.Info("Checking out branch: %s", branch)
 
+	// First, try to fetch the branch to ensure we have it
+	fetchCmd := exec.Command("git", "fetch", "origin", branch)
+	fetchCmd.Dir = repoDir
+	fetchCmd.Stdout = os.Stdout
+	fetchCmd.Stderr = os.Stderr
+	fetchCmd.Run() // Ignore error, we'll check checkout result
+
+	// Now checkout the branch (might be remote tracking branch)
 	cmd := exec.Command("git", "checkout", branch)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		// Try fetching the branch first
-		fetchCmd := exec.Command("git", "fetch", "origin", branch)
-		fetchCmd.Dir = repoDir
-		fetchCmd.Run() // Ignore error, might already have it
+		logger.Debug("Direct checkout failed, trying remote tracking branch...")
+		// Try with explicit remote tracking branch
+		cmd2 := exec.Command("git", "checkout", "-b", branch, "origin/"+branch)
+		cmd2.Dir = repoDir
+		cmd2.Stdout = os.Stdout
+		cmd2.Stderr = os.Stderr
 
-		// Try checkout again
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("git checkout failed: %v", err)
+		if err2 := cmd2.Run(); err2 != nil {
+			return fmt.Errorf("git checkout failed: %v (also tried origin/%s: %v)", err, branch, err2)
 		}
+		logger.Info("Successfully checked out from remote tracking branch")
 	}
 
 	return nil
