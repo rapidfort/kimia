@@ -99,19 +99,40 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 
 		ctx.Path = tempDir
 
-		// If GitBranch is specified, checkout the branch
-		if gitConfig.Branch != "" {
+		// If GitRevision is specified, try to checkout the revision directly
+		if gitConfig.Revision != "" {
+			logger.Info("Checking out revision: %s", gitConfig.Revision)
+			
+			// Try to checkout the revision
+			if err := checkoutGitRevision(tempDir, gitConfig.Revision); err != nil {
+				// Revision doesn't exist, fall back to branch if specified
+				if gitConfig.Branch != "" {
+					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
+					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+						os.RemoveAll(tempDir)
+						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
+					}
+				} else {
+					os.RemoveAll(tempDir)
+					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
+				}
+			} else {
+				// Revision checked out successfully
+				// If branch was specified, check if revision is on that branch and warn if not
+				if gitConfig.Branch != "" {
+					if !isRevisionOnBranch(tempDir, gitConfig.Revision, gitConfig.Branch) {
+						logger.Warning("⚠️  WARNING: Revision %s is NOT on branch %s", gitConfig.Revision, gitConfig.Branch)
+						logger.Warning("⚠️  Building from revision anyway. This may not be what you intended.")
+						logger.Warning("⚠️  Verify this commit is correct for your use case.")
+					}
+				}
+			}
+		} else if gitConfig.Branch != "" {
+			// No revision specified, just checkout the branch
+			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
-			}
-		}
-
-		// If GitRevision is specified, checkout the revision
-		if gitConfig.Revision != "" {
-			if err := checkoutGitRevision(tempDir, gitConfig.Revision); err != nil {
-				os.RemoveAll(tempDir)
-				return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 			}
 		}
 	} else {
@@ -225,12 +246,17 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 		url = addGitToken(url, string(token), gitConfig.TokenUser)
 	}
 
-	if gitConfig.Branch != "" {
-		// Clone specific branch with --single-branch to ensure the branch is fetched
-		// This avoids issues with shallow clones not having the branch available for checkout
+	// If revision is specified, we need to clone without --single-branch
+	// to ensure the revision is available even if it's on a different branch
+	if gitConfig.Revision != "" {
+		// Clone without depth/single-branch restrictions to get all refs
+		// This ensures the revision can be found regardless of which branch it's on
+		logger.Debug("Cloning full repository to access revision %s", gitConfig.Revision)
+	} else if gitConfig.Branch != "" {
+		// Only restrict to single branch if no revision is specified
 		args = append(args, "--branch", gitConfig.Branch, "--single-branch")
-	} else if gitConfig.Revision == "" {
-		// Add depth 1 for faster cloning if no specific revision is needed
+	} else {
+		// Add depth 1 for faster cloning if no specific revision or branch is needed
 		args = append(args, "--depth", "1")
 	}
 
@@ -392,6 +418,13 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 	
 	logger.Info("Formatted Git URL for BuildKit: %s", maskToken(url))
 	return url, nil
+}
+
+// isRevisionOnBranch checks if a git revision is an ancestor of the specified branch
+func isRevisionOnBranch(repoPath, revision, branch string) bool {
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", revision, branch)
+	cmd.Dir = repoPath
+	return cmd.Run() == nil
 }
 
 // maskToken masks the authentication token in a URL for logging
