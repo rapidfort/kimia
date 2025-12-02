@@ -8,9 +8,9 @@ registryAuth:
   envPath: /home/kimia/.docker/config.json
 
 builds:
-  - name: kimia
+  - name: kimia-bud
     main:
-      name: kimia
+      name: kimia-bud
       args:
         context: https://github.com/rapidfort/kimia.git
         dockerfile: Dockerfile.buildah
