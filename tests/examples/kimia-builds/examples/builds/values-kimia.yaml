@@ -1,0 +1,22 @@
+registryAuth:
+  enabled: true
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json
+
+builds:
+  - name: kimia
+    main:
+      name: kimia
+      args:
+        context: https://github.com/rapidfort/kimia.git
+        dockerfile: Dockerfile.buildkit
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/kimia
+        tag: latest
+        verbose: true
+        extraArgs: [--git-branch=tests-kimia,--insecure, --label=image.version=buildkit, --attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
+        registryAuth:
+          enabled: true
