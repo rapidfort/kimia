@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - git:// protocol issue in Kimia
 - --context-sub-path handling for Git URLs (now uses #:subdir syntax)
 - --insecure-registry flag to work properly with BuildKit
+- Git branch and revision handling for Buildah
 
 ### Removed
 - Redundant --skip-tls-verify flag (consolidated with --insecure-registry)
