@@ -1,4 +1,4 @@
-name: Security Scanners
+name: Repository Security Scanners
 
 on:
   push:
