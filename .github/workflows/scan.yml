@@ -1,0 +1,331 @@
+name: Security Scanners
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  trufflehog:
+    name: Trufflehog Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Trufflehog on filesystem
+        run: |
+          docker run --rm -v "$(pwd):/repo" \
+            trufflesecurity/trufflehog:latest \
+            filesystem /repo --json --no-update > trufflehog-fs-results.json || true
+          
+          echo "Filesystem scan results:"
+          cat trufflehog-fs-results.json
+
+      - name: Run Trufflehog on Git history
+        run: |
+          docker run --rm -v "$(pwd):/repo" \
+            trufflesecurity/trufflehog:latest \
+            git file:///repo --json --no-update > trufflehog-git-results.json || true
+
+          echo "Git history scan results:"
+          cat trufflehog-git-results.json
+
+      - name: Check for secrets
+        run: |
+          SECRETS_FOUND=false
+          
+          if [ -s trufflehog-fs-results.json ]; then
+            echo "⚠️ Secrets found in filesystem!"
+            cat trufflehog-fs-results.json
+            SECRETS_FOUND=true
+          fi
+
+          if [ -s trufflehog-git-results.json ]; then
+            echo "⚠️ Secrets found in Git history!"
+            cat trufflehog-git-results.json
+            SECRETS_FOUND=true
+          fi
+
+          if [ "$SECRETS_FOUND" = true ]; then
+            exit 1
+          else
+            echo "✅ No secrets found"
+            echo '{"results":[]}' > trufflehog-results.json
+          fi
+
+      - name: Upload Trufflehog results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trufflehog-results
+          path: |
+            trufflehog-fs-results.json
+            trufflehog-git-results.json
+          retention-days: 30
+
+  gitleaks:
+    name: GitLeaks Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run GitLeaks scan
+        run: |
+          docker pull zricethezav/gitleaks:latest
+          mkdir -p results
+          
+          docker run --rm \
+            --volume "$(pwd):/path" \
+            --volume "$(pwd)/results:/output" \
+            zricethezav/gitleaks:latest \
+            dir -v -f json -r "/output/gitleaks-results.json" /path
+          
+          # Also generate SARIF format for GitHub Security
+          docker run --rm \
+            --volume "$(pwd):/path" \
+            --volume "$(pwd)/results:/output" \
+            zricethezav/gitleaks:latest \
+            dir -v -f sarif -r "/output/gitleaks-results.sarif" /path || true
+
+      - name: Display scan results
+        if: always()
+        run: |
+          if [ -f results/gitleaks-results.json ]; then
+            echo "Gitleaks scan completed"
+            ls -lh results/gitleaks-results.json
+            cat results/gitleaks-results.json
+          else
+            echo "No results file found"
+          fi
+
+      - name: Upload GitLeaks results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'results/gitleaks-results.sarif'
+          category: 'gitleaks'
+        continue-on-error: true
+
+      - name: Upload GitLeaks results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results
+          path: results/
+          retention-days: 30
+
+  trivy:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '1'
+        continue-on-error: true
+
+      - name: Upload Trivy results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-filesystem'
+
+      - name: Run Trivy config scan (JSON)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-config-results.json'
+          exit-code: '0'
+
+      - name: Run Trivy config scan (Table for display)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '0'
+
+      - name: Check Trivy results and fail if issues found
+        run: |
+          if [ -f trivy-config-results.json ]; then
+            # Check if there are any results with severity >= MEDIUM
+            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL" or .Severity == "MEDIUM")] | length' trivy-config-results.json)
+
+            if [ "$ISSUE_COUNT" -gt 0 ]; then
+              echo "⚠️ Found $ISSUE_COUNT security issues!"
+              exit 1
+            else
+              echo "✅ No critical security issues found"
+            fi
+          fi
+
+      - name: Upload Trivy filesystem results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: |
+            trivy-results.sarif
+            trivy-config-results.json
+          retention-days: 30
+
+  clamav:
+    name: ClamAV Malware Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ClamAV
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+          
+      - name: Run ClamAV scan
+        run: |
+          clamscan --recursive --infected --log=clamav-results.log . 
+          echo "✅ No malware found"
+
+      - name: Upload ClamAV results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clamav-results
+          path: clamav-results.log
+          retention-days: 30
+
+  govulncheck:
+    name: Govulncheck Go Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'src/go.mod'
+          cache: false
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        working-directory: src
+        run: |
+          set +e
+          govulncheck -json ./... > govulncheck-results.json 2>&1
+          EXIT_CODE=$?
+          govulncheck ./... | tee govulncheck-results.txt
+          
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "⚠️ Vulnerabilities found!"
+            exit 1
+          else
+            echo "✅ No vulnerabilities found"
+          fi
+
+      - name: Upload govulncheck results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govulncheck-results
+          path: |
+            src/govulncheck-results.json
+            src/govulncheck-results.txt
+          retention-days: 30
+
+  gosec:
+    name: Gosec Go Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'src/go.mod'
+          cache: false
+
+      - name: Install Gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+      - name: Run Gosec
+        working-directory: src
+        run: |
+          set +e
+          gosec -fmt json -out gosec-results.json ./...
+          EXIT_CODE=$?
+          gosec -fmt text -out gosec-results.txt ./...
+          
+          cat gosec-results.txt
+          
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "⚠️ Security issues found!"
+            exit 1
+          else
+            echo "✅ No security issues found"
+          fi
+
+      - name: Upload Gosec results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gosec-results
+          path: |
+            src/gosec-results.json
+            src/gosec-results.txt
+          retention-days: 30
+
+  summary:
+    name: Security Scan Summary
+    runs-on: ubuntu-latest
+    needs: [trufflehog, gitleaks, trivy, clamav, govulncheck, gosec]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trufflehog | ${{ needs.trufflehog.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitLeaks | ${{ needs.gitleaks.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ClamAV | ${{ needs.clamav.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Govulncheck | ${{ needs.govulncheck.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Gosec | ${{ needs.gosec.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "View detailed results in the job artifacts." >> $GITHUB_STEP_SUMMARY
