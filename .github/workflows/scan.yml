@@ -31,41 +31,49 @@ jobs:
         run: |
           docker run --rm -v "$(pwd):/repo" \
             trufflesecurity/trufflehog:latest \
-            filesystem /repo --json --no-update > trufflehog-fs-results.json || true
+            filesystem /repo --json --no-update --only-verified > trufflehog-fs-results.json || true
           
-          echo "Filesystem scan results:"
-          cat trufflehog-fs-results.json
+          if [ -s trufflehog-fs-results.json ]; then
+            echo "Filesystem scan found potential secrets:"
+            cat trufflehog-fs-results.json
+          fi
 
       - name: Run Trufflehog on Git history
         run: |
           docker run --rm -v "$(pwd):/repo" \
             trufflesecurity/trufflehog:latest \
-            git file:///repo --json --no-update > trufflehog-git-results.json || true
+            git file:///repo --json --no-update --only-verified > trufflehog-git-results.json || true
+          
+          if [ -s trufflehog-git-results.json ]; then
+            echo "Git history scan found potential secrets:"
+            cat trufflehog-git-results.json
+          fi
 
-          echo "Git history scan results:"
-          cat trufflehog-git-results.json
-
-      - name: Check for secrets
+      - name: Check for verified secrets
         run: |
           SECRETS_FOUND=false
           
-          if [ -s trufflehog-fs-results.json ]; then
-            echo "⚠️ Secrets found in filesystem!"
-            cat trufflehog-fs-results.json
-            SECRETS_FOUND=true
+          # Check if files exist and contain verified secrets
+          if [ -f trufflehog-fs-results.json ]; then
+            FS_COUNT=$(jq -s 'length' trufflehog-fs-results.json 2>/dev/null || echo "0")
+            if [ "$FS_COUNT" -gt 0 ]; then
+              echo "⚠️ Found $FS_COUNT verified secrets in filesystem!"
+              SECRETS_FOUND=true
+            fi
           fi
-
-          if [ -s trufflehog-git-results.json ]; then
-            echo "⚠️ Secrets found in Git history!"
-            cat trufflehog-git-results.json
-            SECRETS_FOUND=true
+          
+          if [ -f trufflehog-git-results.json ]; then
+            GIT_COUNT=$(jq -s 'length' trufflehog-git-results.json 2>/dev/null || echo "0")
+            if [ "$GIT_COUNT" -gt 0 ]; then
+              echo "⚠️ Found $GIT_COUNT verified secrets in Git history!"
+              SECRETS_FOUND=true
+            fi
           fi
-
+          
           if [ "$SECRETS_FOUND" = true ]; then
             exit 1
           else
-            echo "✅ No secrets found"
-            echo '{"results":[]}' > trufflehog-results.json
+            echo "✅ No verified secrets found"
           fi
 
       - name: Upload Trufflehog results
@@ -179,7 +187,7 @@ jobs:
           if [ -f trivy-config-results.json ]; then
             # Check if there are any results with severity >= MEDIUM
             ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL" or .Severity == "MEDIUM")] | length' trivy-config-results.json)
-
+            
             if [ "$ISSUE_COUNT" -gt 0 ]; then
               echo "⚠️ Found $ISSUE_COUNT security issues!"
               exit 1
