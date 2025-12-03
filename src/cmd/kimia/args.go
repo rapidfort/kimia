@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rapidfort/kimia/internal/preflight"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -50,6 +51,10 @@ func parseArgs(args []string) *Config {
 		case "--version":
 			printVersion()
 			os.Exit(0)
+
+		case "check-environment":
+			exitCode := preflight.CheckEnvironment()
+			os.Exit(exitCode)
 
 		case "-f", "--dockerfile":
 			if value != "" {
