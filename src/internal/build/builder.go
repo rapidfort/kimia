@@ -291,7 +291,8 @@ func executeBuildah(config Config, ctx *Context) error {
 		}
 	}
 
-	logger.Info("Executing: buildah %s", strings.Join(args, " "))
+	// Log the command being executed
+	logger.Info("Executing: buildah %s", strings.Join(sanitizeCommandArgs(args), " "))
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildah build failed: %v", err)
@@ -576,11 +577,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if isGitContext {
 		// Use Git URL for BuildKit native Git support
 		// BuildKit requires Git URLs to be passed as --opt context=
-		logger.Debug("Using Git context: %s", buildContext)
+		logger.Debug("Using Git context: %s", logger.SanitizeGitURL(buildContext))
 		args = append(args, "--opt", fmt.Sprintf("context=%s", buildContext))
 		args = append(args, "--opt", fmt.Sprintf("dockerfile=%s", buildContext))
 	} else {
 		// Use local context
+		logger.Debug("Using local context: %s", buildContext)
 		args = append(args, "--local", fmt.Sprintf("context=%s", buildContext))
 		args = append(args, "--local", fmt.Sprintf("dockerfile=%s", buildContext))
 	}
@@ -755,7 +757,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// Log the command being executed
-	logger.Info("Executing: buildctl %s", strings.Join(args, " "))
+	logger.Info("Executing: buildctl %s", strings.Join(sanitizeCommandArgs(args), " "))
+
+	// BuildKit may log Git credentials in logs -- warn users accordingly
+	if isGitContext && strings.Contains(buildContext, "@") {
+		logger.Warning("BuildKit may expose Git credentials in build logs. Consider using SSH authentication instead of HTTPS tokens for better security.")
+	}
 
 	// Execute build
 	if err := cmd.Run(); err != nil {
@@ -1251,7 +1258,8 @@ func signImageWithCosign(image string, config Config) error {
 		}
 	}
 
-	logger.Debug("Executing: cosign %s", strings.Join(args, " "))
+	// Log the command being executed
+	logger.Debug("Executing: cosign %s", strings.Join(sanitizeCommandArgs(args), " "))
 
 	// Execute cosign
 	if err := cmd.Run(); err != nil {
@@ -1259,4 +1267,56 @@ func signImageWithCosign(image string, config Config) error {
 	}
 
 	return nil
+}
+
+// sanitizeCommandArgs removes credentials from Git URLs and sensitive build-args
+func sanitizeCommandArgs(args []string) []string {
+	// List of build-arg names that contain sensitive data
+	sensitiveArgs := []string{
+		"GIT_PASSWORD",
+		"GIT_TOKEN",
+		"PASSWORD",
+		"TOKEN",
+		"API_KEY",
+		"SECRET",
+		"CREDENTIALS",
+	}
+	
+	sanitized := make([]string, len(args))
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
+			// Handle --opt context=URL or --opt dockerfile=URL format
+			parts := strings.SplitN(arg, "=", 2)
+			if len(parts) == 2 {
+				sanitized[i] = parts[0] + "=" + logger.SanitizeGitURL(parts[1])
+			} else {
+				sanitized[i] = arg
+			}
+		} else if strings.HasPrefix(arg, "build-arg:") {
+			// Handle --opt build-arg:KEY=VALUE format
+			parts := strings.SplitN(arg, "=", 2)
+			if len(parts) == 2 {
+				argName := strings.TrimPrefix(parts[0], "build-arg:")
+				// Check if this is a sensitive build arg
+				isSensitive := false
+				for _, sensitive := range sensitiveArgs {
+					if strings.Contains(strings.ToUpper(argName), sensitive) {
+						isSensitive = true
+						break
+					}
+				}
+				if isSensitive {
+					sanitized[i] = parts[0] + "=***REDACTED***"
+				} else {
+					sanitized[i] = arg
+				}
+			} else {
+				sanitized[i] = arg
+			}
+		} else {
+			// For any other arg that might be a URL
+			sanitized[i] = logger.SanitizeGitURL(arg)
+		}
+	}
+	return sanitized
 }
