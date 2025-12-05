@@ -48,8 +48,8 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 
 	// Check if context is a git URL
 	if isGitURL(gitConfig.Context) {
-		logger.Info("Detected git repository context: %s", gitConfig.Context)
-		
+		logger.Info("Detected git repository context: %s", logger.SanitizeGitURL(gitConfig.Context))
+
 		// Normalize git:// URLs to https:// for known providers (GitHub, GitLab, etc)
 		normalizedURL := normalizeGitURL(gitConfig.Context)
 		
