@@ -3,6 +3,7 @@ package logger
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 )
 
@@ -76,4 +77,38 @@ func Fatal(format string, args ...interface{}) {
 	}
 	logFatal.Printf(format, args...)
 	os.Exit(1)
+}
+
+// SanitizeGitURL removes credentials from Git URLs for safe logging
+// Preserves username but redacts password/token
+func SanitizeGitURL(gitURL string) string {
+	u, err := url.Parse(gitURL)
+	if err != nil {
+		// Not a valid URL, return as-is (might be SSH or local path)
+		// return gitURL
+	}
+
+	// If there's user info (credentials), redact the password but keep username
+	if u.User != nil {
+ 		username := u.User.Username()
+		if _, hasPassword := u.User.Password(); hasPassword {
+		// Manually reconstruct URL to avoid encoding **REDACTED**
+		scheme := u.Scheme
+		host := u.Host
+		path := u.Path
+		fragment := ""
+		if u.Fragment != "" {
+		    fragment = "#" + u.Fragment
+		}
+		query := ""
+		if u.RawQuery != "" {
+		    query = "?" + u.RawQuery
+		}
+
+		return fmt.Sprintf("%s://%s:**REDACTED**@%s%s%s%s", 
+			scheme, username, host, path, query, fragment)
+		}
+	}
+
+	return u.String()
 }
