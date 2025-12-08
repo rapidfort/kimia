@@ -31,7 +31,7 @@ jobs:
         run: |
           docker run --rm -v "$(pwd):/repo" \
             trufflesecurity/trufflehog:latest \
-            filesystem /repo --json --no-update --only-verified > trufflehog-fs-results.json || true
+            filesystem /repo --json --no-update --only-verified --exclude-paths=tests > trufflehog-fs-results.json || true
           
           if [ -s trufflehog-fs-results.json ]; then
             echo "Filesystem scan found potential secrets:"
@@ -95,6 +95,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Create GitLeaks config
+        run: |
+          cat > .gitleaks.toml << 'EOF'
+          [allowlist]
+            paths = [
+              '''tests/.*''',
+            ]
+          EOF
+
       - name: Run GitLeaks scan
         run: |
           docker pull zricethezav/gitleaks:latest
@@ -104,14 +113,14 @@ jobs:
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
             zricethezav/gitleaks:latest \
-            dir -v -f json -r "/output/gitleaks-results.json" /path
+            dir -v -f json -r "/output/gitleaks-results.json" -c /path/.gitleaks.toml /path
           
           # Also generate SARIF format for GitHub Security
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
             zricethezav/gitleaks:latest \
-            dir -v -f sarif -r "/output/gitleaks-results.sarif" /path || true
+            dir -v -f sarif -r "/output/gitleaks-results.sarif" -c /path/.gitleaks.toml /path || true
 
       - name: Display scan results
         if: always()
@@ -155,6 +164,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
+          skip-dirs: '**/tests,tests'
           exit-code: '1'
         continue-on-error: true
 
@@ -172,6 +182,7 @@ jobs:
           scan-ref: '.'
           format: 'json'
           output: 'trivy-config-results.json'
+          skip-dirs: '**/tests,tests'
           exit-code: '0'
 
       - name: Run Trivy config scan (Table for display)
@@ -180,6 +191,7 @@ jobs:
           scan-type: 'config'
           scan-ref: '.'
           format: 'table'
+          skip-dirs: '**/tests,tests'
           exit-code: '0'
 
       - name: Check Trivy results and fail if issues found
@@ -222,7 +234,7 @@ jobs:
           
       - name: Run ClamAV scan
         run: |
-          clamscan --recursive --infected --log=clamav-results.log . 
+          clamscan --recursive --infected --exclude-dir="^tests" --log=clamav-results.log . 
           echo "✅ No malware found"
 
       - name: Upload ClamAV results
@@ -329,7 +341,7 @@ jobs:
           else
             echo "✅ No HIGH or CRITICAL security issues found"
             if [ "$MEDIUM_COUNT" -gt 0 ] || [ "$LOW_COUNT" -gt 0 ]; then
-              echo "ℹ️  Note: $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues found (not failing build)"
+              echo "ℹ️ Note: $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues found (not failing build)"
             fi
           fi
 

@@ -1,229 +1,250 @@
-name: Repository Security Scanners
+name: Container Image Security Scanners
 
 on:
-  push:
-    branches:
-      - '**'
-  pull_request:
-    branches:
-      - '**'
-  schedule:
-    # Run daily at 2 AM UTC
-    - cron: '0 2 * * *'
   workflow_dispatch:
+    inputs:
+      images:
+        description: 'Comma-separated list of images to scan'
+        required: false
+        default: 'ghcr.io/rapidfort/kimia:latest,ghcr.io/rapidfort/kimia-bud:latest'
+  schedule:
+    # Run daily at 3 AM UTC
+    - cron: '0 3 * * *'
 
 permissions:
   contents: read
   security-events: write
   actions: read
+  packages: read
+
+env:
+  IMAGES: 'ghcr.io/rapidfort/kimia:latest,ghcr.io/rapidfort/kimia-bud:latest'
 
 jobs:
-  trufflehog:
-    name: Trufflehog Secret Scan
+  prepare:
+    name: Prepare Image List
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Run Trufflehog on filesystem
+      - name: Set image matrix
+        id: set-matrix
         run: |
-          docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:latest \
-            filesystem /repo --json --no-update --only-verified --exclude-paths=tests > trufflehog-fs-results.json || true
-          
-          if [ -s trufflehog-fs-results.json ]; then
-            echo "Filesystem scan found potential secrets:"
-            cat trufflehog-fs-results.json
-          fi
+          IMAGES="${{ github.event.inputs.images || env.IMAGES }}"
+          echo "Images to scan: $IMAGES"
+          # Convert comma-separated list to JSON array
+          MATRIX=$(echo "$IMAGES" | jq -R -s -c 'split(",") | map(gsub("^\\s+|\\s+$";""))')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix: $MATRIX"
 
-      - name: Run Trufflehog on Git history
-        run: |
-          docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:latest \
-            git file:///repo --json --no-update --only-verified > trufflehog-git-results.json || true
-          
-          if [ -s trufflehog-git-results.json ]; then
-            echo "Git history scan found potential secrets:"
-            cat trufflehog-git-results.json
-          fi
-
-      - name: Check for verified secrets
-        run: |
-          SECRETS_FOUND=false
-          
-          # Check if files exist and contain verified secrets
-          if [ -f trufflehog-fs-results.json ]; then
-            FS_COUNT=$(jq -s 'length' trufflehog-fs-results.json 2>/dev/null || echo "0")
-            if [ "$FS_COUNT" -gt 0 ]; then
-              echo "⚠️ Found $FS_COUNT verified secrets in filesystem!"
-              SECRETS_FOUND=true
-            fi
-          fi
-          
-          if [ -f trufflehog-git-results.json ]; then
-            GIT_COUNT=$(jq -s 'length' trufflehog-git-results.json 2>/dev/null || echo "0")
-            if [ "$GIT_COUNT" -gt 0 ]; then
-              echo "⚠️ Found $GIT_COUNT verified secrets in Git history!"
-              SECRETS_FOUND=true
-            fi
-          fi
-          
-          if [ "$SECRETS_FOUND" = true ]; then
-            exit 1
-          else
-            echo "✅ No verified secrets found"
-          fi
-
-      - name: Upload Trufflehog results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trufflehog-results
-          path: |
-            trufflehog-fs-results.json
-            trufflehog-git-results.json
-          retention-days: 30
-
-  gitleaks:
-    name: GitLeaks Secret Scan
+  trivy-container:
+    name: Trivy Container Scan
+    needs: prepare
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Create GitLeaks config
+      - name: Sanitize image name for artifacts
+        id: sanitize
         run: |
-          cat > .gitleaks.toml << 'EOF'
-          [allowlist]
-            paths = [
-              '''tests/.*''',
-            ]
-          EOF
+          IMAGE="${{ matrix.image }}"
+          SANITIZED=$(echo "$IMAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          echo "sanitized=$SANITIZED" >> $GITHUB_OUTPUT
+          echo "Sanitized name: $SANITIZED"
 
-      - name: Run GitLeaks scan
-        run: |
-          docker pull zricethezav/gitleaks:latest
-          mkdir -p results
-          
-          docker run --rm \
-            --volume "$(pwd):/path" \
-            --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:latest \
-            dir -v -f json -r "/output/gitleaks-results.json" -c /path/.gitleaks.toml /path
-          
-          # Also generate SARIF format for GitHub Security
-          docker run --rm \
-            --volume "$(pwd):/path" \
-            --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:latest \
-            dir -v -f sarif -r "/output/gitleaks-results.sarif" -c /path/.gitleaks.toml /path || true
-
-      - name: Display scan results
-        if: always()
-        run: |
-          if [ -f results/gitleaks-results.json ]; then
-            echo "Gitleaks scan completed"
-            ls -lh results/gitleaks-results.json
-            cat results/gitleaks-results.json
-          else
-            echo "No results file found"
-          fi
-
-      - name: Upload GitLeaks results to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          sarif_file: 'results/gitleaks-results.sarif'
-          category: 'gitleaks'
-        continue-on-error: true
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload GitLeaks results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gitleaks-results
-          path: results/
-          retention-days: 30
+      - name: Pull image
+        run: docker pull ${{ matrix.image }}
 
-  trivy:
-    name: Trivy Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Run Trivy filesystem scan
+      - name: Run Trivy vulnerability scan
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
-          scan-ref: '.'
+          image-ref: ${{ matrix.image }}
           format: 'sarif'
-          output: 'trivy-results.sarif'
+          output: 'trivy-${{ steps.sanitize.outputs.sanitized }}.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
-          skip-dirs: '**/tests,tests'
-          exit-code: '1'
         continue-on-error: true
+
+      - name: Run Trivy JSON scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}
+          format: 'json'
+          output: 'trivy-${{ steps.sanitize.outputs.sanitized }}.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+        continue-on-error: true
+
+      - name: Display scan summary
+        if: always()
+        run: |
+          if [ -f "trivy-${{ steps.sanitize.outputs.sanitized }}.json" ]; then
+            echo "Trivy scan results for ${{ matrix.image }}:"
+            jq '.Results[]? | select(.Vulnerabilities != null) | {Target, Vulnerabilities: .Vulnerabilities | length}' "trivy-${{ steps.sanitize.outputs.sanitized }}.json" || true
+          fi
 
       - name: Upload Trivy results to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: 'trivy-results.sarif'
-          category: 'trivy-filesystem'
+          sarif_file: 'trivy-${{ steps.sanitize.outputs.sanitized }}.sarif'
+          category: 'trivy-container-${{ steps.sanitize.outputs.sanitized }}'
+        continue-on-error: true
 
-      - name: Run Trivy config scan (JSON)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '.'
-          format: 'json'
-          output: 'trivy-config-results.json'
-          skip-dirs: '**/tests,tests'
-          exit-code: '0'
-
-      - name: Run Trivy config scan (Table for display)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'config'
-          scan-ref: '.'
-          format: 'table'
-          skip-dirs: '**/tests,tests'
-          exit-code: '0'
-
-      - name: Check Trivy results and fail if issues found
-        run: |
-          if [ -f trivy-config-results.json ]; then
-            # Check if there are any results with severity >= MEDIUM
-            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL" or .Severity == "MEDIUM")] | length' trivy-config-results.json)
-            
-            if [ "$ISSUE_COUNT" -gt 0 ]; then
-              echo "⚠️ Found $ISSUE_COUNT security issues!"
-              exit 1
-            else
-              echo "✅ No critical security issues found"
-            fi
-          fi
-
-      - name: Upload Trivy filesystem results
+      - name: Upload Trivy results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: trivy-results
-          path: |
-            trivy-results.sarif
-            trivy-config-results.json
+          name: trivy-results-${{ steps.sanitize.outputs.sanitized }}
+          path: trivy-${{ steps.sanitize.outputs.sanitized }}.*
           retention-days: 30
 
-  clamav:
-    name: ClamAV Malware Scan
+  trufflehog-container:
+    name: Trufflehog Container Scan
+    needs: prepare
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Sanitize image name for artifacts
+        id: sanitize
+        run: |
+          IMAGE="${{ matrix.image }}"
+          SANITIZED=$(echo "$IMAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          echo "sanitized=$SANITIZED" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and extract image
+        run: |
+          docker pull ${{ matrix.image }}
+          mkdir -p image-extract
+          CONTAINER_ID=$(docker create ${{ matrix.image }})
+          docker export $CONTAINER_ID | tar -C image-extract -xf -
+          docker rm $CONTAINER_ID
+
+      - name: Run Trufflehog on extracted image
+        run: |
+          docker run --rm -v "$(pwd)/image-extract:/scan" \
+            trufflesecurity/trufflehog:latest \
+            filesystem /scan --json --no-update --only-verified > trufflehog-${{ steps.sanitize.outputs.sanitized }}.json || true
+          
+          if [ -s trufflehog-${{ steps.sanitize.outputs.sanitized }}.json ]; then
+            echo "⚠️ Verified secrets found in ${{ matrix.image }}!"
+            cat trufflehog-${{ steps.sanitize.outputs.sanitized }}.json
+          else
+            echo "✅ No verified secrets found in ${{ matrix.image }}"
+            echo '{"results":[]}' > trufflehog-${{ steps.sanitize.outputs.sanitized }}.json
+          fi
+
+      - name: Cleanup extraction
+        if: always()
+        run: rm -rf image-extract
+
+      - name: Upload Trufflehog results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trufflehog-results-${{ steps.sanitize.outputs.sanitized }}
+          path: trufflehog-${{ steps.sanitize.outputs.sanitized }}.json
+          retention-days: 30
+
+  gitleaks-container:
+    name: GitLeaks Container Scan
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Sanitize image name for artifacts
+        id: sanitize
+        run: |
+          IMAGE="${{ matrix.image }}"
+          SANITIZED=$(echo "$IMAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          echo "sanitized=$SANITIZED" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and extract image
+        run: |
+          docker pull ${{ matrix.image }}
+          docker pull zricethezav/gitleaks:latest
+          mkdir -p image-extract results
+
+      - name: Extract container filesystem
+        run: |
+          CONTAINER_ID=$(docker create ${{ matrix.image }})
+          docker export $CONTAINER_ID | tar -C image-extract -xf -
+          docker rm $CONTAINER_ID
+
+      - name: Run GitLeaks scan
+        run: |
+          docker run --rm \
+            --volume "$(pwd)/image-extract:/path" \
+            --volume "$(pwd)/results:/output" \
+            zricethezav/gitleaks:latest \
+            dir -v -f json -r "/output/gitleaks-${{ steps.sanitize.outputs.sanitized }}.json" /path || true
+          
+          if [ -f "results/gitleaks-${{ steps.sanitize.outputs.sanitized }}.json" ]; then
+            echo "GitLeaks scan completed for ${{ matrix.image }}"
+            cat "results/gitleaks-${{ steps.sanitize.outputs.sanitized }}.json"
+          fi
+
+      - name: Cleanup extraction
+        if: always()
+        run: rm -rf image-extract
+
+      - name: Upload GitLeaks results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-results-${{ steps.sanitize.outputs.sanitized }}
+          path: results/gitleaks-${{ steps.sanitize.outputs.sanitized }}.json
+          retention-days: 30
+
+  clamav-container:
+    name: ClamAV Container Scan
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Sanitize image name for artifacts
+        id: sanitize
+        run: |
+          IMAGE="${{ matrix.image }}"
+          SANITIZED=$(echo "$IMAGE" | sed 's/[^a-zA-Z0-9._-]/_/g')
+          echo "sanitized=$SANITIZED" >> $GITHUB_OUTPUT
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install ClamAV
         run: |
@@ -231,147 +252,61 @@ jobs:
           sudo apt-get install -y clamav
           sudo systemctl stop clamav-freshclam || true
           sudo freshclam
-          
+
+      - name: Pull and extract image
+        run: |
+          docker pull ${{ matrix.image }}
+          mkdir -p image-extract
+
+      - name: Extract container filesystem
+        run: |
+          CONTAINER_ID=$(docker create ${{ matrix.image }})
+          docker export $CONTAINER_ID | tar -C image-extract -xf -
+          docker rm $CONTAINER_ID
+
       - name: Run ClamAV scan
         run: |
-          clamscan --recursive --infected --exclude-dir="^tests" --log=clamav-results.log . 
-          echo "✅ No malware found"
+          clamscan --recursive --infected --log=clamav-${{ steps.sanitize.outputs.sanitized }}.log image-extract/ || true
+          
+          if [ -f clamav-${{ steps.sanitize.outputs.sanitized }}.log ]; then
+            echo "ClamAV scan completed for ${{ matrix.image }}"
+            cat clamav-${{ steps.sanitize.outputs.sanitized }}.log
+          else
+            echo "No malware found in ${{ matrix.image }}"
+            echo "Scan completed - no issues found" > clamav-${{ steps.sanitize.outputs.sanitized }}.log
+          fi
+
+      - name: Cleanup extraction
+        if: always()
+        run: rm -rf image-extract
 
       - name: Upload ClamAV results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: clamav-results
-          path: clamav-results.log
-          retention-days: 30
-
-  govulncheck:
-    name: Govulncheck Go Vulnerability Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'src/go.mod'
-          cache: false
-
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      - name: Run govulncheck
-        working-directory: src
-        run: |
-          set +e
-          govulncheck -json ./... > govulncheck-results.json 2>&1
-          EXIT_CODE=$?
-          govulncheck ./... | tee govulncheck-results.txt
-          
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "⚠️ Vulnerabilities found!"
-            exit 1
-          else
-            echo "✅ No vulnerabilities found"
-          fi
-
-      - name: Upload govulncheck results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: govulncheck-results
-          path: |
-            src/govulncheck-results.json
-            src/govulncheck-results.txt
-          retention-days: 30
-
-  gosec:
-    name: Gosec Go Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'src/go.mod'
-          cache: false
-
-      - name: Install Gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
-
-      - name: Run Gosec
-        working-directory: src
-        run: |
-          set +e
-          gosec -fmt json -out gosec-results.json ./...
-          gosec -fmt text -out gosec-results.txt ./...
-          
-          cat gosec-results.txt
-
-      - name: Check Gosec results and fail on HIGH/CRITICAL
-        working-directory: src
-        run: |
-          if [ ! -f gosec-results.json ]; then
-            echo "❌ No results file found"
-            exit 1
-          fi
-          
-          # Count HIGH and CRITICAL severity issues
-          HIGH_COUNT=$(jq '[.Issues[]? | select(.severity == "HIGH")] | length' gosec-results.json)
-          CRITICAL_COUNT=$(jq '[.Issues[]? | select(.severity == "CRITICAL")] | length' gosec-results.json)
-          MEDIUM_COUNT=$(jq '[.Issues[]? | select(.severity == "MEDIUM")] | length' gosec-results.json)
-          LOW_COUNT=$(jq '[.Issues[]? | select(.severity == "LOW")] | length' gosec-results.json)
-          TOTAL_COUNT=$(jq '[.Issues[]?] | length' gosec-results.json)
-          
-          echo "=== Gosec Results Summary ==="
-          echo "CRITICAL: $CRITICAL_COUNT"
-          echo "HIGH: $HIGH_COUNT"
-          echo "MEDIUM: $MEDIUM_COUNT"
-          echo "LOW: $LOW_COUNT"
-          echo "TOTAL: $TOTAL_COUNT"
-          echo "============================"
-          
-          # Fail only on HIGH or CRITICAL
-          if [ "$HIGH_COUNT" -gt 0 ] || [ "$CRITICAL_COUNT" -gt 0 ]; then
-            echo "❌ Found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL severity issues!"
-            exit 1
-          else
-            echo "✅ No HIGH or CRITICAL security issues found"
-            if [ "$MEDIUM_COUNT" -gt 0 ] || [ "$LOW_COUNT" -gt 0 ]; then
-              echo "ℹ️ Note: $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues found (not failing build)"
-            fi
-          fi
-
-      - name: Upload Gosec results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: gosec-results
-          path: |
-            src/gosec-results.json
-            src/gosec-results.txt
+          name: clamav-results-${{ steps.sanitize.outputs.sanitized }}
+          path: clamav-${{ steps.sanitize.outputs.sanitized }}.log
           retention-days: 30
 
   summary:
-    name: Security Scan Summary
+    name: Scan Summary
     runs-on: ubuntu-latest
-    needs: [trufflehog, gitleaks, trivy, clamav, govulncheck, gosec]
+    needs: [trivy-container, trufflehog-container, gitleaks-container, clamav-container]
     if: always()
     steps:
       - name: Generate summary
         run: |
-          echo "# Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "# Container Image Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Scanned images:" >> $GITHUB_STEP_SUMMARY
+          echo "- ghcr.io/rapidfort/kimia:latest" >> $GITHUB_STEP_SUMMARY
+          echo "- ghcr.io/rapidfort/kimia-bud:latest" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Trufflehog | ${{ needs.trufflehog.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| GitLeaks | ${{ needs.gitleaks.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Trivy | ${{ needs.trivy.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ClamAV | ${{ needs.clamav.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Govulncheck | ${{ needs.govulncheck.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Gosec | ${{ needs.gosec.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy-container.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trufflehog | ${{ needs.trufflehog-container.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitLeaks | ${{ needs.gitleaks-container.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ClamAV | ${{ needs.clamav-container.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "View detailed results in the job artifacts." >> $GITHUB_STEP_SUMMARY
