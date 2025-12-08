@@ -164,7 +164,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
-          skip-dirs: 'tests'
+          skip-dirs: '**/tests,tests'
           exit-code: '1'
         continue-on-error: true
 
@@ -182,7 +182,7 @@ jobs:
           scan-ref: '.'
           format: 'json'
           output: 'trivy-config-results.json'
-          skip-dirs: 'tests'
+          skip-dirs: '**/tests,tests'
           exit-code: '0'
 
       - name: Run Trivy config scan (Table for display)
@@ -191,7 +191,7 @@ jobs:
           scan-type: 'config'
           scan-ref: '.'
           format: 'table'
-          skip-dirs: 'tests'
+          skip-dirs: '**/tests,tests'
           exit-code: '0'
 
       - name: Check Trivy results and fail if issues found
