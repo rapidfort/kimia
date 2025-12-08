@@ -317,11 +317,69 @@ func expandEnvInURL(url string) string {
 	return expanded
 }
 
+// Validate branch name before using it
+func isValidGitRef(ref string) bool {
+	if ref == "" {
+		return false
+	}
+	
+	// Reject shell metacharacters explicitly
+	if strings.ContainsAny(ref, ";|&$`\n") {
+		return false
+	}
+	
+	// Git refs can't contain: space, ~, ^, :, ?, *, [, \, .., @{, //
+	invalidChars := []string{" ", "~", "^", ":", "?", "*", "[", "\\", "..", "@{", "//"}
+	for _, char := range invalidChars {
+		if strings.Contains(ref, char) {
+			return false
+		}
+	}
+	
+	// Must not start with . or /
+	if strings.HasPrefix(ref, ".") || strings.HasPrefix(ref, "/") {
+		return false
+	}
+	
+	// Must not end with .lock or /
+	if strings.HasSuffix(ref, ".lock") || strings.HasSuffix(ref, "/") {
+		return false
+	}
+	
+	return true
+}
+
+// isValidGitRevision validates a git commit hash or tag
+func isValidGitRevision(revision string) bool {
+	if revision == "" {
+		return false
+	}
+	
+	// Reject shell metacharacters
+	if strings.ContainsAny(revision, ";|&$`\n ") {
+		return false
+	}
+	
+	// Valid revisions are:
+	// - SHA-1 hashes (40 hex chars) or short hashes (7+ hex chars)
+	// - Tags (similar rules to branch names)
+	// - HEAD~N, HEAD^N notation (but be careful with these)
+	
+	// For safety, use same validation as branch names
+	return isValidGitRef(revision)
+}
+
 // checkoutGitBranch checks out a specific Git branch
 func checkoutGitBranch(repoDir, branch string) error {
+	// Validate branch name before using in commands
+	if !isValidGitRef(branch) {
+		return fmt.Errorf("invalid git branch name: %s", branch)
+	}
+	
 	logger.Info("Checking out branch: %s", branch)
 
 	// First, try to fetch the branch to ensure we have it
+	// #nosec G204 -- branch name validated above with isValidGitRef
 	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Dir = repoDir
 	fetchCmd.Stdout = os.Stdout
@@ -329,6 +387,7 @@ func checkoutGitBranch(repoDir, branch string) error {
 	fetchCmd.Run() // Ignore error, we'll check checkout result
 
 	// Now checkout the branch (might be remote tracking branch)
+	// #nosec G204 -- branch name validated above with isValidGitRef
 	cmd := exec.Command("git", "checkout", branch)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -337,6 +396,7 @@ func checkoutGitBranch(repoDir, branch string) error {
 	if err := cmd.Run(); err != nil {
 		logger.Debug("Direct checkout failed, trying remote tracking branch...")
 		// Try with explicit remote tracking branch
+		// #nosec G204 -- branch name validated above with isValidGitRef
 		cmd2 := exec.Command("git", "checkout", "-b", branch, "origin/"+branch)
 		cmd2.Dir = repoDir
 		cmd2.Stdout = os.Stdout
@@ -353,8 +413,14 @@ func checkoutGitBranch(repoDir, branch string) error {
 
 // checkoutGitRevision checks out a specific Git commit
 func checkoutGitRevision(repoDir, revision string) error {
+	// Validate revision format
+	if !isValidGitRevision(revision) {
+		return fmt.Errorf("invalid git revision: %s", revision)
+	}
+
 	logger.Info("Checking out revision: %s", revision)
 
+	// #nosec G204 -- revision validated above with isValidGitRevision
 	cmd := exec.Command("git", "checkout", revision)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -422,6 +488,13 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 
 // isRevisionOnBranch checks if a git revision is an ancestor of the specified branch
 func isRevisionOnBranch(repoPath, revision, branch string) bool {
+	// Validate inputs before using in command
+	if !isValidGitRevision(revision) || !isValidGitRef(branch) {
+		logger.Warning("Invalid revision or branch name for ancestor check")
+		return false
+	}
+	
+	// #nosec G204 -- revision and branch validated above
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", revision, branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
