@@ -95,6 +95,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Create GitLeaks config
+        run: |
+          cat > .gitleaks.toml << 'EOF'
+          [allowlist]
+            paths = [
+              '''tests/.*''',
+            ]
+          EOF
+
       - name: Run GitLeaks scan
         run: |
           docker pull zricethezav/gitleaks:latest
@@ -104,14 +113,14 @@ jobs:
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
             zricethezav/gitleaks:latest \
-            dir -v -f json -r "/output/gitleaks-results.json" --exclude-path="tests/**" /path
+            dir -v -f json -r "/output/gitleaks-results.json" -c /path/.gitleaks.toml /path
           
           # Also generate SARIF format for GitHub Security
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
             zricethezav/gitleaks:latest \
-            dir -v -f sarif -r "/output/gitleaks-results.sarif" --exclude-path="tests/**" /path || true
+            dir -v -f sarif -r "/output/gitleaks-results.sarif" -c /path/.gitleaks.toml /path || true
 
       - name: Display scan results
         if: always()
