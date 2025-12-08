@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/rapidfort/kimia/internal/security"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -215,7 +216,13 @@ func executeCredentialHelper(helper string, registry string) (string, error) {
 		return "", fmt.Errorf("credential helper not found: %s", helper)
 	}
 
+	// Validate credential helper
+	if err := security.ValidateCredentialHelper(helperExe); err != nil {
+		return "", fmt.Errorf("invalid credential helper: %v", err)  // FIX: Change nil to ""
+	}
+
 	// Execute the helper with "get" command
+	// #nosec G204 -- credential helper validated against allowlist above
 	cmd := exec.Command(helperExe, "get")
 	cmd.Stdin = strings.NewReader(registry)
 

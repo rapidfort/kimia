@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/internal/security"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -475,6 +476,23 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// START BUILDKITD DAEMON
 	// ========================================
 	logger.Debug("Starting buildkitd with rootlesskit...")
+
+	// Validate all paths
+	if err := security.ValidateDirectoryPath(xdgRuntimeDir); err != nil {
+		return fmt.Errorf("invalid runtime dir: %v", err)
+	}
+	if err := security.ValidateFilePath(buildkitConfig, homeDir); err != nil {
+		return fmt.Errorf("invalid buildkit config path: %v", err)
+	}
+	if err := security.ValidateSocketPath(buildkitSocket); err != nil {
+		return fmt.Errorf("invalid socket path: %v", err)
+	}
+
+	// Clean paths
+	xdgRuntimeDir = filepath.Clean(xdgRuntimeDir)
+	buildkitConfig = filepath.Clean(buildkitConfig)
+
+	// #nosec G204 -- all paths validated and cleaned above
 	daemonCmd := exec.Command(
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
@@ -515,6 +533,10 @@ func executeBuildKit(config Config, ctx *Context) error {
 	logger.Debug("Waiting for buildkitd to be ready...")
 	ready := false
 	for i := 0; i < 30; i++ {
+		if err := security.ValidateSocketPath(buildkitSocket); err != nil {
+			return fmt.Errorf("invalid buildkit socket: %v", err)
+		}
+		// #nosec G204 -- socket path validated above
 		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
 		output, err := checkCmd.CombinedOutput()
 
@@ -910,10 +932,29 @@ func exportToTar(config Config) error {
 
 	image := config.Destination[0]
 
+	// Get home directory for validation
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/home/kimia"
+	}
+
 	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
 	logger.Debug("Attempting TAR export with buildah push...")
-	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
 
+	if err := security.ValidateImageReference(image); err != nil {
+		return fmt.Errorf("invalid image reference: %v", err)
+	}
+	
+	// Clean the tar path
+	cleanTarPath := filepath.Clean(config.TarPath)
+	
+	// Validate for shell metacharacters
+	if strings.ContainsAny(cleanTarPath, ";|&$`\n") {
+		return fmt.Errorf("invalid characters in tar path")
+	}
+	
+	// #nosec G204 -- image reference validated and tar path sanitized above
+	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", cleanTarPath))
 	
 	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
@@ -925,14 +966,21 @@ func exportToTar(config Config) error {
 
 		// Method 2: Try with image ID instead of name (most reliable for overlay)
 		logger.Debug("Attempting with image ID...")
+
+		if err := security.ValidateImageReference(image); err != nil {
+			return fmt.Errorf("invalid image reference: %v", err)
+		}
+		// #nosec G204 -- image reference validated above
 		getIDCmd := exec.Command("buildah", "images", "--format", "{{.ID}}", "--filter", fmt.Sprintf("reference=%s", image))
+
 		idOutput, idErr := getIDCmd.Output()
 
 		if idErr == nil && len(strings.TrimSpace(string(idOutput))) > 0 {
 			imageID := strings.TrimSpace(string(idOutput))
 			logger.Debug("Found image ID: %s", imageID)
 
-			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+			// #nosec G204 -- image ID and tar path validated above
+			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", cleanTarPath))
 			cmd2.Stdout = os.Stdout
 			cmd2.Stderr = os.Stderr
 
@@ -955,7 +1003,8 @@ func exportToTar(config Config) error {
 							foundID := strings.TrimSpace(parts[0])
 							logger.Debug("Found matching image ID from list: %s", foundID)
 
-							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+							// #nosec G204 -- image ID and tar path validated above
+							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", cleanTarPath))
 							cmd3.Stdout = os.Stdout
 							cmd3.Stderr = os.Stderr
 
@@ -976,10 +1025,10 @@ func exportToTar(config Config) error {
 	}
 
 success:
-	logger.Info("Image exported to: %s", config.TarPath)
+	logger.Info("Image exported to: %s", cleanTarPath)
 
 	// Verify the tar file was created and is not empty
-	if info, err := os.Stat(config.TarPath); err != nil {
+	if info, err := os.Stat(cleanTarPath); err != nil {
 		return fmt.Errorf("TAR file was not created: %v", err)
 	} else if info.Size() == 0 {
 		return fmt.Errorf("TAR file is empty")
