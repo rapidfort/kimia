@@ -1276,8 +1276,24 @@ func contains(slice []string, item string) bool {
 func signImageWithCosign(image string, config Config) error {
 	logger.Debug("Signing image with cosign: %s", image)
 
+	// Validate image reference
+	if err := security.ValidateImageReference(image); err != nil {
+		return fmt.Errorf("invalid image reference: %v", err)
+	}
+
+	// Validate cosign key path
+	if config.CosignKeyPath == "" {
+		return fmt.Errorf("cosign key path is required")
+	}
+	
+	// Clean and validate the key path
+	cleanKeyPath := filepath.Clean(config.CosignKeyPath)
+	if strings.ContainsAny(cleanKeyPath, ";|&$`\n") {
+		return fmt.Errorf("invalid characters in cosign key path")
+	}
+
 	// Prepare cosign command
-	args := []string{"sign", "--key", config.CosignKeyPath}
+	args := []string{"sign", "--key", cleanKeyPath}
 
 	// Add insecure registry flag if needed
 	if config.Insecure || len(config.InsecureRegistry) > 0 {
@@ -1289,6 +1305,7 @@ func signImageWithCosign(image string, config Config) error {
 	args = append(args, image)
 
 	// Create the command
+	// #nosec G204 -- image reference and key path validated above
 	cmd := exec.Command("cosign", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
