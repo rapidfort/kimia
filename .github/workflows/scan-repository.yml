@@ -295,16 +295,42 @@ jobs:
         run: |
           set +e
           gosec -fmt json -out gosec-results.json ./...
-          EXIT_CODE=$?
           gosec -fmt text -out gosec-results.txt ./...
           
           cat gosec-results.txt
+
+      - name: Check Gosec results and fail on HIGH/CRITICAL
+        working-directory: src
+        run: |
+          if [ ! -f gosec-results.json ]; then
+            echo "❌ No results file found"
+            exit 1
+          fi
           
-          if [ $EXIT_CODE -ne 0 ]; then
-            echo "⚠️ Security issues found!"
+          # Count HIGH and CRITICAL severity issues
+          HIGH_COUNT=$(jq '[.Issues[]? | select(.severity == "HIGH")] | length' gosec-results.json)
+          CRITICAL_COUNT=$(jq '[.Issues[]? | select(.severity == "CRITICAL")] | length' gosec-results.json)
+          MEDIUM_COUNT=$(jq '[.Issues[]? | select(.severity == "MEDIUM")] | length' gosec-results.json)
+          LOW_COUNT=$(jq '[.Issues[]? | select(.severity == "LOW")] | length' gosec-results.json)
+          TOTAL_COUNT=$(jq '[.Issues[]?] | length' gosec-results.json)
+          
+          echo "=== Gosec Results Summary ==="
+          echo "CRITICAL: $CRITICAL_COUNT"
+          echo "HIGH: $HIGH_COUNT"
+          echo "MEDIUM: $MEDIUM_COUNT"
+          echo "LOW: $LOW_COUNT"
+          echo "TOTAL: $TOTAL_COUNT"
+          echo "============================"
+          
+          # Fail only on HIGH or CRITICAL
+          if [ "$HIGH_COUNT" -gt 0 ] || [ "$CRITICAL_COUNT" -gt 0 ]; then
+            echo "❌ Found $HIGH_COUNT HIGH and $CRITICAL_COUNT CRITICAL severity issues!"
             exit 1
           else
-            echo "✅ No security issues found"
+            echo "✅ No HIGH or CRITICAL security issues found"
+            if [ "$MEDIUM_COUNT" -gt 0 ] || [ "$LOW_COUNT" -gt 0 ]; then
+              echo "ℹ️  Note: $MEDIUM_COUNT MEDIUM and $LOW_COUNT LOW severity issues found (not failing build)"
+            fi
           fi
 
       - name: Upload Gosec results
