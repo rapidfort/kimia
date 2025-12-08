@@ -1,9 +1,10 @@
 #!/bin/bash
-docker login
+source test-env.sh
+echo $DOCKER_REGISTRY
+echo ${DOCKER_REGISTRY_PASSWORD} | docker login ${DOCKER_REGISTRY} -u ${DOCKER_REGISTRY_USERNAME} --password-stdin
 docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
-  ghcr.io/rapidfort/kimia:latest \
+  ${KIMIA_BUILDKIT_IMAGE} \
   --context=git://github.com/alpinelinux/docker-alpine.git \
   --dockerfile=Dockerfile \
-  --destination=10.228.96.114:5000/my-alpine \
+  --destination=${DESTINATION_REPO}/alpine:${IMAGE_TAG} \
   --no-push
- > kimia-bud_alpine.log 2>&1

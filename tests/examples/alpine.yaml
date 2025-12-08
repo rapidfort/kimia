@@ -14,9 +14,10 @@ spec:
         fsGroup: 1000
       containers:
       - name: kimia
-        image: ghcr.io/rapidfort/kimia-bud:1.0.20
+        image: ghcr.io/rapidfort/kimia-bud:1.0.21
         imagePullPolicy: Always
         args:
+          - --version
           - --context=git://github.com/alpinelinux/docker-alpine.git
           - --context-sub-path=""
           - --dockerfile=Dockerfile

@@ -1,9 +1,11 @@
 #!/bin/bash
-docker login
-docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined ghcr.io/rapidfort/kimia:latest \
+source test-env.sh
+echo ${DOCKER_REGISTRY_PASSWORD} | docker login ${DOCKER_REGISTRY} -u ${DOCKER_REGISTRY_USERNAME} --password-stdin
+docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+  ${KIMIA_BUILDKIT_IMAGE} \
   --context=https://github.com/odoo/docker.git \
   --context-sub-path=19.0 \
   --dockerfile=Dockerfile \
-  --destination=odoo \
+  --destination=${DESTINATION_REPO}/odoo:${IMAGE_TAG} \
   --no-push \
   -v
