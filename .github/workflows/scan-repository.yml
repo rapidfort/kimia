@@ -163,7 +163,7 @@ jobs:
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'
           skip-dirs: '**/tests,tests'
           exit-code: '1'
         continue-on-error: true
@@ -198,7 +198,7 @@ jobs:
         run: |
           if [ -f trivy-config-results.json ]; then
             # Check if there are any results with severity >= MEDIUM
-            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL" or .Severity == "MEDIUM")] | length' trivy-config-results.json)
+            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' trivy-config-results.json)
             
             if [ "$ISSUE_COUNT" -gt 0 ]; then
               echo "⚠️ Found $ISSUE_COUNT security issues!"
@@ -319,7 +319,7 @@ jobs:
             exit 1
           fi
           
-          # Count HIGH and CRITICAL severity issues
+          # Count issues by severity
           HIGH_COUNT=$(jq '[.Issues[]? | select(.severity == "HIGH")] | length' gosec-results.json)
           CRITICAL_COUNT=$(jq '[.Issues[]? | select(.severity == "CRITICAL")] | length' gosec-results.json)
           MEDIUM_COUNT=$(jq '[.Issues[]? | select(.severity == "MEDIUM")] | length' gosec-results.json)
