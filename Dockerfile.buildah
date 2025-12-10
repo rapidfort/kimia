@@ -54,7 +54,9 @@ RUN apk update && apk add gnutls
 
 # Install runtime dependencies for Buildah
 RUN apk add --no-cache \
+    aardvark-dns \
     bash \
+    buildah && \
     ca-certificates \
     crun \
     curl \
@@ -63,17 +65,15 @@ RUN apk add --no-cache \
     gpgme \
     iptables \
     ip6tables \
+    jq \
     libseccomp \
+    netavark \
     ostree \
     shadow \
     shadow-uidmap \
     slirp4netns \
-    netavark \
-    aardvark-dns \
-    xz \
-    jq \
-    buildah && \
     update-ca-certificates && \
+    xz \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
 # Copy kimia binary from builder stage
