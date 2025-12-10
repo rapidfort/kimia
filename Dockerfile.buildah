@@ -110,15 +110,30 @@ COPY configs/buildah/containers.conf /home/${KIMIA_USER}/.config/containers/cont
 # =============================================================================
 
 # AWS ECR credential helper
-RUN ECR_VERSION=$(curl -s https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+RUN ECR_VERSION=$(curl -fsSL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fsSL "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" \
-    -o /usr/local/bin/docker-credential-ecr-login && \
-    chmod +x /usr/local/bin/docker-credential-ecr-login
+    # Define file names and URLs
+    BINARY_NAME="docker-credential-ecr-login" && \
+    CHECKSUM_NAME="${BINARY_NAME}.sha256" && \
+    DOWNLOAD_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}" && \
+    \
+    # Download binary and checksum to current directory
+    curl -fsSL -O "${DOWNLOAD_URL}/${BINARY_NAME}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${CHECKSUM_NAME}" && \
+    \
+    # Verify Integrity directly using the provided file
+    sha256sum -c "${CHECKSUM_NAME}" && \
+    \
+    # Install
+    mv "${BINARY_NAME}" /usr/local/bin/docker-credential-ecr-login && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login && \
+    \
+    # Cleanup
+    rm "${CHECKSUM_NAME}"
 
 # Google GCR/GAR credential helper
 RUN GCR_VERSION=$(curl -fsSL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
