@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -41,11 +42,12 @@ func main() {
 	logger.Info("Kimia - Kubernetes-Native OCI Image Builder v%s", Version)
 	logger.Debug("Build Date: %s, Commit: %s, Branch: %s", BuildDate, CommitSHA, Branch)
 
+	// TODO
 	// Validate storage driver only if specified
-	// BuildKit supports: native, overlay
+	// BuildKit supports: native, overlay, fuse-overlayfs
 	// Buildah supports: vfs, overlay
 	if config.StorageDriver != "" {
-		validDrivers := []string{"vfs", "overlay", "native"}
+		validDrivers := []string{"vfs", "overlay", "fuse-overlayfs", "native"}
 		storageDriver := strings.ToLower(config.StorageDriver)
 		isValid := false
 		for _, driver := range validDrivers {
@@ -56,20 +58,28 @@ func main() {
 		}
 		if !isValid {
 			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
-			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
+			fmt.Fprintf(os.Stderr, "Valid options:\n")
+			fmt.Fprintf(os.Stderr, "  BuildKit: native, overlay, fuse-overlayfs\n")
+			fmt.Fprintf(os.Stderr, "  Buildah:  vfs, overlay\n\n")
 			os.Exit(1)
 		}
 
 		// Log storage driver selection
 		logger.Info("Using storage driver: %s", storageDriver)
-		if storageDriver == "overlay" {
-			logger.Info("Note: Overlay driver requires additional capabilities")
-		}
-		if storageDriver == "vfs" {
-			logger.Info("Note: VFS storage (Buildah only)")
-		}
-		if storageDriver == "native" {
-			logger.Info("Note: Native snapshotter (BuildKit only)")
+		
+		switch storageDriver {
+		case "overlay":
+			logger.Info("Note: Overlay driver requires kernel 5.11+ and overlay filesystem support")
+		case "fuse-overlayfs":
+			logger.Info("Note: FUSE-overlayfs driver (recommended for rootless/Kubernetes environments)")
+			// Check if fuse-overlayfs is available
+			if _, err := exec.LookPath("fuse-overlayfs"); err != nil {
+				logger.Warning("fuse-overlayfs binary not found. Install with: apk add fuse-overlayfs")
+			}
+		case "vfs":
+			logger.Info("Note: VFS storage (Buildah only, slower but most compatible)")
+		case "native":
+			logger.Info("Note: Native snapshotter (BuildKit only, compatible but slower than overlay)")
 		}
 	}
 

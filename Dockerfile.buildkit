@@ -137,7 +137,9 @@ RUN apk add --no-cache \
     shadow \
     shadow-uidmap \
     crun \
-    git
+    git \
+    fuse-overlayfs \
+    fuse3
 
 # Copy dependencies
 COPY --from=kimia-deps /deps/bin /usr/local/bin

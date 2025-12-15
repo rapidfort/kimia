@@ -428,7 +428,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else {
 		logger.Info("No storage driver specified, using default: native (VFS-like)")
 	}
-	
+
 	// CRITICAL: Clean buildkit state if changing snapshotter
 	// BuildKit caches the snapshotter choice in its state directory
 	buildkitStateDir := filepath.Join(xdgRuntimeDir, "rk-buildkit")
