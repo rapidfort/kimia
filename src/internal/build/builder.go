@@ -314,6 +314,24 @@ func executeBuildah(config Config, ctx *Context) error {
 	return nil
 }
 
+// mapStorageDriverToSnapshotter maps Buildah storage driver names to BuildKit snapshotter names
+func mapStorageDriverToSnapshotter(driver string) string {
+	switch strings.ToLower(driver) {
+	case "overlay":
+		return "overlayfs"
+	case "vfs":
+		return "native"
+	case "fuse-overlayfs":
+		return "fuse-overlayfs"
+	case "stargz":
+		return "stargz"
+	default:
+		// Pass through as-is for any other values
+		logger.Debug("Unknown storage driver '%s', passing through to BuildKit", driver)
+		return driver
+	}
+}
+
 func executeBuildKit(config Config, ctx *Context) error {
 	logger.Info("Starting BuildKit build...")
 
@@ -395,6 +413,161 @@ func executeBuildKit(config Config, ctx *Context) error {
 			logger.Debug("Using copied context at: %s", buildContext)
 		} else {
 			logger.Debug("Using original context at: %s", buildContext)
+		}
+	}
+
+	// ========================================
+	// STORAGE DRIVER CONFIGURATION
+	// ========================================
+	// Determine storage driver - default to native (VFS) for compatibility if not specified
+	storageDriver := "native" // Default to native for better compatibility
+	if config.StorageDriver != "" {
+		storageDriver = mapStorageDriverToSnapshotter(config.StorageDriver)
+		logger.Info("Configuring BuildKit storage driver: %s (snapshotter: %s)", 
+			config.StorageDriver, storageDriver)
+	} else {
+		logger.Info("No storage driver specified, using default: native (VFS-like)")
+	}
+	
+	// CRITICAL: Clean buildkit state if changing snapshotter
+	// BuildKit caches the snapshotter choice in its state directory
+	buildkitStateDir := filepath.Join(xdgRuntimeDir, "rk-buildkit")
+	buildkitDataDir := filepath.Join(homeDir, ".local/share/buildkit")
+	
+	// Check if we need to clean state (if snapshotter is changing)
+	stateNeedsClean := false
+	stateMarkerFile := filepath.Join(buildkitStateDir, ".snapshotter")
+	if data, err := os.ReadFile(stateMarkerFile); err == nil {
+		previousSnapshotter := strings.TrimSpace(string(data))
+		if previousSnapshotter != storageDriver {
+			logger.Warning("Snapshotter changed from %s to %s, cleaning BuildKit state...", previousSnapshotter, storageDriver)
+			stateNeedsClean = true
+		}
+	} else {
+		// First run or marker doesn't exist
+		stateNeedsClean = true
+	}
+	
+	if stateNeedsClean {
+		// Remove old state directories
+		if err := os.RemoveAll(buildkitStateDir); err != nil {
+			logger.Debug("Failed to remove buildkit state dir (may not exist): %v", err)
+		}
+		if err := os.RemoveAll(buildkitDataDir); err != nil {
+			logger.Debug("Failed to remove buildkit data dir (may not exist): %v", err)
+		}
+		
+		// Recreate state directory and write marker
+		if err := os.MkdirAll(buildkitStateDir, 0755); err != nil {
+			return fmt.Errorf("failed to create buildkit state directory: %v", err)
+		}
+		if err := os.WriteFile(stateMarkerFile, []byte(storageDriver), 0644); err != nil {
+			logger.Warning("Failed to write snapshotter marker: %v", err)
+		}
+		
+		logger.Info("BuildKit state cleaned for snapshotter: %s", storageDriver)
+	}
+	
+	// Read existing config
+	var existingConfig string
+	if data, err := os.ReadFile(buildkitConfig); err == nil {
+		existingConfig = string(data)
+		logger.Debug("Read existing buildkit config from: %s", buildkitConfig)
+	} else {
+		// Fallback: match what's in Dockerfile
+		existingConfig = `[worker.oci]
+  enabled = true
+  rootless = true
+  binary = "crun"
+  noProcessSandbox = true
+`
+		logger.Debug("Config file not found, using default (matches Dockerfile)")
+		
+		// Create config directory if it doesn't exist
+		configDir := filepath.Dir(buildkitConfig)
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return fmt.Errorf("failed to create buildkit config directory: %v", err)
+		}
+	}
+	
+	configContent := existingConfig
+	configModified := false
+	
+	// Check if snapshotter is already configured with the desired value
+	snapshotterLine := fmt.Sprintf(`snapshotter = "%s"`, storageDriver)
+	if strings.Contains(existingConfig, snapshotterLine) {
+		logger.Debug("Storage driver already configured correctly in buildkit config")
+	} else {
+		// Check if there's a different snapshotter configured
+		if strings.Contains(existingConfig, "snapshotter = ") {
+			// Replace existing snapshotter configuration
+			lines := strings.Split(existingConfig, "\n")
+			var newLines []string
+			for _, line := range lines {
+				if strings.Contains(line, "snapshotter = ") {
+					// Replace with new snapshotter
+					indent := strings.Repeat(" ", len(line)-len(strings.TrimLeft(line, " \t")))
+					newLines = append(newLines, fmt.Sprintf(`%ssnapshotter = "%s"`, indent, storageDriver))
+					logger.Info("Replaced existing snapshotter configuration")
+					configModified = true
+				} else {
+					newLines = append(newLines, line)
+				}
+			}
+			configContent = strings.Join(newLines, "\n")
+		} else if strings.Contains(existingConfig, "[worker.oci]") {
+			// Add snapshotter to existing [worker.oci] section
+			lines := strings.Split(existingConfig, "\n")
+			var newLines []string
+			for i, line := range lines {
+				newLines = append(newLines, line)
+				if strings.Contains(line, "[worker.oci]") {
+					// Determine indentation from next line
+					indent := "  " // Default 2 spaces
+					if i+1 < len(lines) {
+						nextLine := lines[i+1]
+						if len(nextLine) > 0 {
+							indent = strings.Repeat(" ", len(nextLine)-len(strings.TrimLeft(nextLine, " \t")))
+						}
+					}
+					// Add snapshotter as the first item in the section
+					newLines = append(newLines, fmt.Sprintf(`%ssnapshotter = "%s"`, indent, storageDriver))
+					logger.Info("Added snapshotter configuration to [worker.oci]")
+					configModified = true
+				}
+			}
+			configContent = strings.Join(newLines, "\n")
+		} else {
+			// No [worker.oci] section exists, add complete section
+			configContent += fmt.Sprintf(`
+
+[worker.oci]
+  snapshotter = "%s"
+  enabled = true
+  rootless = true
+  binary = "crun"
+  noProcessSandbox = true
+`, storageDriver)
+			logger.Info("Added [worker.oci] section with snapshotter configuration")
+			configModified = true
+		}
+		
+		logger.Info("Configured BuildKit to use %s snapshotter", storageDriver)
+	}
+	
+	// Write updated config if modified (or always write to ensure it's correct)
+	if configModified || !strings.Contains(existingConfig, snapshotterLine) {
+		if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+			return fmt.Errorf("failed to write buildkit config: %v", err)
+		}
+		logger.Debug("Updated buildkit config written to: %s", buildkitConfig)
+		
+		// Log the final config for debugging
+		logger.Debug("Final buildkit config:")
+		for _, line := range strings.Split(configContent, "\n") {
+			if line != "" {
+				logger.Debug("  %s", line)
+			}
 		}
 	}
 
