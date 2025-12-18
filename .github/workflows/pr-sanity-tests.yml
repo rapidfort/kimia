@@ -1,0 +1,113 @@
+name: Sanity Tests
+
+on:
+  # Run on pull requests
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+  
+  # Allow manual trigger from any branch
+  workflow_dispatch:
+    inputs:
+      log_level:
+        description: 'Log level for test output'
+        required: false
+        default: 'info'
+        type: choice
+        options:
+          - debug
+          - info
+          - warning
+
+jobs:
+  sanity-tests:
+    name: Run Sanity Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up environment
+        run: |
+          echo "Running sanity tests on branch: ${{ github.ref_name }}"
+          echo "Triggered by: ${{ github.event_name }}"
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Manual trigger - Log level: ${{ inputs.log_level }}"
+          fi
+      
+      # Add your test setup here
+      # Example: Set up Python, Go, Node.js, etc.
+      # - name: Set up Python
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.11'
+      
+      # - name: Install dependencies
+      #   run: |
+      #     pip install -r requirements.txt
+      
+      - name: Run sanity tests
+        run: |
+          echo "==================================="
+          echo "Running Sanity Tests"
+          echo "==================================="
+          
+          # TODO: Add your sanity test commands here
+          # Examples:
+          # - Basic syntax/lint checks
+          # - Quick unit tests
+          # - Container build validation
+          # - Configuration validation
+          
+          # Placeholder for actual tests
+          echo "✓ Placeholder: Add your sanity tests here"
+          
+          # Example test structure:
+          # make sanity-test
+          # or
+          # ./scripts/run-sanity-tests.sh
+          # or
+          # pytest tests/sanity/
+      
+      - name: Test summary
+        if: always()
+        run: |
+          echo "==================================="
+          echo "Sanity Tests Complete"
+          echo "==================================="
+          if [ $? -eq 0 ]; then
+            echo "✓ All sanity tests passed"
+          else
+            echo "✗ Some sanity tests failed"
+            exit 1
+          fi
+      
+      # Optional: Upload test results
+      # - name: Upload test results
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: sanity-test-results
+      #     path: test-results/
+      #     retention-days: 30
+
+  # Optional: Add a check status that can be used as a required check
+  sanity-tests-status:
+    name: Sanity Tests Status
+    runs-on: ubuntu-latest
+    needs: sanity-tests
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.sanity-tests.result }}" == "success" ]; then
+            echo "✓ Sanity tests passed"
+            exit 0
+          else
+            echo "✗ Sanity tests failed"
+            exit 1
+          fi
