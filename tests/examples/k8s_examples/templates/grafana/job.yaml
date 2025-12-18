@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-grafana-build
+  labels:
+    image: grafana
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
+        args:
+          - --context=https://github.com/grafana/grafana.git
+          - --dockerfile=Dockerfile
+          - --destination=REGISTRY_PLACEHOLDER
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

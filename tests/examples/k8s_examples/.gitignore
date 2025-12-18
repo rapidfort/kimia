@@ -1,0 +1,6 @@
+# User-specific configuration (contains credentials)
+user-config.yaml
+
+# Temporary files
+*.tmp
+.kustomize/

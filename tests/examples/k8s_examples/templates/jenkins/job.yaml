@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-jenkins-build
+  labels:
+    image: jenkins
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-jenkins-build
+        imagePullPolicy: Always
+        image: ghcr.io/rapidfort/kimia:latest
+        args:
+          - --context=https://github.com/jenkinsci/docker.git
+          - --dockerfile=debian/trixie/hotspot/Dockerfile
+          - --destination=jenkins
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-kimia-build
+  labels:
+    image: kimia
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-kimia-build
+        image: ghcr.io/rapidfort/kimia-bud:latest
+        imagePullPolicy: Always
+        args:
+          - --context=https://github.com/rapidfort/kimia.git
+          - --dockerfile=Dockerfile.buildkit
+          - --destination=harbor.rfinnovate.rapidfort.io/kimia-e2e/kimia
+          - -v=debug
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

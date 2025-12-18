@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-elasticsearch-build
+  labels:
+    image: elasticsearch
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-elasticsearch-build
+        image: ghcr.io/rapidfort/kimia-bud:latest
+        args:
+          - --context=https://github.com/elastic/dockerfiles.git
+          - --context-sub-path=elasticsearch
+          - --dockerfile=Dockerfile
+          - --destination=elasticsearch
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

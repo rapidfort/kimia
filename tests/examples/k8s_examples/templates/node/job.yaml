@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-node-build
+  labels:
+    image: node  
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-node-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
+        args:
+          - --context=https://github.com/nodejs/docker-node.git
+          - --dockerfile=24/bullseye/Dockerfile
+          - --destination=10.228.96.114:5000/kimia-test:node
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

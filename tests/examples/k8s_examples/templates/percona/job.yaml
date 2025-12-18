@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-percona-build
+  labels:
+    image: percona
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-percona-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
+        args:
+          - --context=https://github.com/percona/percona-xtradb-cluster-operator.git
+          - --dockerfile=build/Dockerfile
+          - --destination=percona-xtradb-cluster-operator
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

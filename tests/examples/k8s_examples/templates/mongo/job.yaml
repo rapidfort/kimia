@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-mongo-build
+  labels:
+    image: mongo
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-mongo-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
+        args:
+          - --context=https://github.com/docker-library/mongo.git
+          - --context-sub-path=8.0
+          - --dockerfile=Dockerfile
+          - --destination=<repo>:mongo
+          - -v
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

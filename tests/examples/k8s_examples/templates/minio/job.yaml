@@ -1,0 +1,30 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-minio-build
+  labels:
+    image: minio
+spec:
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-minio-build
+        image: ghcr.io/rapidfort/kimia:latest
+        args:
+          - --context=https://github.com/minio/minio.git
+          - --git-branch=master
+          - --dockerfile=Dockerfile.release
+          - --destination=ghcr.io/rapidfort/community/minio
+          - --build-arg=TARGETARCH=amd64
+          - --build-arg=RELEASE=RELEASE.2025-09-07T16-13-09Z
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]
