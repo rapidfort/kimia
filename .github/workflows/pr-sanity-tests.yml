@@ -1,4 +1,4 @@
-name: Sanity Tests
+name: Pull Request Sanity Tests
 
 on:
   # Run on pull requests
