@@ -13,6 +13,13 @@ var (
 	logWarn  *log.Logger
 	logError *log.Logger
 	logFatal *log.Logger
+
+	// exitFunc is a variable that can be replaced in tests
+	// In production, it calls os.Exit(1)
+	// In tests, it can be replaced with a panic or no-op
+	exitFunc = func(code int) {
+		os.Exit(code)
+	}
 )
 
 func Setup(verbosity string, timestamp bool) {
@@ -72,8 +79,23 @@ func Error(format string, args ...interface{}) {
 func Fatal(format string, args ...interface{}) {
 	if logFatal == nil {
 		fmt.Fprintf(os.Stderr, "[FATAL] "+format+"\n", args...)
-		os.Exit(1)
+		exitFunc(1)
+		return
 	}
 	logFatal.Printf(format, args...)
-	os.Exit(1)
+	exitFunc(1)
+}
+
+// SetExitFunc allows tests to override the exit behavior
+// This is only used for testing
+func SetExitFunc(fn func(int)) {
+	exitFunc = fn
+}
+
+// ResetExitFunc restores the default exit behavior
+// This is only used for testing
+func ResetExitFunc() {
+	exitFunc = func(code int) {
+		os.Exit(code)
+	}
 }
