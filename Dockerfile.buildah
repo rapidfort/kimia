@@ -56,7 +56,7 @@ RUN apk update && apk add gnutls
 RUN apk add --no-cache \
     aardvark-dns \
     bash \
-    buildah && \
+    buildah \
     ca-certificates \
     crun \
     curl \
@@ -72,8 +72,8 @@ RUN apk add --no-cache \
     shadow \
     shadow-uidmap \
     slirp4netns \
+    xz && \
     update-ca-certificates && \
-    xz \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
 # Copy kimia binary from builder stage
