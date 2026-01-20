@@ -101,20 +101,6 @@ func ResetExitFunc() {
 	}
 }
 
-// SetExitFunc allows tests to override the exit behavior
-// This is only used for testing
-func SetExitFunc(fn func(int)) {
-	exitFunc = fn
-}
-
-// ResetExitFunc restores the default exit behavior
-// This is only used for testing
-func ResetExitFunc() {
-	exitFunc = func(code int) {
-		os.Exit(code)
-	}
-}
-
 // SanitizeGitURL removes credentials from Git URLs for safe logging
 // Preserves username but redacts password/token
 func SanitizeGitURL(gitURL string) string {
