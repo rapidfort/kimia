@@ -101,6 +101,20 @@ func ResetExitFunc() {
 	}
 }
 
+// SetExitFunc allows tests to override the exit behavior
+// This is only used for testing
+func SetExitFunc(fn func(int)) {
+	exitFunc = fn
+}
+
+// ResetExitFunc restores the default exit behavior
+// This is only used for testing
+func ResetExitFunc() {
+	exitFunc = func(code int) {
+		os.Exit(code)
+	}
+}
+
 // SanitizeGitURL removes credentials from Git URLs for safe logging
 // Preserves username but redacts password/token
 func SanitizeGitURL(gitURL string) string {
@@ -112,23 +126,23 @@ func SanitizeGitURL(gitURL string) string {
 
 	// If there's user info (credentials), redact the password but keep username
 	if u.User != nil {
- 		username := u.User.Username()
+		username := u.User.Username()
 		if _, hasPassword := u.User.Password(); hasPassword {
-		// Manually reconstruct URL to avoid encoding **REDACTED**
-		scheme := u.Scheme
-		host := u.Host
-		path := u.Path
-		fragment := ""
-		if u.Fragment != "" {
-		    fragment = "#" + u.Fragment
-		}
-		query := ""
-		if u.RawQuery != "" {
-		    query = "?" + u.RawQuery
-		}
+			// Manually reconstruct URL to avoid encoding **REDACTED**
+			scheme := u.Scheme
+			host := u.Host
+			path := u.Path
+			fragment := ""
+			if u.Fragment != "" {
+				fragment = "#" + u.Fragment
+			}
+			query := ""
+			if u.RawQuery != "" {
+				query = "?" + u.RawQuery
+			}
 
-		return fmt.Sprintf("%s://%s:**REDACTED**@%s%s%s%s", 
-			scheme, username, host, path, query, fragment)
+			return fmt.Sprintf("%s://%s:**REDACTED**@%s%s%s%s",
+				scheme, username, host, path, query, fragment)
 		}
 	}
 
