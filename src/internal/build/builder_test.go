@@ -1582,9 +1582,9 @@ func TestSaveDigestInfo(t *testing.T) {
 
 func TestBuildAttestationOptsFromSimpleMode(t *testing.T) {
 	tests := []struct {
-		name     string
-		mode     string
-		wantOpts []string
+		name      string
+		mode      string
+		wantOpts  []string
 		wantFatal bool
 	}{
 		{
@@ -1948,9 +1948,9 @@ func BenchmarkSanitizeCommandArgs(b *testing.B) {
 
 func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 	tests := []struct {
-		name        string
-		configs     []AttestationConfig
-		wantOpts    []string
+		name          string
+		configs       []AttestationConfig
+		wantOpts      []string
 		wantBuildArgs int // Number of build args added
 	}{
 		{
@@ -1961,7 +1961,7 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					Params: map[string]string{},
 				},
 			},
-			wantOpts: []string{"attest:sbom=true"},
+			wantOpts:      []string{"attest:sbom=true"},
 			wantBuildArgs: 0,
 		},
 		{
@@ -1974,7 +1974,7 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantOpts: []string{"attest:provenance=mode=max"},
+			wantOpts:      []string{"attest:provenance=mode=max"},
 			wantBuildArgs: 0,
 		},
 		{
@@ -1987,7 +1987,7 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantOpts: []string{"attest:sbom=true"},
+			wantOpts:      []string{"attest:sbom=true"},
 			wantBuildArgs: 1, // Should add BUILDKIT_SBOM_SCAN_CONTEXT
 		},
 		{
@@ -2000,7 +2000,7 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantOpts: []string{"attest:sbom=true"},
+			wantOpts:      []string{"attest:sbom=true"},
 			wantBuildArgs: 1, // Should add BUILDKIT_SBOM_SCAN_STAGE
 		},
 		{
@@ -2010,11 +2010,11 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					Type: "sbom",
 					Params: map[string]string{
 						"scan-context": "true",
-						"scan-stage": "true",
+						"scan-stage":   "true",
 					},
 				},
 			},
-			wantOpts: []string{"attest:sbom=true"},
+			wantOpts:      []string{"attest:sbom=true"},
 			wantBuildArgs: 2, // Should add both build args
 		},
 		{
@@ -2031,7 +2031,7 @@ func TestBuildAttestationOptsFromConfigs(t *testing.T) {
 					},
 				},
 			},
-			wantOpts: []string{"attest:sbom=true", "attest:provenance=mode=min"},
+			wantOpts:      []string{"attest:sbom=true", "attest:provenance=mode=min"},
 			wantBuildArgs: 0,
 		},
 	}
@@ -2412,7 +2412,7 @@ func TestExecuteBuildah_BuildArgWithoutValue(t *testing.T) {
 		Dockerfile:  "Dockerfile",
 		Destination: []string{"test:latest"},
 		BuildArgs: map[string]string{
-			"VERSION": "1.0",
+			"VERSION":  "1.0",
 			"NODE_ENV": "", // Empty value means use environment variable
 		},
 	}
@@ -2685,18 +2685,18 @@ func TestExecuteBuildah_AllConfigOptions(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	config := Config{
-		Dockerfile:     filepath.Join(tmpDir, "Custom.dockerfile"),
-		Destination:    []string{"registry.io/app:v1", "registry.io/app:latest"},
-		Target:         "production",
-		BuildArgs:      map[string]string{"VERSION": "1.0", "ENV": "prod"},
-		Labels:         map[string]string{"app": "myapp", "version": "1.0"},
-		CustomPlatform: "linux/amd64",
-		Cache:          false,
-		Reproducible:   true,
-		Timestamp:      "1609459200",
+		Dockerfile:         filepath.Join(tmpDir, "Custom.dockerfile"),
+		Destination:        []string{"registry.io/app:v1", "registry.io/app:latest"},
+		Target:             "production",
+		BuildArgs:          map[string]string{"VERSION": "1.0", "ENV": "prod"},
+		Labels:             map[string]string{"app": "myapp", "version": "1.0"},
+		CustomPlatform:     "linux/amd64",
+		Cache:              false,
+		Reproducible:       true,
+		Timestamp:          "1609459200",
 		ImageDownloadRetry: 3,
-		InsecureRegistry: []string{"localhost:5000"},
-		StorageDriver:    "overlay",
+		InsecureRegistry:   []string{"localhost:5000"},
+		StorageDriver:      "overlay",
 	}
 
 	ctx := &Context{
