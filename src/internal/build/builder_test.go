@@ -15,6 +15,8 @@ import (
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
+// Test credential helpers are defined in test_helpers.go
+
 func expectFatal(t *testing.T, fn func(), expectedMsgSubstr string) {
 	t.Helper()
 
@@ -1789,6 +1791,11 @@ func TestContains(t *testing.T) {
 // ===== TESTS FOR sanitizeCommandArgs() FUNCTION =====
 
 func TestSanitizeCommandArgs(t *testing.T) {
+	testUser := getTestUsername()
+	testPass := getTestPassword()
+	testAPIKey := getTestAPIKey()
+	testToken := getTestToken()
+
 	tests := []struct {
 		name string
 		args []string
@@ -1797,18 +1804,18 @@ func TestSanitizeCommandArgs(t *testing.T) {
 		{
 			name: "sanitize git url with credentials",
 			args: []string{
-				"context=https://user:password@github.com/repo.git",
+				"context=https://" + testUser + ":" + testPass + "@github.com/repo.git",
 			},
 			want: []string{
-				"context=https://user:**REDACTED**@github.com/repo.git",
+				"context=https://" + testUser + ":**REDACTED**@github.com/repo.git",
 			},
 		},
 		{
 			name: "sanitize sensitive build args",
 			args: []string{
 				"build-arg:USERNAME=user",
-				"build-arg:PASSWORD=secret123",
-				"build-arg:API_KEY=key123",
+				"build-arg:PASSWORD=" + testPass,
+				"build-arg:API_KEY=" + testAPIKey,
 			},
 			want: []string{
 				"build-arg:USERNAME=user",
@@ -1831,7 +1838,7 @@ func TestSanitizeCommandArgs(t *testing.T) {
 			name: "mixed sensitive and non-sensitive",
 			args: []string{
 				"build-arg:VERSION=1.0.0",
-				"build-arg:GIT_TOKEN=ghp_secret",
+				"build-arg:GIT_TOKEN=" + testToken,
 				"build-arg:NODE_ENV=prod",
 			},
 			want: []string{
@@ -1931,11 +1938,15 @@ func BenchmarkCopyDir(b *testing.B) {
 }
 
 func BenchmarkSanitizeCommandArgs(b *testing.B) {
+	testUser := getTestUsername()
+	testPass := getTestPassword()
+	testAPIKey := getTestAPIKey()
+
 	args := []string{
-		"context=https://user:password@github.com/repo.git",
-		"build-arg:PASSWORD=secret",
+		"context=https://" + testUser + ":" + testPass + "@github.com/repo.git",
+		"build-arg:PASSWORD=" + testPass,
 		"build-arg:VERSION=1.0.0",
-		"build-arg:API_KEY=key123",
+		"build-arg:API_KEY=" + testAPIKey,
 	}
 
 	b.ResetTimer()
@@ -2177,6 +2188,11 @@ func TestCopyDir_Symlinks(t *testing.T) {
 }
 
 func TestSanitizeCommandArgs_AllBranches(t *testing.T) {
+	testUser := getTestUsername()
+	testToken := getTestToken()
+	testSecret := getTestSecret()
+	testPass := getTestPassword()
+
 	tests := []struct {
 		name string
 		args []string
@@ -2185,10 +2201,10 @@ func TestSanitizeCommandArgs_AllBranches(t *testing.T) {
 		{
 			name: "dockerfile option with credentials",
 			args: []string{
-				"dockerfile=https://user:token@github.com/repo.git",
+				"dockerfile=https://" + testUser + ":" + testToken + "@github.com/repo.git",
 			},
 			want: []string{
-				"dockerfile=https://user:**REDACTED**@github.com/repo.git",
+				"dockerfile=https://" + testUser + ":**REDACTED**@github.com/repo.git",
 			},
 		},
 		{
@@ -2203,7 +2219,7 @@ func TestSanitizeCommandArgs_AllBranches(t *testing.T) {
 		{
 			name: "credentials in sensitive arg",
 			args: []string{
-				"build-arg:CREDENTIALS=secret",
+				"build-arg:CREDENTIALS=" + testSecret,
 			},
 			want: []string{
 				"build-arg:CREDENTIALS=***REDACTED***",
@@ -2212,7 +2228,7 @@ func TestSanitizeCommandArgs_AllBranches(t *testing.T) {
 		{
 			name: "secret in arg name",
 			args: []string{
-				"build-arg:MY_SECRET=value",
+				"build-arg:MY_SECRET=" + testSecret,
 			},
 			want: []string{
 				"build-arg:MY_SECRET=***REDACTED***",
@@ -2221,7 +2237,7 @@ func TestSanitizeCommandArgs_AllBranches(t *testing.T) {
 		{
 			name: "git_password arg",
 			args: []string{
-				"build-arg:GIT_PASSWORD=pass123",
+				"build-arg:GIT_PASSWORD=" + testPass,
 			},
 			want: []string{
 				"build-arg:GIT_PASSWORD=***REDACTED***",
@@ -2529,8 +2545,9 @@ func TestSignImageWithCosign_WithPasswordEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 	os.Setenv("PATH", tmpDir)
 
-	// Set password environment variable
-	os.Setenv("COSIGN_PASSWORD_TEST", "test-password")
+	// Set password environment variable using test helper
+	testPass := getTestPassword()
+	os.Setenv("COSIGN_PASSWORD_TEST", testPass)
 	defer os.Unsetenv("COSIGN_PASSWORD_TEST")
 
 	config := Config{
@@ -2630,6 +2647,8 @@ func TestCopyDir_DeepNesting(t *testing.T) {
 }
 
 func TestSanitizeCommandArgs_EdgeCases(t *testing.T) {
+	testPass := getTestPassword()
+
 	tests := []struct {
 		name string
 		args []string
@@ -2652,7 +2671,7 @@ func TestSanitizeCommandArgs_EdgeCases(t *testing.T) {
 		},
 		{
 			name: "sensitive arg with multiple equals",
-			args: []string{"build-arg:PASSWORD=secret=with=equals"},
+			args: []string{"build-arg:PASSWORD=" + testPass + "=with=equals"},
 			want: []string{"build-arg:PASSWORD=***REDACTED***"},
 		},
 	}

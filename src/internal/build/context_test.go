@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+// Test credential helpers are defined in test_helpers.go
+
 // ===== TESTS FOR Context.Cleanup() =====
 
 func TestContext_Cleanup(t *testing.T) {
@@ -249,6 +251,9 @@ func TestExpandEnvInURL(t *testing.T) {
 		}
 	}()
 
+	testUser := getTestUsername()
+	testToken := getTestToken()
+
 	tests := []struct {
 		name    string
 		url     string
@@ -259,28 +264,28 @@ func TestExpandEnvInURL(t *testing.T) {
 			name: "$VAR syntax",
 			url:  "https://$TEST_USER:$TEST_TOKEN@github.com/repo.git",
 			envVars: map[string]string{
-				"TEST_USER":  "myuser",
-				"TEST_TOKEN": "mytoken",
+				"TEST_USER":  testUser,
+				"TEST_TOKEN": testToken,
 			},
-			want: "https://myuser:mytoken@github.com/repo.git",
+			want: "https://" + testUser + ":" + testToken + "@github.com/repo.git",
 		},
 		{
 			name: "${VAR} syntax",
 			url:  "https://${TEST_USER}:${TEST_TOKEN}@github.com/repo.git",
 			envVars: map[string]string{
-				"TEST_USER":  "user123",
-				"TEST_TOKEN": "token456",
+				"TEST_USER":  testUser,
+				"TEST_TOKEN": testToken,
 			},
-			want: "https://user123:token456@github.com/repo.git",
+			want: "https://" + testUser + ":" + testToken + "@github.com/repo.git",
 		},
 		{
 			name: "mixed syntax",
 			url:  "https://$TEST_USER:${TEST_TOKEN}@github.com/repo.git",
 			envVars: map[string]string{
-				"TEST_USER":  "alice",
-				"TEST_TOKEN": "secret",
+				"TEST_USER":  testUser,
+				"TEST_TOKEN": testToken,
 			},
-			want: "https://alice:secret@github.com/repo.git",
+			want: "https://" + testUser + ":" + testToken + "@github.com/repo.git",
 		},
 		{
 			name:    "no variables",
@@ -319,6 +324,11 @@ func TestExpandEnvInURL(t *testing.T) {
 // ===== TESTS FOR addGitToken() =====
 
 func TestAddGitToken(t *testing.T) {
+	testToken := getTestToken()
+	testUser := getTestUsername()
+	testPass := getTestPassword()
+	oauthUser := getTestOAuthUser()
+
 	tests := []struct {
 		name  string
 		url   string
@@ -329,51 +339,51 @@ func TestAddGitToken(t *testing.T) {
 		{
 			name:  "add token to https URL",
 			url:   "https://github.com/user/repo.git",
-			token: "mytoken123",
-			user:  "oauth2",
-			want:  "https://oauth2:mytoken123@github.com/user/repo.git",
+			token: testToken,
+			user:  oauthUser,
+			want:  "https://" + oauthUser + ":" + testToken + "@github.com/user/repo.git",
 		},
 		{
 			name:  "custom user",
 			url:   "https://github.com/user/repo.git",
-			token: "token456",
-			user:  "customuser",
-			want:  "https://customuser:token456@github.com/user/repo.git",
+			token: testToken,
+			user:  testUser,
+			want:  "https://" + testUser + ":" + testToken + "@github.com/user/repo.git",
 		},
 		{
 			name:  "empty user defaults to oauth2",
 			url:   "https://github.com/user/repo.git",
-			token: "token789",
+			token: testToken,
 			user:  "",
-			want:  "https://oauth2:token789@github.com/user/repo.git",
+			want:  "https://oauth2:" + testToken + "@github.com/user/repo.git",
 		},
 		{
 			name:  "URL with path",
 			url:   "https://gitlab.com/group/project/repo.git",
-			token: "glpat-xxx",
-			user:  "oauth2",
-			want:  "https://oauth2:glpat-xxx@gitlab.com/group/project/repo.git",
+			token: testToken,
+			user:  oauthUser,
+			want:  "https://" + oauthUser + ":" + testToken + "@gitlab.com/group/project/repo.git",
 		},
 		{
 			name:  "URL already has credentials - no change",
-			url:   "https://user:pass@github.com/repo.git",
-			token: "newtoken",
-			user:  "oauth2",
-			want:  "https://user:pass@github.com/repo.git",
+			url:   "https://" + testUser + ":" + testPass + "@github.com/repo.git",
+			token: testToken,
+			user:  oauthUser,
+			want:  "https://" + testUser + ":" + testPass + "@github.com/repo.git",
 		},
 		{
 			name:  "non-https URL unchanged",
 			url:   "git@github.com:user/repo.git",
-			token: "token",
-			user:  "oauth2",
+			token: testToken,
+			user:  oauthUser,
 			want:  "git@github.com:user/repo.git",
 		},
 		{
 			name:  "token with whitespace trimmed",
 			url:   "https://github.com/repo.git",
-			token: "  token123  \n",
-			user:  "oauth2",
-			want:  "https://oauth2:token123@github.com/repo.git",
+			token: "  " + testToken + "  \n",
+			user:  oauthUser,
+			want:  "https://" + oauthUser + ":" + testToken + "@github.com/repo.git",
 		},
 	}
 
@@ -487,16 +497,17 @@ func TestFormatGitURLForBuildKit(t *testing.T) {
 func TestFormatGitURLForBuildKit_WithToken(t *testing.T) {
 	tmpDir := t.TempDir()
 	tokenFile := filepath.Join(tmpDir, "token.txt")
-	tokenContent := "ghp_test_token_123"
+	tokenContent := getTestToken()
 
 	err := os.WriteFile(tokenFile, []byte(tokenContent), 0600)
 	if err != nil {
 		t.Fatalf("Failed to create token file: %v", err)
 	}
 
+	oauthUser := getTestOAuthUser()
 	gitConfig := GitConfig{
 		TokenFile: tokenFile,
-		TokenUser: "oauth2",
+		TokenUser: oauthUser,
 		Branch:    "main",
 	}
 
@@ -506,8 +517,9 @@ func TestFormatGitURLForBuildKit_WithToken(t *testing.T) {
 	}
 
 	// Should contain the token
-	if !strings.Contains(got, "oauth2:ghp_test_token_123@") {
-		t.Errorf("FormatGitURLForBuildKit() = %q, should contain token", got)
+	expectedCred := oauthUser + ":" + tokenContent + "@"
+	if !strings.Contains(got, expectedCred) {
+		t.Errorf("FormatGitURLForBuildKit() = %q, should contain credentials", got)
 	}
 
 	// Should contain the branch
@@ -534,6 +546,10 @@ func TestFormatGitURLForBuildKit_TokenFileError(t *testing.T) {
 // ===== TESTS FOR maskToken() =====
 
 func TestMaskToken(t *testing.T) {
+	testToken := getTestToken()
+	testUser := getTestUsername()
+	oauthUser := getTestOAuthUser()
+
 	tests := []struct {
 		name string
 		url  string
@@ -541,13 +557,13 @@ func TestMaskToken(t *testing.T) {
 	}{
 		{
 			name: "URL with user and token",
-			url:  "https://user:ghp_token123@github.com/repo.git",
-			want: "https://user:***@github.com/repo.git",
+			url:  "https://" + testUser + ":" + testToken + "@github.com/repo.git",
+			want: "https://" + testUser + ":***@github.com/repo.git",
 		},
 		{
 			name: "URL with oauth2 and token",
-			url:  "https://oauth2:glpat-abc123@gitlab.com/repo.git",
-			want: "https://oauth2:***@gitlab.com/repo.git",
+			url:  "https://" + oauthUser + ":" + testToken + "@gitlab.com/repo.git",
+			want: "https://" + oauthUser + ":***@gitlab.com/repo.git",
 		},
 		{
 			name: "URL without credentials",
@@ -566,13 +582,13 @@ func TestMaskToken(t *testing.T) {
 		},
 		{
 			name: "URL with port",
-			url:  "https://user:token@localhost:5000/repo.git",
-			want: "https://user:***@localhost:5000/repo.git",
+			url:  "https://" + testUser + ":" + testToken + "@localhost:5000/repo.git",
+			want: "https://" + testUser + ":***@localhost:5000/repo.git",
 		},
 		{
 			name: "URL with path and query",
-			url:  "https://user:token@github.com/repo.git?ref=main#fragment",
-			want: "https://user:***@github.com/repo.git?ref=main#fragment",
+			url:  "https://" + testUser + ":" + testToken + "@github.com/repo.git?ref=main#fragment",
+			want: "https://" + testUser + ":***@github.com/repo.git?ref=main#fragment",
 		},
 	}
 
@@ -835,8 +851,8 @@ func BenchmarkNormalizeGitURL(b *testing.B) {
 
 func BenchmarkAddGitToken(b *testing.B) {
 	url := "https://github.com/user/repo.git"
-	token := "ghp_test_token_123"
-	user := "oauth2"
+	token := getTestToken()
+	user := getTestOAuthUser()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -845,7 +861,9 @@ func BenchmarkAddGitToken(b *testing.B) {
 }
 
 func BenchmarkMaskToken(b *testing.B) {
-	url := "https://user:ghp_secret_token_123@github.com/repo.git"
+	testUser := getTestUsername()
+	testToken := getTestToken()
+	url := "https://" + testUser + ":" + testToken + "@github.com/repo.git"
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
