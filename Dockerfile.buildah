@@ -54,7 +54,9 @@ RUN apk update && apk add gnutls
 
 # Install runtime dependencies for Buildah
 RUN apk add --no-cache \
+    aardvark-dns \
     bash \
+    buildah \
     ca-certificates \
     crun \
     curl \
@@ -63,16 +65,14 @@ RUN apk add --no-cache \
     gpgme \
     iptables \
     ip6tables \
+    jq \
     libseccomp \
+    netavark \
     ostree \
     shadow \
     shadow-uidmap \
     slirp4netns \
-    netavark \
-    aardvark-dns \
-    xz \
-    jq \
-    buildah && \
+    xz && \
     update-ca-certificates && \
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
@@ -110,26 +110,57 @@ COPY configs/buildah/containers.conf /home/${KIMIA_USER}/.config/containers/cont
 # =============================================================================
 
 # AWS ECR credential helper
-RUN ECR_VERSION=$(curl -s https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+RUN ECR_VERSION=$(curl -fsSL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fsSL "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" \
-    -o /usr/local/bin/docker-credential-ecr-login && \
-    chmod +x /usr/local/bin/docker-credential-ecr-login
+    # Define file names and URLs
+    BINARY_NAME="docker-credential-ecr-login" && \
+    CHECKSUM_NAME="${BINARY_NAME}.sha256" && \
+    DOWNLOAD_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}" && \
+    \
+    # Download binary and checksum to current directory
+    curl -fsSL -O "${DOWNLOAD_URL}/${BINARY_NAME}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${CHECKSUM_NAME}" && \
+    \
+    # Verify Integrity directly using the provided file
+    sha256sum -c "${CHECKSUM_NAME}" && \
+    \
+    # Install
+    mv "${BINARY_NAME}" /usr/local/bin/docker-credential-ecr-login && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login && \
+    \
+    # Cleanup
+    rm "${CHECKSUM_NAME}"
 
 # Google GCR/GAR credential helper
-RUN GCR_VERSION=$(curl -s https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
+RUN GCR_VERSION=$(curl -fsSL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
     ARCH=$(case ${TARGETARCH} in \
         "amd64") echo "amd64" ;; \
         "arm64") echo "arm64" ;; \
         *) echo "amd64" ;; \
     esac) && \
-    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
-    | tar xz -C /usr/local/bin/ docker-credential-gcr && \
-    chmod +x /usr/local/bin/docker-credential-gcr
+    # Define file names and URLs
+    BINARY_ARCHIVE="docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" && \
+    CHECKSUMS_FILE="checksums.txt" && \
+    RELEASE_URL="https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}" && \
+    \
+    # Download binary and checksums
+    curl -fsSL -O "${RELEASE_URL}/${BINARY_ARCHIVE}" && \
+    curl -fsSL -O "${RELEASE_URL}/${CHECKSUMS_FILE}" && \
+    \
+    # Verify Integrity: Grep the specific file hash and pipe to sha256sum
+    # Using '-c -' reads the hash/filename pair from standard input
+    grep "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}" | sha256sum -c - && \
+    \
+    # Extract and Install
+    tar -xzf "${BINARY_ARCHIVE}" -C /usr/local/bin/ docker-credential-gcr && \
+    chmod +x /usr/local/bin/docker-credential-gcr && \
+    \
+    # Cleanup artifacts to keep layer minimal
+    rm "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}"
 
 # =============================================================================
 # Environment Configuration
