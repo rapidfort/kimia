@@ -7,4 +7,4 @@ builds:
         dockerfile: Dockerfile
         destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/huggingface
         verbose: true
-        extraArgs: [--target=builder,--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
+        extraArgs: [--target=builder,--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD, --storage-driver=overlay]

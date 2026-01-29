@@ -186,7 +186,9 @@ spec:
             secretName: cosign-key
             items:
               - key: cosign.key
-                path: cosign.key 
+                path: cosign.key
+        - name: kimia-local
+          emptyDir: {} 
 {{- if $vals.registryAuth.enabled }}
         - name: docker-config
           secret:
@@ -249,7 +251,9 @@ spec:
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
             - name: cosign-key
-              mountPath: /secrets              
+              mountPath: /secrets
+            - name: kimia-local
+              mountPath: /home/kimia/.local
 {{- if $vals.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
@@ -312,7 +316,9 @@ spec:
               mountPath: /home/kimia/.config/containers/registries.conf
               subPath: registries.conf
             - name: cosign-key
-              mountPath: /secrets               
+              mountPath: /secrets
+            - name: kimia-local
+              mountPath: /home/kimia/.local
 {{- if $vals.registryAuth.enabled }}
             - name: docker-config
               mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
