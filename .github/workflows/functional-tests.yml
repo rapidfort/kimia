@@ -1,0 +1,414 @@
+name: Functional Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, tests-kimia]
+  workflow_dispatch:
+    inputs:
+      test_suite:
+        description: 'Test suite to run'
+        required: false
+        default: 'simple'
+        type: choice
+        options:
+          - simple
+          - all
+          - reproducible
+          - attestation
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ${{ github.repository }}
+
+jobs:
+  # ============================================================================
+  # Job 1: Build PR Images
+  # ============================================================================
+  build-images:
+    name: Build ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: kimia
+            dockerfile: Dockerfile.buildkit
+            builder: buildkit
+          - variant: kimia-bud
+            dockerfile: Dockerfile.buildah
+            builder: buildah
+
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set build variables
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            SHORT_SHA=$(echo "${{ github.event.pull_request.head.sha }}" | cut -c1-7)
+            IMAGE_TAG="pr-${{ github.event.pull_request.number }}-${SHORT_SHA}"
+          else
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            IMAGE_TAG="sha-${SHORT_SHA}"
+          fi
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.variant }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.variant == 'kimia-bud' && '-bud' || '' }}:${{ steps.vars.outputs.image_tag }}
+          build-args: |
+            VERSION=${{ steps.vars.outputs.image_tag }}
+            BUILD_DATE=${{ github.run_id }}
+            COMMIT=${{ github.sha }}
+            BRANCH=${{ github.head_ref || github.ref_name }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+
+  # ============================================================================
+  # Job 2: Docker Functional Tests
+  # ============================================================================
+  docker-tests:
+    name: Docker Tests (${{ matrix.builder }})
+    runs-on: ubuntu-latest
+    needs: build-images
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [buildkit, buildah]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set test variables
+        id: vars
+        run: |
+          IMAGE_TAG="${{ needs.build-images.outputs.image_tag }}"
+          if [ "${{ matrix.builder }}" = "buildkit" ]; then
+            KIMIA_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}:${IMAGE_TAG}"
+          else
+            KIMIA_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-bud:${IMAGE_TAG}"
+          fi
+          echo "kimia_image=${KIMIA_IMAGE}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+          # Determine test suite
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TEST_SUITE="${{ inputs.test_suite }}"
+          else
+            TEST_SUITE="simple"
+          fi
+          echo "test_suite=${TEST_SUITE}" >> $GITHUB_OUTPUT
+
+      - name: Pull test image
+        run: |
+          echo "Pulling: ${{ steps.vars.outputs.kimia_image }}"
+          docker pull "${{ steps.vars.outputs.kimia_image }}"
+
+      - name: Verify image
+        run: |
+          docker run --rm "${{ steps.vars.outputs.kimia_image }}" --version
+          docker run --rm "${{ steps.vars.outputs.kimia_image }}" --help | head -20
+
+      - name: Run Docker functional tests
+        env:
+          KIMIA_IMAGE: ${{ steps.vars.outputs.kimia_image }}
+          REGISTRY: ${{ env.REGISTRY }}
+          BUILDER: ${{ matrix.builder }}
+        run: |
+          chmod +x tests/docker-tests.sh
+          ./tests/docker-tests.sh \
+            --registry "$REGISTRY" \
+            --image "$KIMIA_IMAGE" \
+            --builder "$BUILDER" \
+            --storage native \
+            --tests "${{ steps.vars.outputs.test_suite }}"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-test-results-${{ matrix.builder }}
+          path: tests/suites/
+          retention-days: 7
+
+  # ============================================================================
+  # Job 3: Kubernetes Functional Tests (using kind)
+  # ============================================================================
+  k8s-tests:
+    name: K8s Tests (${{ matrix.builder }})
+    runs-on: ubuntu-latest
+    needs: build-images
+    timeout-minutes: 45
+
+    strategy:
+      fail-fast: false
+      matrix:
+        builder: [buildkit, buildah]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set test variables
+        id: vars
+        run: |
+          IMAGE_TAG="${{ needs.build-images.outputs.image_tag }}"
+          if [ "${{ matrix.builder }}" = "buildkit" ]; then
+            KIMIA_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}:${IMAGE_TAG}"
+          else
+            KIMIA_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-bud:${IMAGE_TAG}"
+          fi
+          echo "kimia_image=${KIMIA_IMAGE}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+          # Determine test suite
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TEST_SUITE="${{ inputs.test_suite }}"
+          else
+            TEST_SUITE="simple"
+          fi
+          echo "test_suite=${TEST_SUITE}" >> $GITHUB_OUTPUT
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kimia-test
+          wait: 120s
+
+      - name: Create GHCR pull secret
+        run: |
+          kubectl create namespace kimia-tests || true
+          kubectl create secret docker-registry ghcr-secret \
+            --namespace kimia-tests \
+            --docker-server=${{ env.REGISTRY }} \
+            --docker-username=${{ github.actor }} \
+            --docker-password=${{ secrets.GITHUB_TOKEN }} \
+            || true
+
+      - name: Load image into kind (optional optimization)
+        run: |
+          # Pull and load image into kind for faster access
+          docker pull "${{ steps.vars.outputs.kimia_image }}"
+          kind load docker-image "${{ steps.vars.outputs.kimia_image }}" --name kimia-test || true
+
+      - name: Run K8s version check test
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kimia-version-test
+            namespace: kimia-tests
+          spec:
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 300
+            template:
+              spec:
+                restartPolicy: Never
+                imagePullSecrets:
+                  - name: ghcr-secret
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  fsGroup: 1000
+                containers:
+                  - name: kimia
+                    image: ${{ steps.vars.outputs.kimia_image }}
+                    args: ["--version"]
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        add: ["SETUID", "SETGID"]
+                    resources:
+                      limits:
+                        memory: "512Mi"
+                        cpu: "500m"
+          EOF
+
+          # Wait for job completion
+          kubectl wait --for=condition=complete job/kimia-version-test \
+            --namespace kimia-tests --timeout=120s || \
+          kubectl wait --for=condition=failed job/kimia-version-test \
+            --namespace kimia-tests --timeout=120s
+
+          # Get logs
+          kubectl logs job/kimia-version-test --namespace kimia-tests
+
+          # Check job status
+          STATUS=$(kubectl get job kimia-version-test -n kimia-tests -o jsonpath='{.status.succeeded}')
+          if [ "$STATUS" != "1" ]; then
+            echo "Version test failed!"
+            kubectl describe job kimia-version-test -n kimia-tests
+            exit 1
+          fi
+          echo "Version test passed!"
+
+      - name: Run K8s build test (nginx)
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kimia-nginx-build
+            namespace: kimia-tests
+          spec:
+            backoffLimit: 0
+            ttlSecondsAfterFinished: 300
+            template:
+              spec:
+                restartPolicy: Never
+                imagePullSecrets:
+                  - name: ghcr-secret
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  fsGroup: 1000
+                containers:
+                  - name: kimia
+                    image: ${{ steps.vars.outputs.kimia_image }}
+                    args:
+                      - "--context=https://github.com/nginx/docker-nginx.git"
+                      - "--context-sub-path=mainline/alpine"
+                      - "--dockerfile=Dockerfile"
+                      - "--no-push"
+                      - "-v=info"
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        add: ["SETUID", "SETGID"]
+                    resources:
+                      limits:
+                        memory: "2Gi"
+                        cpu: "2"
+                    volumeMounts:
+                      - name: workspace
+                        mountPath: /tmp/work
+                volumes:
+                  - name: workspace
+                    emptyDir:
+                      sizeLimit: 5Gi
+          EOF
+
+          # Wait for job completion (10 min timeout)
+          echo "Waiting for nginx build job to complete..."
+          kubectl wait --for=condition=complete job/kimia-nginx-build \
+            --namespace kimia-tests --timeout=600s || \
+          kubectl wait --for=condition=failed job/kimia-nginx-build \
+            --namespace kimia-tests --timeout=600s
+
+          # Get logs
+          echo "=== Build Logs ==="
+          kubectl logs job/kimia-nginx-build --namespace kimia-tests --tail=100
+
+          # Check job status
+          STATUS=$(kubectl get job kimia-nginx-build -n kimia-tests -o jsonpath='{.status.succeeded}')
+          if [ "$STATUS" != "1" ]; then
+            echo "Nginx build test failed!"
+            kubectl describe job kimia-nginx-build -n kimia-tests
+            kubectl describe pod -l job-name=kimia-nginx-build -n kimia-tests
+            exit 1
+          fi
+          echo "Nginx build test passed!"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kubectl delete namespace kimia-tests --ignore-not-found=true --wait=false || true
+
+      - name: Upload K8s test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k8s-test-logs-${{ matrix.builder }}
+          path: |
+            /tmp/kimia-k8s-*.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ============================================================================
+  # Job 4: Test Summary
+  # ============================================================================
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [build-images, docker-tests, k8s-tests]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          echo "## Functional Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Build status
+          if [ "${{ needs.build-images.result }}" = "success" ]; then
+            echo "| Build Images | :white_check_mark: Passed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Build Images | :x: Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Docker tests status
+          if [ "${{ needs.docker-tests.result }}" = "success" ]; then
+            echo "| Docker Tests | :white_check_mark: Passed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Docker Tests | :x: Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # K8s tests status
+          if [ "${{ needs.k8s-tests.result }}" = "success" ]; then
+            echo "| K8s Tests (kind) | :white_check_mark: Passed |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| K8s Tests (kind) | :x: Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image Tag:** \`${{ needs.build-images.outputs.image_tag }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any test failed
+        if: |
+          needs.build-images.result != 'success' ||
+          needs.docker-tests.result != 'success' ||
+          needs.k8s-tests.result != 'success'
+        run: exit 1
