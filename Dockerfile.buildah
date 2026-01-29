@@ -11,7 +11,7 @@ ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
 ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
-ARG ALPINE_IMAGE="alpine:latest"
+ARG ALPINE_IMAGE="alpine:3.21"
 
 # =============================================================================
 # Stage 1: Build kimia binary
@@ -50,7 +50,7 @@ ARG KIMIA_USER
 ARG TARGETARCH
 
 # Install system dependencies
-RUN apk update && apk add gnutls
+RUN apk update && apk add --no-cache gnutls
 
 # Install runtime dependencies for Buildah
 RUN apk add --no-cache \
@@ -209,6 +209,14 @@ LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image 
 LABEL org.opencontainers.image.documentation="https://github.com/rapidfort/kimia/blob/main/README.md"
 LABEL org.opencontainers.image.vendor="RapidFort"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+# =============================================================================
+# Health Check
+# =============================================================================
+
+# Health check to verify kimia binary is accessible and functional
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD ["/usr/local/bin/kimia", "version"] || exit 1
 
 # =============================================================================
 # Entrypoint and Default Command
