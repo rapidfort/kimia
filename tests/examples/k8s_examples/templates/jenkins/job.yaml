@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-jenkins-build
+  namespace: kimia
   labels:
     image: jenkins
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=debian/trixie/hotspot/Dockerfile
           - --destination=jenkins
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

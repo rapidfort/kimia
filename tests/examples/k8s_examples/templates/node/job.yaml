@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-node-build
+  namespace: kimia
   labels:
     image: node  
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=24/bullseye/Dockerfile
           - --destination=10.228.96.114:5000/kimia-test:node
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

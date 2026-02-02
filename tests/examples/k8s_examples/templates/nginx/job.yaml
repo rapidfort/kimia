@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-nginx-build
+  namespace: kimia
   labels:
     image: nginx  
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=mainline/alpine/Dockerfile
           - --destination=REGISTRY_PLACEHOLDER       
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

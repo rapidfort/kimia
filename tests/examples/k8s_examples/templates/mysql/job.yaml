@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-mysql-build
+  namespace: kimia
   labels:
     image: mysql
 spec:
@@ -24,6 +25,10 @@ spec:
           - --dockerfile=Dockerfile.debian
           - --destination=mysql
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

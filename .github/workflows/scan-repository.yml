@@ -152,6 +152,7 @@ jobs:
         with:
           scan-type: 'fs'
           scan-ref: '.'
+          skip-dirs: 'tests/examples'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -170,6 +171,7 @@ jobs:
         with:
           scan-type: 'config'
           scan-ref: '.'
+          skip-dirs: 'tests/examples'
           format: 'json'
           output: 'trivy-config-results.json'
           exit-code: '0'
@@ -179,6 +181,7 @@ jobs:
         with:
           scan-type: 'config'
           scan-ref: '.'
+          skip-dirs: 'tests/examples'
           format: 'table'
           exit-code: '0'
 

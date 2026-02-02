@@ -2,6 +2,10 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-swift-build
+  resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
   labels:
     image: swift
 spec:
@@ -23,6 +27,10 @@ spec:
           - --dockerfile=nightly-5.10/ubuntu/22.04/Dockerfile
           - --destination=swift
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

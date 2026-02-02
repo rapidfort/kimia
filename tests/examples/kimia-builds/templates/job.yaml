@@ -208,12 +208,15 @@ spec:
             requests:
               cpu: "500m"
               memory: "500Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
           env:
             - name: COSIGN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: cosign-key
-                  key: password  
+                  key: password
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
               value: {{ $vals.registryAuth.envPath }}
@@ -272,13 +275,16 @@ spec:
           resources:
             requests:
               cpu: "500m"
-              memory: "500Mi"          
+              memory: "500Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
           env:
             - name: COSIGN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: cosign-key
-                  key: password             
+                  key: password
 {{- if $vals.registryAuth.enabled }}
             - name: {{ $vals.registryAuth.envVar }}
               value: {{ $vals.registryAuth.envPath }}

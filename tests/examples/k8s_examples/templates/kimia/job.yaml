@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-kimia-build
+  namespace: kimia
   labels:
     image: kimia
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=Dockerfile.buildkit
           - --destination=harbor.rfinnovate.rapidfort.io/kimia-e2e/kimia
           - -v=debug
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

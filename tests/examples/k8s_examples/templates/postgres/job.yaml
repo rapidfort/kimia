@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-postgres-build
+  namespace: kimia
   labels:
     image: postgres
 spec:
@@ -25,6 +26,10 @@ spec:
           - --destination=postgres
           - --no-push
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

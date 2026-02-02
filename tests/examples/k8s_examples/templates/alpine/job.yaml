@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-alpine-build
+  namespace: kimia
   labels:
     image: alpine
 spec:
@@ -24,8 +25,12 @@ spec:
         - --destination=REGISTRY_PLACEHOLDER
         - --insecure
         - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
         securityContext:
-          allowPrivilegeEscalation: true
+          allowPrivilegeEscalation: false
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]

@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-percona-build
+  namespace: kimia
   labels:
     image: percona
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=build/Dockerfile
           - --destination=percona-xtradb-cluster-operator
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

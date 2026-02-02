@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-elasticsearch-build
+  namespace: kimia
   labels:
     image: elasticsearch
 spec:
@@ -22,6 +23,10 @@ spec:
           - --dockerfile=Dockerfile
           - --destination=elasticsearch
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

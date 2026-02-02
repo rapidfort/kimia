@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-golang-build
+  namespace: kimia
   labels:
     image: golang  
 spec:
@@ -25,6 +26,10 @@ spec:
           - --destination=10.228.96.114:5000/my-golang
           - -v
           - --no-push
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

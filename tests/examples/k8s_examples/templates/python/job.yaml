@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-python-build
+  namespace: kimia
   labels:
     image: python
 spec:
@@ -25,6 +26,10 @@ spec:
           - --destination=python
           - --no-push
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:

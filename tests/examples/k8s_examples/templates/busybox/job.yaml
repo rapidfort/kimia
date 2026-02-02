@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: kimia-busybox-build
+  namespace: kimia
   labels:
     image: busybox  
 spec:
@@ -23,6 +24,10 @@ spec:
           - --dockerfile=latest/uclibc/Dockerfile.builder
           - --destination=busybox
           - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
