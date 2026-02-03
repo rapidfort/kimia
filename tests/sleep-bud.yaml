@@ -14,6 +14,13 @@ spec:
   - name: kimia
     image: ghcr.io/rapidfort/kimia-bud
     command: [ "sleep", "inf" ]
+    resources:
+      requests:
+        cpu: "1"
+        memory: "256 Mi"
+      limits:
+        cpu: "1"
+        memory: "1Gi"
     securityContext:
       runAsUser: 1000
       runAsGroup: 1000

@@ -21,6 +21,13 @@ spec:
           - --destination=postgres
           - --no-push
           - -v
+        resources:
+          requests:
+            cpu: "1"
+            memory: "256 Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
