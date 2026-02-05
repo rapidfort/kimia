@@ -1,8 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: kimia-postgres-build
+  name: kimia-rabbitmq-build
+  namespace: kimia
+  labels:
+    image: rabbitmq
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,19 +16,15 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia-bud
-        image: 100.92.16.57:5000/rapidfort/kimia-bud
+      - name: kimia-rabbitmq-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
-          - --context=https://github.com/docker-library/postgres.git
-          - --context-sub-path=18/alpine3.22
-          - --dockerfile=Dockerfile
-          - --destination=postgres
-          - --no-push
+          - --context=https://github.com/docker-library/rabbitmq.git
+          - --dockerfile=4.2/alpine/Dockerfile
+          - --destination=rabbitmq
           - -v
         resources:
-          requests:
-            cpu: "1"
-            memory: "256 Mi"
           limits:
             cpu: "1"
             memory: "1Gi"  
@@ -33,3 +33,4 @@ spec:
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]
+

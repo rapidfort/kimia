@@ -1,0 +1,24 @@
+# Copy this to user-config.yaml and fill in your details
+# user-config.yaml is git-ignored
+
+registry: harbor.rfinnovate.rapidfort.io/kimia-e2e  # Your container registry
+#project: kimia-e2e
+namespace: default        # Kubernetes namespace
+
+# Authentication method (choose one):
+auth:
+  # Option 1: Use existing Kubernetes secret
+  secretName: harbor-secret
+  
+  # Option 2: Create secret from credentials (comment out secretName above)
+  # username: myuser
+  # password: mytoken
+  # email: myemail@example.com
+  # server: ghcr.io
+
+# Optional: Override specific image builds
+overrides:
+  # alpine:
+  #   destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/alpine:latest
+  # nginx:
+  #   destination: docker.io/myuser/nginx

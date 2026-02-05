@@ -1,7 +1,10 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: kimia-postgres-build
+  name: kimia-elasticsearch-build
+  namespace: kimia
+  labels:
+    image: elasticsearch
 spec:
   ttlSecondsAfterFinished: 60
   template:
@@ -12,19 +15,15 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia-bud
-        image: 100.92.16.57:5000/rapidfort/kimia-bud
+      - name: kimia-elasticsearch-build
+        image: ghcr.io/rapidfort/kimia-bud:latest
         args:
-          - --context=https://github.com/docker-library/postgres.git
-          - --context-sub-path=18/alpine3.22
+          - --context=https://github.com/elastic/dockerfiles.git
+          - --context-sub-path=elasticsearch
           - --dockerfile=Dockerfile
-          - --destination=postgres
-          - --no-push
+          - --destination=elasticsearch
           - -v
         resources:
-          requests:
-            cpu: "1"
-            memory: "256 Mi"
           limits:
             cpu: "1"
             memory: "1Gi"  

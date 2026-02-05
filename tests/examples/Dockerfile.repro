@@ -1,0 +1,25 @@
+FROM alpine@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
+
+ARG SOURCE_DATE_EPOCH
+
+RUN apk add --no-cache \
+    curl=8.14.1-r2 \
+    ca-certificates=20250911-r0
+
+WORKDIR /app
+
+RUN echo "reproducible test" > file.txt
+
+# Create non-root user for security
+RUN addgroup -g 1000 appuser && \
+    adduser -D -G appuser -u 1000 appuser && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Health check to verify the container is running properly
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD ["sh", "-c", "test -f /app/file.txt"] || exit 1
+
+CMD ["sh"]

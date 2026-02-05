@@ -1,8 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: kimia-postgres-build
+  name: kimia-couchbase-build
+  namespace: kimia
+  labels:
+    image: couchbase  
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,19 +16,16 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia-bud
-        image: 100.92.16.57:5000/rapidfort/kimia-bud
+      - name: kimia-couchbase-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
-          - --context=https://github.com/docker-library/postgres.git
-          - --context-sub-path=18/alpine3.22
+          - --context=git://github.com/couchbase/docker.git
+          - --context-sub-path=enterprise/couchbase-server/7.6.7
           - --dockerfile=Dockerfile
-          - --destination=postgres
-          - --no-push
+          - --destination=<org_repo>/couchbase:latest
           - -v
         resources:
-          requests:
-            cpu: "1"
-            memory: "256 Mi"
           limits:
             cpu: "1"
             memory: "1Gi"  

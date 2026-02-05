@@ -1,8 +1,12 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  generateName: kimia-postgres-build
+  name: kimia-mongo-build
+  namespace: kimia
+  labels:
+    image: mongo
 spec:
+  backoffLimit: 1
   ttlSecondsAfterFinished: 60
   template:
     spec:
@@ -12,24 +16,21 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
       containers:
-      - name: kimia-bud
-        image: 100.92.16.57:5000/rapidfort/kimia-bud
+      - name: kimia-mongo-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
         args:
-          - --context=https://github.com/docker-library/postgres.git
-          - --context-sub-path=18/alpine3.22
+          - --context=https://github.com/docker-library/mongo.git
+          - --context-sub-path=8.0
           - --dockerfile=Dockerfile
-          - --destination=postgres
-          - --no-push
+          - --destination=<repo>:mongo
           - -v
         resources:
-          requests:
-            cpu: "1"
-            memory: "256 Mi"
           limits:
             cpu: "1"
             memory: "1Gi"  
         securityContext:
-          allowPrivilegeEscalation: true
+          allowPrivilegeEscalation: false
           capabilities:
             drop: [ALL]
             add: [SETUID, SETGID]

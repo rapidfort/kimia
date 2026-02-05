@@ -1,0 +1,23 @@
+registryAuth:
+  enabled: true
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json
+
+builds:
+  - name: redis
+    main:
+      name: redis
+      args:
+        context: https://github.com/redis/docker-library-redis.git
+        dockerfile: 7.4/debian/Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/redis
+        tag: latest
+        verbose: true
+        extraArgs: [--insecure, --label=image.version=7.4deb, --attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]
+        registryAuth:
+          enabled: true
+

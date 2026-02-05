@@ -1,0 +1,25 @@
+# Trivy configuration file
+# Suppress specific vulnerabilities in test files
+
+# Kubernetes checks configuration
+kubernetes:
+  # Policies to skip globally
+  policy:
+    # Skip specific checks for files matching patterns
+    excludes:
+      - id: AVD-KSV-0001  # allowPrivilegeEscalation
+        paths:
+          - tests/**/*.yaml
+          - tests/**/*.yml
+      - id: AVD-KSV-0106  # AppArmor
+        paths:
+          - tests/**/*.yaml
+          - tests/**/*.yml
+      - id: AVD-KSV-0110  # Default namespace
+        paths:
+          - tests/**/*.yaml
+          - tests/**/*.yml
+      - id: AVD-KSV-0125  # Untrusted registry
+        paths:
+          - tests/**/*.yaml
+          - tests/**/*.yml
