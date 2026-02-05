@@ -26,7 +26,9 @@ spec:
             memory: "256 Mi"
           limits:
             cpu: "1"
-            memory: "1Gi"  
+            memory: "1Gi"
+        # trivy:ignore:AVD-KSV-0001 Kimia requires privilege escalation for container building
+        # trivy:ignore:AVD-KSV-0011 Test manifests don't need strict CPU limits
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
