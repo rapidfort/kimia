@@ -118,7 +118,7 @@ jobs:
             dockerfile: "7.4/debian/Dockerfile"
           - test_image: postgres
             context: "https://github.com/docker-library/postgres.git"
-            context_subpath: "17/alpine3.21"
+            context_subpath: "17/alpine3.22"
             dockerfile: "Dockerfile"
 
     steps:
@@ -168,8 +168,10 @@ jobs:
           # Run Kimia container with required capabilities
           docker run --rm \
             --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add SYS_ADMIN \
             "${{ steps.vars.outputs.kimia_image }}" \
             $KIMIA_ARGS
 
@@ -203,7 +205,7 @@ jobs:
             dockerfile: "7.4/debian/Dockerfile"
           - test_image: postgres
             context: "https://github.com/docker-library/postgres.git"
-            context_subpath: "17/alpine3.21"
+            context_subpath: "17/alpine3.22"
             dockerfile: "Dockerfile"
 
     steps:
@@ -242,6 +244,7 @@ jobs:
           KIMIA_ARGS="$KIMIA_ARGS --dockerfile=${{ matrix.dockerfile }}"
           KIMIA_ARGS="$KIMIA_ARGS --destination=${{ steps.vars.outputs.dest_image }}"
           KIMIA_ARGS="$KIMIA_ARGS --no-push"
+          KIMIA_ARGS="$KIMIA_ARGS --storage-driver=vfs"
           KIMIA_ARGS="$KIMIA_ARGS -v=info"
 
           if [ -n "${{ matrix.context_subpath }}" ]; then
@@ -253,8 +256,10 @@ jobs:
           # Run Kimia-Bud container with required capabilities
           docker run --rm \
             --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add SYS_ADMIN \
             "${{ steps.vars.outputs.kimia_image }}" \
             $KIMIA_ARGS
 
