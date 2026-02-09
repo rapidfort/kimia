@@ -2,9 +2,11 @@ name: Test
 
 on:
   push:
-    branches: [main, develop]
+    branches:
+      - '**'
   pull_request:
-    branches: [main, develop]
+    branches:
+      - '**'
 
 jobs:
   # Run Go unit tests across all packages
