@@ -7,9 +7,124 @@ on:
     branches: [main, develop]
 
 jobs:
+  # Run Go unit tests across all packages
+  unit-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: src/go.sum
+
+      - name: Download dependencies
+        working-directory: src
+        run: go mod download
+
+      - name: Run unit tests with coverage
+        working-directory: src
+        run: |
+          echo "🧪 Running unit tests across all packages..."
+
+          # Run tests with coverage and verbose output
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./... 2>&1 | tee test-output.txt
+
+          # Check exit code
+          TEST_EXIT_CODE=${PIPESTATUS[0]}
+
+          # Generate coverage report
+          echo ""
+          echo "📊 Coverage Report:"
+          go tool cover -func=coverage.out | tail -20
+
+          # Extract total coverage
+          TOTAL_COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo ""
+          echo "📈 Total Coverage: $TOTAL_COVERAGE"
+
+          exit $TEST_EXIT_CODE
+
+      - name: Generate coverage HTML report
+        if: always()
+        working-directory: src
+        run: |
+          if [ -f coverage.out ]; then
+            go tool cover -html=coverage.out -o coverage.html
+            echo "✅ Coverage HTML report generated"
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            src/coverage.out
+            src/coverage.html
+          retention-days: 7
+
+      - name: Upload test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output
+          path: src/test-output.txt
+          retention-days: 7
+
+      - name: Generate test summary
+        if: always()
+        working-directory: src
+        run: |
+          echo "## 🧪 Unit Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Count test results
+          if [ -f test-output.txt ]; then
+            PASSED=$(grep -c "^--- PASS" test-output.txt || echo "0")
+            FAILED=$(grep -c "^--- FAIL" test-output.txt || echo "0")
+            SKIPPED=$(grep -c "^--- SKIP" test-output.txt || echo "0")
+
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Add coverage info
+          if [ -f coverage.out ]; then
+            TOTAL_COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+            echo "### 📊 Code Coverage: $TOTAL_COVERAGE" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>Coverage by package</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # List failed tests if any
+          if [ -f test-output.txt ] && grep -q "^--- FAIL" test-output.txt; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### ❌ Failed Tests" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep "^--- FAIL" test-output.txt >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
   build-test:
     runs-on: ubuntu-latest
-    
+    needs: unit-tests
+
     strategy:
       matrix:
         include:
@@ -19,7 +134,7 @@ jobs:
           - image_name: kimia-bud
             dockerfile: Dockerfile.buildah
             description: "Kimia-Bud (Buildah)"
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -231,40 +346,64 @@ jobs:
   # Integration test summary
   test-summary:
     runs-on: ubuntu-latest
-    needs: [build-test, kubernetes-test]
+    needs: [unit-tests, build-test, kubernetes-test]
     if: always()
-    
+
     steps:
       - name: Check test results
         run: |
+          UNIT_STATUS="${{ needs.unit-tests.result }}"
           BUILD_STATUS="${{ needs.build-test.result }}"
           K8S_STATUS="${{ needs.kubernetes-test.result }}"
-          
-          echo "## 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+
+          echo "## 🧪 Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
-          
+
+          if [[ "$UNIT_STATUS" == "success" ]]; then
+            echo "| Unit Tests | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "$UNIT_STATUS" == "skipped" ]]; then
+            echo "| Unit Tests | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Unit Tests | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
           if [[ "$BUILD_STATUS" == "success" ]]; then
             echo "| Build Tests | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          elif [[ "$BUILD_STATUS" == "skipped" ]]; then
+            echo "| Build Tests | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| Build Tests | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           if [[ "$K8S_STATUS" == "success" ]]; then
             echo "| Kubernetes Tests | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
           elif [[ "$K8S_STATUS" == "skipped" ]]; then
-            echo "| Kubernetes Tests | ⏭️  Skipped (not a PR) |" >> $GITHUB_STEP_SUMMARY
+            echo "| Kubernetes Tests | ⏭️ Skipped (not a PR) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| Kubernetes Tests | ❌ Failed |" >> $GITHUB_STEP_SUMMARY
           fi
-          
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Images Tested" >> $GITHUB_STEP_SUMMARY
           echo "- **kimia** (BuildKit-based)" >> $GITHUB_STEP_SUMMARY
           echo "- **kimia-bud** (Buildah-based)" >> $GITHUB_STEP_SUMMARY
-          
-          # Fail if build tests failed
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Packages" >> $GITHUB_STEP_SUMMARY
+          echo "- \`cmd/kimia\` - CLI argument parsing, version, help" >> $GITHUB_STEP_SUMMARY
+          echo "- \`internal/auth\` - Registry authentication" >> $GITHUB_STEP_SUMMARY
+          echo "- \`internal/build\` - Build execution, Git handling" >> $GITHUB_STEP_SUMMARY
+          echo "- \`internal/preflight\` - Environment validation" >> $GITHUB_STEP_SUMMARY
+
+          # Fail if unit tests or build tests failed
+          if [[ "$UNIT_STATUS" != "success" ]]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Unit tests failed - please fix before merging**" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
           if [[ "$BUILD_STATUS" != "success" ]]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "❌ **Build tests failed - please fix before merging**" >> $GITHUB_STEP_SUMMARY
