@@ -5,10 +5,10 @@ permissions:
   packages: read
 
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main, tests-kimia]
+  # pull_request:
+  #   branches: [main]
+  # push:
+  #   branches: [main, tests-kimia]
   workflow_dispatch:
     inputs:
       skip_k8s:
