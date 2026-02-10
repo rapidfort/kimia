@@ -254,6 +254,10 @@ func TestGetEnvironment(t *testing.T) {
 
 func TestCheckDependency(t *testing.T) {
 	t.Run("dependency exists at specified path", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		tmpDir := t.TempDir()
 		binPath := filepath.Join(tmpDir, "testbin")
 		os.WriteFile(binPath, []byte("#!/bin/sh\necho test"), 0755)
@@ -263,11 +267,19 @@ func TestCheckDependency(t *testing.T) {
 	})
 
 	t.Run("dependency not found", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		// Just verify it doesn't panic
 		checkDependency("nonexistent", "/nonexistent/path")
 	})
 
 	t.Run("dependency in PATH", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		// Test with a common binary that should exist
 		checkDependency("sh", "/bin/sh")
 	})
@@ -277,17 +289,29 @@ func TestCheckDependency(t *testing.T) {
 
 func TestCheckDependencyVersion(t *testing.T) {
 	t.Run("check version of existing command", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		// Test with a common command
 		checkDependencyVersion("sh", "sh", "--version")
 		// Just verify it doesn't panic
 	})
 
 	t.Run("check version of nonexistent command", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		checkDependencyVersion("nonexistent", "nonexistent", "--version")
 		// Just verify it doesn't panic
 	})
 
 	t.Run("check version with invalid arg", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		checkDependencyVersion("sh", "sh", "--invalid-arg-xyz")
 		// Just verify it doesn't panic
 	})
@@ -382,6 +406,10 @@ func TestCheckEnvironment(t *testing.T) {
 	}()
 
 	t.Run("check environment returns valid exit code", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		// This will run the actual check against the system
 		exitCode := CheckEnvironment()
 
@@ -394,6 +422,10 @@ func TestCheckEnvironment(t *testing.T) {
 	})
 
 	t.Run("check environment with vfs storage", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		os.Setenv("STORAGE_DRIVER", "vfs")
 		defer os.Unsetenv("STORAGE_DRIVER")
 
@@ -407,6 +439,10 @@ func TestCheckEnvironment(t *testing.T) {
 	})
 
 	t.Run("check environment with overlay storage", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		os.Setenv("STORAGE_DRIVER", "overlay")
 		defer os.Unsetenv("STORAGE_DRIVER")
 
@@ -457,6 +493,10 @@ func TestCheckEnvironmentWithDriver(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Suppress output to prevent CI failures from logger output
+			restore := suppressOutput(t)
+			defer restore()
+
 			exitCode := CheckEnvironmentWithDriver(tt.storageDriver)
 
 			if tt.wantValidExit {
@@ -599,6 +639,10 @@ func TestHelperFunctions_Concurrent(t *testing.T) {
 
 func TestRealWorldScenarios(t *testing.T) {
 	t.Run("typical kubernetes scenario", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		originalK8sHost := os.Getenv("KUBERNETES_SERVICE_HOST")
 		defer func() {
 			if originalK8sHost == "" {
@@ -622,6 +666,10 @@ func TestRealWorldScenarios(t *testing.T) {
 	})
 
 	t.Run("typical docker scenario", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		os.Unsetenv("KUBERNETES_SERVICE_HOST")
 
 		// In test environment, we can't easily fake Docker detection
@@ -631,6 +679,10 @@ func TestRealWorldScenarios(t *testing.T) {
 	})
 
 	t.Run("typical standalone scenario", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		os.Unsetenv("KUBERNETES_SERVICE_HOST")
 
 		exitCode := CheckEnvironmentWithDriver("vfs")
@@ -681,6 +733,10 @@ func TestEnvironmentVariables(t *testing.T) {
 
 func TestStorageDriverSelection(t *testing.T) {
 	t.Run("storage driver defaults", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		// Test that CheckEnvironment selects appropriate defaults
 		// This is an integration test that verifies the logic works
 
