@@ -175,6 +175,22 @@ func TestShouldProceed(t *testing.T) {
 // printBox Tests
 // ============================================================================
 
+// suppressStderr redirects stderr to /dev/null during test execution
+// to prevent logger output from causing CI failures
+func suppressStderr(t *testing.T) func() {
+	t.Helper()
+	oldStderr := os.Stderr
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("Failed to open /dev/null: %v", err)
+	}
+	os.Stderr = devNull
+	return func() {
+		os.Stderr = oldStderr
+		devNull.Close()
+	}
+}
+
 func TestPrintBox(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -220,6 +236,10 @@ func TestPrintBox(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Suppress stderr to prevent CI failures from logger output
+			restore := suppressStderr(t)
+			defer restore()
+
 			// Just verify it doesn't panic
 			// We can't easily test output without capturing logger output
 			printBox(tt.messages, tt.title)
@@ -229,21 +249,37 @@ func TestPrintBox(t *testing.T) {
 
 func TestPrintBoxEdgeCases(t *testing.T) {
 	t.Run("nil messages slice", func(t *testing.T) {
+		// Suppress stderr to prevent CI failures from logger output
+		restore := suppressStderr(t)
+		defer restore()
+
 		// Should not panic
 		printBox(nil, "ERROR")
 	})
 
 	t.Run("very long title", func(t *testing.T) {
+		// Suppress stderr to prevent CI failures from logger output
+		restore := suppressStderr(t)
+		defer restore()
+
 		// Should not panic
 		printBox([]string{"test"}, "THIS IS A VERY LONG TITLE THAT EXCEEDS WIDTH")
 	})
 
 	t.Run("empty title", func(t *testing.T) {
+		// Suppress stderr to prevent CI failures from logger output
+		restore := suppressStderr(t)
+		defer restore()
+
 		// Should not panic
 		printBox([]string{"test"}, "")
 	})
 
 	t.Run("special characters in messages", func(t *testing.T) {
+		// Suppress stderr to prevent CI failures from logger output
+		restore := suppressStderr(t)
+		defer restore()
+
 		messages := []string{
 			"Message with Unicode: ✓ ✗ ⚠",
 			"Message with tabs:\t\ttabs",
@@ -257,6 +293,25 @@ func TestPrintBoxEdgeCases(t *testing.T) {
 // ============================================================================
 // PrintValidationResult Tests
 // ============================================================================
+
+// suppressOutput redirects both stdout and stderr to /dev/null during test execution
+// to prevent logger output from causing CI failures
+func suppressOutput(t *testing.T) func() {
+	t.Helper()
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("Failed to open /dev/null: %v", err)
+	}
+	os.Stdout = devNull
+	os.Stderr = devNull
+	return func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+		devNull.Close()
+	}
+}
 
 func TestPrintValidationResult(t *testing.T) {
 	tests := []struct {
@@ -307,6 +362,10 @@ func TestPrintValidationResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Suppress output to prevent CI failures from logger output
+			restore := suppressOutput(t)
+			defer restore()
+
 			// Just verify it doesn't panic
 			PrintValidationResult(tt.result)
 		})
@@ -1121,6 +1180,10 @@ func TestValidatorEdgeCases(t *testing.T) {
 	})
 
 	t.Run("very long error messages", func(t *testing.T) {
+		// Suppress output to prevent CI failures from logger output
+		restore := suppressOutput(t)
+		defer restore()
+
 		longMsg := strings.Repeat("This is a very long error message. ", 100)
 		result := &ValidationResult{
 			Status: StatusError,
@@ -1339,6 +1402,21 @@ func BenchmarkShouldProceed(b *testing.B) {
 }
 
 func BenchmarkPrintValidationResult(b *testing.B) {
+	// Redirect output to /dev/null to prevent CI failures
+	oldStdout := os.Stdout
+	oldStderr := os.Stderr
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		b.Fatalf("Failed to open /dev/null: %v", err)
+	}
+	os.Stdout = devNull
+	os.Stderr = devNull
+	defer func() {
+		os.Stdout = oldStdout
+		os.Stderr = oldStderr
+		devNull.Close()
+	}()
+
 	result := &ValidationResult{
 		Status:        StatusSuccess,
 		BuildMode:     BuildModeRootless,
