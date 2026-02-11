@@ -891,10 +891,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
-	// DIGEST FILE EXPORT (TODO)
+	// DIGEST FILE EXPORT
 	// ========================================
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		logger.Warning("Digest file export not yet implemented for BuildKit")
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
+		if err := SaveDigestInfo(config, digestMap); err != nil {
+			logger.Warning("Failed to save digest information: %v", err)
+		}
 	}
 
 	return nil
