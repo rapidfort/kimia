@@ -926,6 +926,21 @@ func executeBuildKit(config Config, ctx *Context) error {
 func exportToTar(config Config) error {
 	logger.Info("Exporting image to TAR: %s", config.TarPath)
 
+	// Ensure Docker config exists - buildah requires a credentials file
+	// even for local tar export operations
+	dockerConfigDir := auth.GetDockerConfigDir()
+	configPath := filepath.Join(dockerConfigDir, "config.json")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(dockerConfigDir, 0755); err != nil {
+			return fmt.Errorf("failed to create Docker config directory: %v", err)
+		}
+		emptyConfig := []byte(`{"auths":{}}`)
+		if err := os.WriteFile(configPath, emptyConfig, 0600); err != nil {
+			return fmt.Errorf("failed to create empty Docker config: %v", err)
+		}
+		logger.Debug("Created empty Docker config for tar export")
+	}
+
 	if len(config.Destination) == 0 {
 		return fmt.Errorf("no destination specified for TAR export")
 	}
