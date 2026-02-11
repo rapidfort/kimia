@@ -66,15 +66,7 @@ func ValidateSocketPath(socketPath string) error {
     if socketPath == "" {
         return fmt.Errorf("empty socket path")
     }
-    
-    // Must have unix:// prefix for our use cases
-    if !strings.HasPrefix(socketPath, "unix://") {
-        return fmt.Errorf("socket path must start with unix://")
-    }
-    
-    // Extract actual path
-    path := strings.TrimPrefix(socketPath, "unix://")
-    
+
     // Reject shell metacharacters
     if strings.ContainsAny(path, ";|&$`\n") {
         return fmt.Errorf("invalid characters in socket path")
