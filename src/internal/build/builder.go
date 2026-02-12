@@ -465,7 +465,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Only write if we modified it
 		if configModified {
-			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0600); err != nil {
 				return fmt.Errorf("failed to write buildkit config: %v", err)
 			}
 			logger.Debug("Updated buildkit config written to: %s", buildkitConfig)

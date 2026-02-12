@@ -22,6 +22,7 @@ type DockerConfig struct {
 type DockerAuth struct {
 	Auth     string `json:"auth,omitempty"`
 	Username string `json:"username,omitempty"`
+	// #nosec G117 -- Password field required for Docker config.json schema compatibility
 	Password string `json:"password,omitempty"`
 }
 
@@ -226,7 +227,7 @@ func CreateRegistriesConf(configDir string, insecureRegistries []string, destina
 
 	// Write registries.conf
 	confPath := filepath.Join(configDir, "registries.conf")
-	if err := os.WriteFile(confPath, []byte(sb.String()), 0644); err != nil {
+	if err := os.WriteFile(confPath, []byte(sb.String()), 0600); err != nil {
 		return fmt.Errorf("failed to write registries.conf: %v", err)
 	}
 
