@@ -77,7 +77,6 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		workspaceDir := filepath.Join(homeDir, "workspace")
 
 		// Ensure workspace directory exists
-		// #nosec G703 -- workspaceDir validated and cleaned above
 		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
 		}
@@ -94,7 +93,6 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
-			// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -111,12 +109,10 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 				if gitConfig.Branch != "" {
 					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
 					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
-						// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 						os.RemoveAll(tempDir)
 						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 					}
 				} else {
-					// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 					os.RemoveAll(tempDir)
 					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 				}
@@ -135,7 +131,6 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			// No revision specified, just checkout the branch
 			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
-				// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 			}
@@ -267,7 +262,6 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
-	// #nosec G702 -- git command with controlled arguments
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
