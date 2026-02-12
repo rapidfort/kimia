@@ -891,10 +891,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
-	// DIGEST FILE EXPORT (TODO)
+	// DIGEST FILE EXPORT
 	// ========================================
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		logger.Warning("Digest file export not yet implemented for BuildKit")
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
+		if err := SaveDigestInfo(config, digestMap); err != nil {
+			logger.Warning("Failed to save digest information: %v", err)
+		}
 	}
 
 	return nil
@@ -1032,7 +1034,15 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 	// Save image name with digest
 	if config.ImageNameWithDigestFile != "" {
-		imageName := strings.Split(image, ":")[0]
+		// Strip the tag but preseve the host:port, so we are stripping at the last colon
+		imageName := image
+		if lastSlash := strings.LastIndex(image, "/"); lastSlash != -1 {
+			if lastColon := strings.LastIndex(image, ":"); lastColon > lastSlash {
+				imageName = image[:lastColon]
+			}
+		} else if lastColon := strings.LastIndex(image, ":"); lastColon != -1 {
+			imageName = image[:lastColon]
+		}
 		imageWithDigest := fmt.Sprintf("%s@%s", imageName, digest)
 		if err := os.WriteFile(config.ImageNameWithDigestFile, []byte(imageWithDigest), 0644); err != nil {
 			return fmt.Errorf("failed to write image name with digest file: %v", err)
