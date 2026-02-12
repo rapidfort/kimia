@@ -337,6 +337,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 	}
 
 	configFile := filepath.Clean(filepath.Join(dockerConfig, "config.json"))
+	// #nosec G703 -- path constructed with filepath.Clean and known base
 	if _, err := os.Stat(configFile); err == nil {
 		logger.Info("  Docker Config:           %s", configFile)
 		logger.Info("  Auth File Readable:      Yes %s", getCheckmark(true))

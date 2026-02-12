@@ -385,6 +385,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			defer func() {
 				logger.Debug("Cleaning up temp context directory: %s", tempContext)
+				// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 				os.RemoveAll(tempContext)
 			}()
 
@@ -789,6 +790,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// Execute build
+	// #nosec G702 -- buildctl command with validated arguments
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildkit build failed: %v", err)
 	}
