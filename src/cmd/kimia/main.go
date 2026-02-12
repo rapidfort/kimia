@@ -135,8 +135,8 @@ func main() {
 	// Apply context-sub-path for local contexts (not Git URLs)
 	// For Git URLs with BuildKit, SubContext is handled in FormatGitURLForBuildKit
 	if config.SubContext != "" && ctx.Path != "" {
-		subPath := filepath.Join(ctx.Path, config.SubContext)
-		
+		subPath := filepath.Clean(filepath.Join(ctx.Path, config.SubContext))
+
 		// Verify the subdirectory exists
 		if _, err := os.Stat(subPath); err != nil {
 			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)

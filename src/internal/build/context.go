@@ -74,7 +74,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			homeDir = "/home/kimia"
 		}
 
-		workspaceDir := filepath.Join(homeDir, "workspace")
+		workspaceDir := filepath.Clean(filepath.Join(homeDir, "workspace"))
 
 		// Ensure workspace directory exists
 		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
@@ -86,6 +86,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}
+		tempDir = filepath.Clean(tempDir)
 
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true

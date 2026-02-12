@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+
 	"github.com/rapidfort/kimia/internal/auth"
 	"github.com/rapidfort/kimia/internal/security"
 	"github.com/rapidfort/kimia/pkg/logger"
@@ -58,13 +59,13 @@ type Config struct {
 	// Attestation and signing (BuildKit only)
 	// Level 1: Simple mode (backward compatible)
 	Attestation string // "off", "min" or "max"
-	
+
 	// Level 2: Docker-style attestations (advanced)
 	AttestationConfigs []AttestationConfig
-	
+
 	// Level 3: Direct BuildKit options (escape hatch)
 	BuildKitOpts []string
-	
+
 	// Signing
 	Sign              bool   // Enable signing with cosign
 	CosignKeyPath     string // Path to cosign private key
@@ -226,13 +227,13 @@ func executeBuildah(config Config, ctx *Context) error {
 	var sourceEpoch string
 	if config.Reproducible && config.Timestamp != "" {
 		sourceEpoch = config.Timestamp
-    
-    	// 1. Set timestamp for image metadata
-    	args = append(args, "--timestamp", sourceEpoch)
-    
-    	// 2. Pass as build arg so Dockerfile can use it
-    	//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
-    
+
+		// 1. Set timestamp for image metadata
+		args = append(args, "--timestamp", sourceEpoch)
+
+		// 2. Pass as build arg so Dockerfile can use it
+		//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+
 	}
 
 	// Add insecure registry options for build
@@ -325,6 +326,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if homeDir == "" {
 		homeDir = "/home/kimia"
 	}
+	homeDir = filepath.Clean(homeDir)
 
 	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if xdgRuntimeDir == "" {
@@ -332,7 +334,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	buildkitSocket := filepath.Join(xdgRuntimeDir, "buildkitd.sock")
-	buildkitConfig := filepath.Join(homeDir, ".config/buildkit/buildkitd.toml")
+	buildkitConfig := filepath.Clean(filepath.Join(homeDir, ".config/buildkit/buildkitd.toml"))
 
 	logger.Debug("BuildKit configuration:")
 	logger.Debug("  HOME: %s", homeDir)
@@ -352,7 +354,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if ctx.IsGitRepo && ctx.GitURL != "" {
 		logger.Info("Using BuildKit native Git context (no local clone)")
 		isGitContext = true
-		
+
 		// Format Git URL with authentication, branch/revision, and subcontext
 		formattedURL, err := FormatGitURLForBuildKit(ctx.GitURL, ctx.GitConfig, ctx.SubContext)
 		if err != nil {
@@ -362,14 +364,14 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else {
 		// Local context handling
 		buildContext = ctx.Path
-		
+
 		// Only copy if it's a bind mount, not a git clone
 		isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
 		if isBindMount {
 			logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
 
 			// Create cache directory
-			cacheDir := filepath.Join(homeDir, ".cache/buildkit")
+			cacheDir := filepath.Clean(filepath.Join(homeDir, ".cache/buildkit"))
 			if err := os.MkdirAll(cacheDir, 0755); err != nil {
 				return fmt.Errorf("failed to create cache directory: %v", err)
 			}
@@ -417,7 +419,7 @@ func executeBuildKit(config Config, ctx *Context) error {
   noProcessSandbox = true
 `
 			logger.Debug("Config file not found, using default (matches Dockerfile)")
-			
+
 			// Create config directory if it doesn't exist
 			configDir := filepath.Dir(buildkitConfig)
 			if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -427,7 +429,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Collect all registries that need insecure config
 		registries := make(map[string]bool)
-		
+
 		// If --insecure is set, add all destination registries
 		if config.Insecure {
 			for _, dest := range config.Destination {
@@ -437,7 +439,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				}
 			}
 		}
-		
+
 		// Add specific insecure registries from --insecure-registry
 		for _, registry := range config.InsecureRegistry {
 			registries[registry] = true
@@ -497,7 +499,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
 		"--net=host",
-		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
+		"--copy-up=/home", // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
 		"--config="+buildkitConfig,
@@ -718,10 +720,10 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// ATTESTATION: Configure attestations for BuildKit
 	// ========================================
-	
+
 	// Determine which attestation mode to use
 	var attestOpts []string
-	
+
 	if len(config.AttestationConfigs) > 0 {
 		// Level 2: Docker-style attestations
 		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args)
@@ -734,12 +736,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 		// No attestations
 		logger.Debug("Attestations disabled")
 	}
-	
+
 	// Add attestation options to args
 	for _, opt := range attestOpts {
 		args = append(args, "--opt", opt)
 	}
-	
+
 	// Level 3: Direct BuildKit options (pass-through)
 	for _, opt := range config.BuildKitOpts {
 		args = append(args, "--opt", opt)
@@ -797,7 +799,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// REPRODUCIBLE BUILDS: Extract digest from output
 	// ========================================
 	digestMap := make(map[string]string) // Map tag -> digest
-	
+
 	if !config.NoPush && len(config.Destination) > 0 {
 		stderrOutput := stderrBuf.String()
 		stdoutOutput := stdoutBuf.String()
@@ -878,7 +880,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 			logger.Warning("Signing requested but no cosign key provided (--cosign-key), skipping signature")
 		} else {
 			logger.Info("Signing images with cosign...")
-			
+
 			for _, dest := range config.Destination {
 				// Use digest-based reference if available
 				imageToSign := dest
@@ -903,7 +905,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				} else {
 					logger.Warning("No digest found for %s, signing with tag (not recommended)", dest)
 				}
-				
+
 				if err := signImageWithCosign(imageToSign, config); err != nil {
 					return fmt.Errorf("failed to sign image %s: %v", imageToSign, err)
 				}
@@ -952,6 +954,7 @@ func exportToTar(config Config) error {
 	if homeDir == "" {
 		homeDir = "/home/kimia"
 	}
+	homeDir = filepath.Clean(homeDir)
 
 	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
 	logger.Debug("Attempting TAR export with buildah push...")
@@ -959,18 +962,18 @@ func exportToTar(config Config) error {
 	if err := security.ValidateImageReference(image); err != nil {
 		return fmt.Errorf("invalid image reference: %v", err)
 	}
-	
+
 	// Clean the tar path
 	cleanTarPath := filepath.Clean(config.TarPath)
-	
+
 	// Validate for shell metacharacters
 	if strings.ContainsAny(cleanTarPath, ";|&$`\n") {
 		return fmt.Errorf("invalid characters in tar path")
 	}
-	
+
 	// #nosec G204 -- image reference validated and tar path sanitized above
 	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", cleanTarPath))
-	
+
 	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = &stderr
@@ -1107,6 +1110,9 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 // copyDir recursively copies a directory from src to dst
 func copyDir(src, dst string) error {
+	src = filepath.Clean(src)
+	dst = filepath.Clean(dst)
+
 	// Get source directory info
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -1125,8 +1131,8 @@ func copyDir(src, dst string) error {
 	}
 
 	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
+		srcPath := filepath.Clean(filepath.Join(src, entry.Name()))
+		dstPath := filepath.Clean(filepath.Join(dst, entry.Name()))
 
 		if entry.IsDir() {
 			// Recursively copy subdirectory
@@ -1146,6 +1152,9 @@ func copyDir(src, dst string) error {
 
 // copyFile copies a single file from src to dst
 func copyFile(src, dst string) error {
+	src = filepath.Clean(src)
+	dst = filepath.Clean(dst)
+
 	// Get source file info for permissions
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -1169,7 +1178,7 @@ func copyFile(src, dst string) error {
 // buildAttestationOptsFromSimpleMode converts simple mode to BuildKit opts
 func buildAttestationOptsFromSimpleMode(mode string) []string {
 	var opts []string
-	
+
 	switch mode {
 	case "min":
 		// Provenance only, minimal info
@@ -1177,30 +1186,30 @@ func buildAttestationOptsFromSimpleMode(mode string) []string {
 		opts = append(opts, "attest:sbom=false")
 		opts = append(opts, "attest:provenance=mode=min")
 		logger.Debug("Simple mode 'min': provenance only (SBOM explicitly disabled)")
-		
+
 	case "max":
 		// SBOM + Provenance, maximum info
 		opts = append(opts, "attest:sbom=true")
 		opts = append(opts, "attest:provenance=mode=max")
 		logger.Debug("Simple mode 'max': SBOM + provenance")
-		
+
 	default:
 		logger.Fatal("Invalid attestation mode: %s", mode)
 	}
-	
+
 	return opts
 }
 
 // buildAttestationOptsFromConfigs converts --attest configs to BuildKit opts
 func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string) []string {
 	var opts []string
-	
+
 	for _, config := range configs {
 		switch config.Type {
 		case "sbom":
 			opt := buildSBOMOpt(config)
 			opts = append(opts, opt)
-			
+
 			// Handle scan options as build args
 			if config.Params["scan-context"] == "true" {
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_CONTEXT=1")
@@ -1210,14 +1219,14 @@ func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_STAGE=1")
 				logger.Debug("Added SBOM scan build arg: BUILDKIT_SBOM_SCAN_STAGE=1")
 			}
-			
+
 		case "provenance":
 			opts = append(opts, buildProvenanceOpt(config))
 		default:
 			logger.Fatal("Unknown attestation type: %s", config.Type)
 		}
 	}
-	
+
 	return opts
 }
 
@@ -1227,38 +1236,38 @@ func buildSBOMOpt(config AttestationConfig) string {
 	if len(config.Params) == 0 {
 		return "attest:sbom=true"
 	}
-	
+
 	// Build comma-separated params
 	var parts []string
-	
+
 	// Special handling for generator param
 	if generator, ok := config.Params["generator"]; ok {
 		parts = append(parts, fmt.Sprintf("generator=%s", generator))
 	} else {
 		parts = append(parts, "true") // Enable with default generator
 	}
-	
+
 	// Add any other params as-is (except scan-context and scan-stage which are handled separately)
 	for key, value := range config.Params {
 		if key != "generator" && key != "scan-context" && key != "scan-stage" {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	return fmt.Sprintf("attest:sbom=%s", strings.Join(parts, ","))
 }
 
 // buildProvenanceOpt builds a single provenance attestation opt
 func buildProvenanceOpt(config AttestationConfig) string {
 	var parts []string
-	
+
 	// Mode (default to max if not specified)
 	mode := config.Params["mode"]
 	if mode == "" {
 		mode = "max"
 	}
 	parts = append(parts, fmt.Sprintf("mode=%s", mode))
-	
+
 	// Add all other parameters in a consistent order
 	paramOrder := []string{"builder-id", "reproducible", "inline-only", "version", "filename"}
 	for _, key := range paramOrder {
@@ -1266,14 +1275,14 @@ func buildProvenanceOpt(config AttestationConfig) string {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	// Add any remaining params not in the order list
 	for key, value := range config.Params {
 		if key != "mode" && !contains(paramOrder, key) {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	return fmt.Sprintf("attest:provenance=%s", strings.Join(parts, ","))
 }
 
@@ -1300,7 +1309,7 @@ func signImageWithCosign(image string, config Config) error {
 	if config.CosignKeyPath == "" {
 		return fmt.Errorf("cosign key path is required")
 	}
-	
+
 	// Clean and validate the key path
 	cleanKeyPath := filepath.Clean(config.CosignKeyPath)
 	if strings.ContainsAny(cleanKeyPath, ";|&$`\n") {
@@ -1325,7 +1334,7 @@ func signImageWithCosign(image string, config Config) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	
+
 	cmd.Env = append(cmd.Env, "COSIGN_EXPERIMENTAL=1")
 
 	// Set cosign password from environment variable if specified
@@ -1362,7 +1371,7 @@ func sanitizeCommandArgs(args []string) []string {
 		"SECRET",
 		"CREDENTIALS",
 	}
-	
+
 	sanitized := make([]string, len(args))
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
