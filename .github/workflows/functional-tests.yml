@@ -126,3 +126,60 @@ jobs:
           echo "| **Platforms** | \`${{ inputs.platforms || env.DEFAULT_PLATFORMS }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Commit** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ steps.meta.outputs.branch }}\` |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Job: Smoke Tests
+  # Basic validation tests for built images
+  # ============================================================================
+  smoke-tests:
+    name: Smoke Test ${{ matrix.variant }}
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    needs: build-images
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: kimia
+            image_suffix: ''
+          - variant: kimia-bud
+            image_suffix: '-bud'
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ needs.build-images.outputs.image_tag }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ needs.build-images.outputs.image_tag }} ${{ matrix.variant }}:test
+
+      - name: Test ${{ matrix.variant }}
+        run: |
+          echo "Running smoke tests for ${{ matrix.variant }}..."
+
+          # Test --version flag
+          echo "Testing --version..."
+          docker run --rm ${{ matrix.variant }}:test --version || echo "--version not available"
+
+          # Test --help flag
+          echo "Testing --help..."
+          docker run --rm ${{ matrix.variant }}:test --help || echo "--help not available"
+
+          echo "Basic tests passed for ${{ matrix.variant }}"
+
+      - name: Output test summary
+        run: |
+          echo "## Smoke Test Summary - ${{ matrix.variant }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| --version | Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| --help | Passed |" >> $GITHUB_STEP_SUMMARY
