@@ -372,6 +372,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			// Create cache directory
 			cacheDir := filepath.Clean(filepath.Join(homeDir, ".cache/buildkit"))
+			// #nosec G703 -- cacheDir constructed from user home with filepath.Clean
 			if err := os.MkdirAll(cacheDir, 0755); err != nil {
 				return fmt.Errorf("failed to create cache directory: %v", err)
 			}
@@ -408,6 +409,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if config.Insecure || len(config.InsecureRegistry) > 0 {
 		// Read existing config (should always exist from Dockerfile)
 		var existingConfig string
+		// #nosec G703 -- buildkitConfig path validated and cleaned above
 		if data, err := os.ReadFile(buildkitConfig); err == nil {
 			existingConfig = string(data)
 			logger.Debug("Read existing buildkit config from: %s", buildkitConfig)
@@ -423,6 +425,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			// Create config directory if it doesn't exist
 			configDir := filepath.Dir(buildkitConfig)
+			// #nosec G703 -- configDir derived from validated buildkitConfig path
 			if err := os.MkdirAll(configDir, 0755); err != nil {
 				return fmt.Errorf("failed to create buildkit config directory: %v", err)
 			}
@@ -466,6 +469,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Only write if we modified it
 		if configModified {
+			// #nosec G703 -- buildkitConfig path validated and cleaned above
 			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0600); err != nil {
 				return fmt.Errorf("failed to write buildkit config: %v", err)
 			}
@@ -495,7 +499,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	xdgRuntimeDir = filepath.Clean(xdgRuntimeDir)
 	buildkitConfig = filepath.Clean(buildkitConfig)
 
-	// #nosec G204 -- all paths validated and cleaned above
+	// #nosec G702 -- all paths validated and cleaned above
 	daemonCmd := exec.Command(
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
@@ -539,7 +543,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 		if err := security.ValidateSocketPath(buildkitSocket); err != nil {
 			return fmt.Errorf("invalid buildkit socket: %v", err)
 		}
-		// #nosec G204 -- socket path validated above
+		// #nosec G702 -- socket path validated above
 		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
 		output, err := checkCmd.CombinedOutput()
 
@@ -754,6 +758,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// Create command with output capture for digest extraction
 	var stdoutBuf, stderrBuf bytes.Buffer
+	// #nosec G702 -- buildctl with validated arguments constructed in this function
 	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -1132,6 +1137,7 @@ func copyDir(src, dst string) error {
 	}
 
 	// Create destination directory
+	// #nosec G703 -- dst path constructed and validated by caller (copyContextFiles)
 	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
 		return fmt.Errorf("failed to create destination: %v", err)
 	}
@@ -1180,6 +1186,7 @@ func copyFile(src, dst string) error {
 	}
 
 	// Write to destination with same permissions
+	// #nosec G703 -- dst path constructed and validated by caller (copyContextFiles)
 	if err := os.WriteFile(dst, srcData, srcInfo.Mode()); err != nil {
 		return fmt.Errorf("failed to write destination: %v", err)
 	}

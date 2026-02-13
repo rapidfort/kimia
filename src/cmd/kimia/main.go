@@ -55,6 +55,7 @@ func main() {
 			}
 		}
 		if !isValid {
+			// #nosec G705 -- CLI stderr output, not HTML/web context
 			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
 			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
 			os.Exit(1)
@@ -138,6 +139,7 @@ func main() {
 		subPath := filepath.Clean(filepath.Join(ctx.Path, config.SubContext))
 
 		// Verify the subdirectory exists
+		// #nosec G703 -- subPath constructed from validated context path and config.SubContext
 		if _, err := os.Stat(subPath); err != nil {
 			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
 		}
