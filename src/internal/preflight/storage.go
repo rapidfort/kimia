@@ -171,7 +171,16 @@ func TestOverlayMount() *OverlayTestResult {
 
 // unmountOverlay unmounts an overlay filesystem
 func unmountOverlay(mountPoint string) error {
-	// Use umount for native kernel overlay in rootless mode
+	// Validate mountPoint is within /tmp for security
+	cleanPath := filepath.Clean(mountPoint)
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("mount point must be absolute path")
+	}
+	if !strings.HasPrefix(cleanPath, "/tmp/") {
+		return fmt.Errorf("mount point must be under /tmp")
+	}
+	
+	// #nosec G204 -- mountPoint validated to be absolute path under /tmp
 	cmd := exec.Command("umount", mountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))

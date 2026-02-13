@@ -22,7 +22,6 @@ type DockerConfig struct {
 type DockerAuth struct {
 	Auth     string `json:"auth,omitempty"`
 	Username string `json:"username,omitempty"`
-	// #nosec G117 -- Password field required for Docker config.json schema compatibility
 	Password string `json:"password,omitempty"`
 }
 
@@ -30,6 +29,33 @@ type DockerAuth struct {
 type SetupConfig struct {
 	Destinations     []string
 	InsecureRegistry []string
+}
+
+// validateDockerConfigPath ensures the path is within allowed Docker config locations
+func validateDockerConfigPath(configPath string) error {
+	cleanPath := filepath.Clean(configPath)
+	
+	// Get user's home directory
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("failed to get home directory: %v", err)
+	}
+	
+	// Allowed base paths for Docker configs
+	allowedPaths := []string{
+		filepath.Join(homeDir, ".docker"),
+		"/home/kimia/.docker",
+		"/etc/docker",
+		"/run/containers",
+	}
+	
+	for _, allowed := range allowedPaths {
+		if strings.HasPrefix(cleanPath, filepath.Clean(allowed)) {
+			return nil
+		}
+	}
+	
+	return fmt.Errorf("config path outside allowed Docker directories: %s", cleanPath)
 }
 
 // GetDockerConfigDir returns the Docker config directory
@@ -129,6 +155,10 @@ func Setup(config SetupConfig) error {
 	}
 
 	// Read and validate the config
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return err
+	}
+	// #nosec G304 -- configPath validated to be within allowed Docker directories
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read Docker config: %v", err)
@@ -188,6 +218,10 @@ func Setup(config SetupConfig) error {
 
 // ValidateDockerConfig validates a Docker config.json file
 func ValidateDockerConfig(configPath string) error {
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return err
+	}
+	// #nosec G304 -- configPath validated to be within allowed Docker directories
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config: %v", err)
@@ -227,7 +261,7 @@ func CreateRegistriesConf(configDir string, insecureRegistries []string, destina
 
 	// Write registries.conf
 	confPath := filepath.Join(configDir, "registries.conf")
-	if err := os.WriteFile(confPath, []byte(sb.String()), 0600); err != nil {
+	if err := os.WriteFile(confPath, []byte(sb.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write registries.conf: %v", err)
 	}
 
@@ -260,6 +294,10 @@ func GetRegistryAuth(registry string) (string, error) {
 	dockerConfigDir := GetDockerConfigDir()
 	configPath := filepath.Join(dockerConfigDir, "config.json")
 
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return "", err
+	}
+	// #nosec G304 -- configPath validated to be within allowed Docker directories
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read Docker config: %v", err)
@@ -331,13 +369,19 @@ func AddCredentialHelper(registry, helper string) error {
 	var config DockerConfig
 
 	// Read existing config if it exists
-	if data, err := os.ReadFile(configPath); err == nil {
-		if err := json.Unmarshal(data, &config); err != nil {
-			logger.Warning("Failed to parse existing config, creating new one")
+	if err := validateDockerConfigPath(configPath); err != nil {
+		logger.Warning("Config path validation failed: %v", err)
+		config = DockerConfig{}
+	} else {
+		// #nosec G304 -- configPath validated to be within allowed Docker directories
+		if data, err := os.ReadFile(configPath); err == nil {
+			if err := json.Unmarshal(data, &config); err != nil {
+				logger.Warning("Failed to parse existing config, creating new one")
+				config = DockerConfig{}
+			}
+		} else {
 			config = DockerConfig{}
 		}
-	} else {
-		config = DockerConfig{}
 	}
 
 	// Initialize maps if needed

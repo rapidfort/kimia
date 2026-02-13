@@ -611,6 +611,19 @@ func checkDependency(name, path string) {
 }
 
 func checkDependencyVersion(name, command string, versionArg string) {
+	// Validate command against allowlist
+	validCommands := map[string]bool{
+		"git":      true,
+		"buildctl": true,
+		"buildah":  true,
+	}
+	
+	if !validCommands[command] {
+		logger.Error("Invalid command for version check: %s", command)
+		return
+	}
+	
+	// #nosec G204 -- command validated against static allowlist
 	cmd := exec.Command(command, versionArg)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
