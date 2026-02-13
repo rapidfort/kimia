@@ -1,4 +1,4 @@
-name: Functional Tests
+name: Functional Tests - WIP
 
 permissions:
   contents: read
@@ -8,7 +8,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: ['**']
+    branches: ['tests-kimia']
   workflow_dispatch:
     inputs:
       runner:
