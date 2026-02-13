@@ -74,10 +74,31 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			homeDir = "/home/kimia"
 		}
 
+		// Sanitize HOME directory path
+		homeDir = filepath.Clean(homeDir)
+
+		// Warn if HOME path looks suspicious
+		if strings.Contains(homeDir, "..") {
+			logger.Warning("HOME directory contains '..' - this may be suspicious: %s", homeDir)
+		}
+
+		// Check for null bytes
+		if strings.Contains(homeDir, "\x00") {
+			return nil, fmt.Errorf("HOME directory contains null bytes - invalid path")
+		}
+
+		// Ensure HOME is an absolute path
+		if !filepath.IsAbs(homeDir) {
+			return nil, fmt.Errorf("HOME directory must be an absolute path, got: %s", homeDir)
+		}
+
 		workspaceDir := filepath.Join(homeDir, "workspace")
+		// Clean the final workspace path
+		workspaceDir = filepath.Clean(workspaceDir)
 
 		// Ensure workspace directory exists
-		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		// #nosec G703 -- workspaceDir is constructed from sanitized homeDir (cleaned, validated for null bytes and absolute path)
+		if err := os.MkdirAll(workspaceDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
 		}
 
@@ -87,12 +108,24 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}
 
+		// Validate that tempDir is actually within workspaceDir
+		// This is a defense-in-depth check since os.MkdirTemp should always create within workspaceDir
+		tempDir = filepath.Clean(tempDir)
+		relPath, err := filepath.Rel(workspaceDir, tempDir)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			// If we can't compute relative path or it escapes, something is very wrong
+			// Clean up the temp dir and fail
+			os.RemoveAll(tempDir) // Safe to ignore error here since we're already in error path
+			return nil, fmt.Errorf("temp directory validation failed: directory not within workspace")
+		}
+
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true
 
 		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
+			// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -109,10 +142,12 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 				if gitConfig.Branch != "" {
 					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
 					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+						// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
 						os.RemoveAll(tempDir)
 						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 					}
 				} else {
+					// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
 					os.RemoveAll(tempDir)
 					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 				}
@@ -131,6 +166,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			// No revision specified, just checkout the branch
 			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+				// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 			}
@@ -232,6 +268,20 @@ func normalizeGitURL(url string) string {
 func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 	logger.Info("Cloning git repository...")
 
+	// Validate git branch name if provided
+	if gitConfig.Branch != "" {
+		if err := validateGitRef(gitConfig.Branch); err != nil {
+			return fmt.Errorf("invalid git branch name: %v", err)
+		}
+	}
+
+	// Validate git revision if provided
+	if gitConfig.Revision != "" {
+		if err := validateGitRef(gitConfig.Revision); err != nil {
+			return fmt.Errorf("invalid git revision: %v", err)
+		}
+	}
+
 	// Prepare git clone command
 	args := []string{"clone"}
 
@@ -262,6 +312,7 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
+	// #nosec G702 -- args are validated: branch/revision validated by validateGitRef(), other args are hardcoded or from trusted sources
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -445,4 +496,44 @@ func maskToken(url string) string {
 		}
 	}
 	return url
+}
+
+// validateGitRef validates a git reference (branch name, tag, or commit SHA)
+// to prevent command injection and ensure it follows git naming conventions
+func validateGitRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("git reference cannot be empty")
+	}
+
+	// Check for shell metacharacters that could be used for injection
+	dangerousChars := []string{";", "|", "&", "$", "`", "<", ">", "(", ")", "{", "}", "\\", "'", "\"", "\n", "\r", "\x00"}
+	for _, char := range dangerousChars {
+		if strings.Contains(ref, char) {
+			return fmt.Errorf("git reference contains invalid character: %s", char)
+		}
+	}
+
+	// Check for git option injection (references starting with -)
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("git reference cannot start with '-' (potential option injection)")
+	}
+
+	// Check for suspicious patterns
+	if strings.Contains(ref, "..") {
+		return fmt.Errorf("git reference cannot contain '..' (path traversal pattern)")
+	}
+
+	// Git references can contain: a-z, A-Z, 0-9, /, -, _, .
+	// This is a reasonable subset of valid git ref characters
+	// Full git ref validation is complex, but this catches most injection attempts
+	for _, r := range ref {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '/' || r == '-' || r == '_' || r == '.') {
+			return fmt.Errorf("git reference contains invalid character: %c", r)
+		}
+	}
+
+	return nil
 }
