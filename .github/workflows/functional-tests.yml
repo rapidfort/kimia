@@ -222,6 +222,7 @@ jobs:
             --dockerfile=mainline/alpine/Dockerfile \
             --destination=${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-test-nginx:${{ needs.build-images.outputs.image_tag }} \
             --insecure \
+            --no-push \
             --verbosity=debug
 
       - name: Output test summary
