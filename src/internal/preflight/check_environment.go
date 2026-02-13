@@ -367,6 +367,7 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		configFile := filepath.Join(dockerConfig, "config.json")
 		configFile = filepath.Clean(configFile)
 
+		// #nosec G703 -- configFile is constructed from sanitized dockerConfig (cleaned with filepath.Clean and validated for null bytes)
 		if _, err := os.Stat(configFile); err == nil {
 			logger.Info("  Docker Config:           %s", configFile)
 			logger.Info("  Auth File Readable:      Yes %s", getCheckmark(true))
@@ -663,6 +664,7 @@ func checkDependencyVersion(name, command string, versionArg string) {
 		return
 	}
 
+	// #nosec G204 -- command and versionArg are validated above to reject shell metacharacters and null bytes
 	cmd := exec.Command(command, versionArg)
 	output, err := cmd.CombinedOutput()
 	if err == nil {

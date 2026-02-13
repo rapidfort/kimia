@@ -59,6 +59,7 @@ func main() {
 			// Remove control characters, limit length, keep only printable ASCII
 			sanitized := sanitizeForOutput(config.StorageDriver, 50)
 
+			// #nosec G705 -- sanitized is cleaned by sanitizeForOutput() which removes all control characters and limits length
 			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", sanitized)
 			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
 			os.Exit(1)
@@ -162,6 +163,7 @@ func main() {
 		}
 
 		// Verify the subdirectory exists
+		// #nosec G703 -- subPath is validated to be within cleanContextPath using filepath.Rel() check above
 		if _, err := os.Stat(subPath); err != nil {
 			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
 		}
