@@ -183,3 +183,77 @@ jobs:
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| --version | Passed |" >> $GITHUB_STEP_SUMMARY
           echo "| --help | Passed |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Job: Docker Mode Tests
+  # Runs master.sh test suite for both BuildKit and Buildah variants
+  # ============================================================================
+  docker-tests:
+    name: Docker Tests (${{ matrix.builder }})
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    needs: build-images
+    permissions:
+      contents: read
+      packages: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: kimia
+            builder: buildkit
+            image_suffix: ''
+          - variant: kimia-bud
+            builder: buildah
+            image_suffix: '-bud'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull test image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ needs.build-images.outputs.image_tag }}
+
+      - name: Run Docker integration tests
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          KIMIA_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ needs.build-images.outputs.image_tag }}
+          BUILDER: ${{ matrix.builder }}
+        run: |
+          chmod +x tests/master.sh
+          tests/master.sh \
+            --mode docker \
+            --image "${KIMIA_IMAGE}" \
+            --builder "${{ matrix.builder }}" \
+            --registry "${REGISTRY}" \
+            --tests all \
+            --storage both \
+            --cleanup
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: docker-test-logs-${{ matrix.builder }}
+          path: tests/suites/*.log
+          retention-days: 7
+
+      - name: Output test summary
+        if: always()
+        run: |
+          echo "## Docker Integration Tests - ${{ matrix.builder }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Builder** | ${{ matrix.builder }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ needs.build-images.outputs.image_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Test Suite** | all |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Storage** | both (native/vfs + overlay) |" >> $GITHUB_STEP_SUMMARY
