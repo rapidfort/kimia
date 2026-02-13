@@ -226,6 +226,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
@@ -238,6 +240,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
@@ -254,6 +258,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             $VOLUME_OPTS \
@@ -278,6 +284,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             $VOLUME_OPTS \
@@ -302,6 +310,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             $VOLUME_OPTS \
@@ -326,6 +336,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             $VOLUME_OPTS \
@@ -352,6 +364,8 @@ jobs:
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             $VOLUME_OPTS \
@@ -442,21 +456,14 @@ jobs:
         run: |
           kubectl create namespace ${{ env.NAMESPACE }}
 
-      - name: Define job template function
-        id: job-template
+      - name: Test 1 - Version check
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
         run: |
-          # Create a reusable job template script
-          cat > /tmp/create-job.sh << 'SCRIPT'
-          #!/bin/bash
-          JOB_NAME=$1
-          STORAGE=$2
-          shift 2
-          ARGS="$@"
-
-          # Build volume section for overlay
-          VOLUMES=""
-          VOLUME_MOUNTS=""
-          if [ "$STORAGE" = "overlay" ]; then
+          echo "=== K8s Test 1: Version Check ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
             VOLUMES="volumes:
                 - name: kimia-local
                   emptyDir: {}"
@@ -464,12 +471,11 @@ jobs:
                     - name: kimia-local
                       mountPath: /home/kimia/.local"
           fi
-
-          cat << EOF
+          cat << EOF | kubectl apply -f -
           apiVersion: batch/v1
           kind: Job
           metadata:
-            name: ${JOB_NAME}
+            name: test-version
             namespace: ${NAMESPACE}
           spec:
             ttlSecondsAfterFinished: 60
@@ -486,7 +492,7 @@ jobs:
                 - name: kimia
                   image: ${KIMIA_IMAGE}
                   imagePullPolicy: Never
-                  args: [${ARGS}]
+                  args: ["--version"]
                   securityContext:
                     runAsUser: 1000
                     runAsGroup: 1000
@@ -495,6 +501,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -505,69 +515,6 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          SCRIPT
-          chmod +x /tmp/create-job.sh
-
-      - name: Test 1 - Version check
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
-        run: |
-          echo "=== K8s Test 1: Version Check ==="
-          source /tmp/create-job.sh
-          create_job() {
-            JOB_NAME=$1; STORAGE=$2; shift 2
-            VOLUMES=""; VOLUME_MOUNTS=""
-            if [ "$STORAGE" = "overlay" ]; then
-              VOLUMES="volumes:
-                - name: kimia-local
-                  emptyDir: {}"
-              VOLUME_MOUNTS="volumeMounts:
-                    - name: kimia-local
-                      mountPath: /home/kimia/.local"
-            fi
-            cat << EOF | kubectl apply -f -
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: ${JOB_NAME}
-            namespace: ${NAMESPACE}
-          spec:
-            ttlSecondsAfterFinished: 60
-            backoffLimit: 0
-            template:
-              spec:
-                restartPolicy: Never
-                securityContext:
-                  runAsUser: 1000
-                  runAsGroup: 1000
-                  runAsNonRoot: true
-                  fsGroup: 1000
-                containers:
-                - name: kimia
-                  image: ${KIMIA_IMAGE}
-                  imagePullPolicy: Never
-                  args: [$@]
-                  securityContext:
-                    runAsUser: 1000
-                    runAsGroup: 1000
-                    runAsNonRoot: true
-                    allowPrivilegeEscalation: true
-                    capabilities:
-                      drop: [ALL]
-                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
-                  resources:
-                    requests:
-                      memory: "512Mi"
-                      cpu: "500m"
-                    limits:
-                      memory: "2Gi"
-                      cpu: "2000m"
-                  ${VOLUME_MOUNTS}
-                ${VOLUMES}
-          EOF
-          }
-          create_job "test-version" "${{ matrix.storage }}" '"--version"'
           kubectl wait --for=condition=complete --timeout=120s job/test-version -n ${{ env.NAMESPACE }}
           kubectl logs -l job-name=test-version -n ${{ env.NAMESPACE }}
 
@@ -616,6 +563,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -681,6 +632,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -747,6 +702,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -813,6 +772,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -879,6 +842,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -946,6 +913,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
@@ -1014,6 +985,10 @@ jobs:
                     capabilities:
                       drop: [ALL]
                       add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                    seccompProfile:
+                      type: Unconfined
+                    appArmorProfile:
+                      type: Unconfined
                   resources:
                     requests:
                       memory: "512Mi"
