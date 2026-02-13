@@ -105,7 +105,7 @@ jobs:
           context: .
           file: ./${{ matrix.dockerfile }}
           platforms: ${{ inputs.platforms || env.DEFAULT_PLATFORMS }}
-          push: ${{ inputs.push_images != false }}
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_images }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}${{ matrix.image_suffix }}:${{ steps.meta.outputs.image_tag }}
           build-args: |
