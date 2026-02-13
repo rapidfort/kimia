@@ -185,16 +185,21 @@ jobs:
           echo "| --help | Passed |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # Job: Simple Docker Mode Test
-  # Runs a single docker build using kimia to verify basic functionality
+  # Job: Docker Mode Tests (kimia-bud)
+  # Comprehensive Docker tests with VFS and Overlay storage drivers
   # ============================================================================
-  docker-mode-test:
-    name: Docker Mode Test (kimia-bud)
+  docker-tests-bud:
+    name: Docker Tests - kimia-bud (${{ matrix.storage }})
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     needs: build-images
     permissions:
       contents: read
-      packages: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [vfs, overlay]
 
     steps:
       - name: Log in to GHCR
@@ -204,12 +209,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull kimia image
+      - name: Pull kimia-bud image
         run: |
           docker pull ${{ needs.build-images.outputs.kimia_bud_image }}
 
-      - name: Run docker build with kimia
+      - name: Setup overlay volume (overlay only)
+        if: matrix.storage == 'overlay'
         run: |
+          mkdir -p /tmp/kimia-buildah-overlay
+          sudo chown 1000:1000 /tmp/kimia-buildah-overlay
+
+      - name: Test 1 - Version check
+        run: |
+          echo "=== Test 1: Version Check ==="
           docker run --rm \
             --user 1000:1000 \
             --cap-add SETUID \
@@ -217,45 +229,202 @@ jobs:
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
+            --version
+
+      - name: Test 2 - Environment check
+        run: |
+          echo "=== Test 2: Environment Check ==="
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            check-environment
+
+      - name: Test 3 - Git build (nginx)
+        run: |
+          echo "=== Test 3: Git Build - nginx ==="
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
             --context=https://github.com/nginxinc/docker-nginx.git \
             --git-branch=master \
             --dockerfile=mainline/alpine/Dockerfile \
-            --destination=${{ env.REGISTRY }}/${{ env.IMAGE_BASE }}-test-nginx:${{ needs.build-images.outputs.image_tag }} \
+            --destination=${{ env.REGISTRY }}/buildah-rootless-nginx-${{ matrix.storage }}:latest \
+            --storage-driver=${{ matrix.storage }} \
             --insecure \
             --no-push \
             --verbosity=debug
 
+      - name: Test 4 - HTTPS alpine with context sub-path
+        run: |
+          echo "=== Test 4: HTTPS Alpine with Context Sub-path ==="
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            --context=https://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
+            --dockerfile=Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildah-rootless-sub-path-alpine-${{ matrix.storage }}:latest \
+            --storage-driver=${{ matrix.storage }} \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 5 - Git alpine with context sub-path
+        run: |
+          echo "=== Test 5: Git Alpine with Context Sub-path ==="
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            --context=git://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
+            --dockerfile=Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildah-rootless-git-alpine-${{ matrix.storage }}:latest \
+            --storage-driver=${{ matrix.storage }} \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 6 - Reproducible build 1
+        run: |
+          echo "=== Test 6: Reproducible Build #1 ==="
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v1 \
+            --storage-driver=${{ matrix.storage }} \
+            --reproducible \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 7 - Reproducible build 2
+        run: |
+          echo "=== Test 7: Reproducible Build #2 ==="
+          sleep 2
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v2 \
+            --storage-driver=${{ matrix.storage }} \
+            --reproducible \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 8 - Compare reproducible builds
+        run: |
+          echo "=== Test 8: Compare Reproducible Builds ==="
+          docker pull ${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v1 || true
+          docker pull ${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v2 || true
+
+          DIGEST1=$(docker inspect ${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2 || echo "none")
+          DIGEST2=$(docker inspect ${{ env.REGISTRY }}/buildah-reproducible-test-${{ matrix.storage }}:v2 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2 || echo "none")
+
+          echo "Build 1 digest: $DIGEST1"
+          echo "Build 2 digest: $DIGEST2"
+
+          if [ "$DIGEST1" = "$DIGEST2" ] && [ "$DIGEST1" != "none" ]; then
+            echo "SUCCESS: Builds are reproducible!"
+          else
+            echo "WARNING: Builds may not be reproducible (digests differ or unavailable)"
+          fi
+
       - name: Output test summary
         if: always()
         run: |
-          echo "## Docker MOde Test - kimia-bud" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker Tests - kimia-bud (${{ matrix.storage }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_bud_image }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Build Context** | nginx from Git |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Mode** | Rootless (UID 1000) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1 | Version check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2 | Environment check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3 | Git build (nginx) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 4 | HTTPS alpine with context sub-path |" >> $GITHUB_STEP_SUMMARY
+          echo "| 5 | Git alpine with context sub-path |" >> $GITHUB_STEP_SUMMARY
+          echo "| 6-8 | Reproducible builds comparison |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Storage Driver:** ${{ matrix.storage }}" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # Job: Kubernetes Mode Test
-  # Runs a single K8s job build using kimia-bud to verify basic functionality
+  # Job: Kubernetes Mode Tests (kimia-bud)
+  # Comprehensive K8s tests with VFS and Overlay storage drivers
   # ============================================================================
-  kubernetes-mode-test:
-    name: Kubernetes Mode Test (kimia-bud)
+  k8s-tests-bud:
+    name: K8s Tests - kimia-bud (${{ matrix.storage }})
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     needs: build-images
     permissions:
       contents: read
-      packages: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [vfs, overlay]
 
     env:
-      NAMESPACE: kimia-test
+      NAMESPACE: kimia-test-${{ matrix.storage }}
 
     steps:
       - name: Set up kind cluster
         uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
         with:
-          cluster_name: kimia-test
+          cluster_name: kimia-test-${{ matrix.storage }}
 
       - name: Log in to GHCR
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
@@ -267,22 +436,43 @@ jobs:
       - name: Pull and load image into kind
         run: |
           docker pull ${{ needs.build-images.outputs.kimia_bud_image }}
-          kind load docker-image ${{ needs.build-images.outputs.kimia_bud_image }} --name kimia-test
+          kind load docker-image ${{ needs.build-images.outputs.kimia_bud_image }} --name kimia-test-${{ matrix.storage }}
 
       - name: Create namespace
         run: |
           kubectl create namespace ${{ env.NAMESPACE }}
 
-      - name: Run K8s job with kimia-bud
+      - name: Define job template function
+        id: job-template
         run: |
-          cat <<EOF | kubectl apply -f -
+          # Create a reusable job template script
+          cat > /tmp/create-job.sh << 'SCRIPT'
+          #!/bin/bash
+          JOB_NAME=$1
+          STORAGE=$2
+          shift 2
+          ARGS="$@"
+
+          # Build volume section for overlay
+          VOLUMES=""
+          VOLUME_MOUNTS=""
+          if [ "$STORAGE" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+
+          cat << EOF
           apiVersion: batch/v1
           kind: Job
           metadata:
-            name: kimia-build-test
-            namespace: ${{ env.NAMESPACE }}
+            name: ${JOB_NAME}
+            namespace: ${NAMESPACE}
           spec:
-            ttlSecondsAfterFinished: 300
+            ttlSecondsAfterFinished: 60
             backoffLimit: 0
             template:
               spec:
@@ -294,13 +484,193 @@ jobs:
                   fsGroup: 1000
                 containers:
                 - name: kimia
-                  image: ${{ needs.build-images.outputs.kimia_bud_image }}
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args: [${ARGS}]
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          SCRIPT
+          chmod +x /tmp/create-job.sh
+
+      - name: Test 1 - Version check
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 1: Version Check ==="
+          source /tmp/create-job.sh
+          create_job() {
+            JOB_NAME=$1; STORAGE=$2; shift 2
+            VOLUMES=""; VOLUME_MOUNTS=""
+            if [ "$STORAGE" = "overlay" ]; then
+              VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+              VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+            fi
+            cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: ${JOB_NAME}
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args: [$@]
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          }
+          create_job "test-version" "${{ matrix.storage }}" '"--version"'
+          kubectl wait --for=condition=complete --timeout=120s job/test-version -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-version -n ${{ env.NAMESPACE }}
+
+      - name: Test 2 - Environment check
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 2: Environment Check ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-envcheck
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args: ["check-environment"]
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=120s job/test-envcheck -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
+
+      - name: Test 3 - Git build (no push)
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 3: Git Build (no push) ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-git-build
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
                   imagePullPolicy: Never
                   args:
                     - "--context=https://github.com/nginxinc/docker-nginx.git"
                     - "--git-branch=master"
                     - "--dockerfile=mainline/alpine/Dockerfile"
-                    - "--destination=test-k8s-nginx:latest"
+                    - "--destination=test-buildah-k8s-rootless-git-${{ matrix.storage }}:latest"
+                    - "--storage-driver=${{ matrix.storage }}"
                     - "--no-push"
                     - "--verbosity=debug"
                   securityContext:
@@ -318,43 +688,372 @@ jobs:
                     limits:
                       memory: "2Gi"
                       cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
           EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-git-build -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=100
 
-      - name: Wait for job completion
+      - name: Test 4 - Build with arguments (no push)
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
         run: |
-          echo "Waiting for job to complete..."
-          kubectl wait --for=condition=complete --timeout=600s job/kimia-build-test -n ${{ env.NAMESPACE }} || \
-          kubectl wait --for=condition=failed --timeout=10s job/kimia-build-test -n ${{ env.NAMESPACE }}
+          echo "=== K8s Test 4: Build with Arguments (no push) ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-buildargs
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=test-buildah-k8s-rootless-buildargs-${{ matrix.storage }}:latest"
+                    - "--build-arg=NGINX_VERSION=1.25"
+                    - "--storage-driver=${{ matrix.storage }}"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-buildargs -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=100
 
-      - name: Get job logs
+      - name: Test 5 - Git build with no push
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 5: Git Build with Push ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-git-push
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-rootless-git-${{ matrix.storage }}:latest"
+                    - "--storage-driver=${{ matrix.storage }}"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-git-push -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=100
+
+      - name: Test 6 - Context sub-path build
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 6: Context Sub-path Build ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-subpath
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/docker-library/postgres.git"
+                    - "--context-sub-path=17/alpine3.21"
+                    - "--dockerfile=Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-postgres-${{ matrix.storage }}:latest"
+                    - "--storage-driver=${{ matrix.storage }}"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-subpath -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=100
+
+      - name: Test 7 - Reproducible build 1
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 7: Reproducible Build #1 ==="
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-repro-1
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/rapidfort/kimia.git"
+                    - "--git-branch=main"
+                    - "--dockerfile=tests/examples/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-reproducible-test-${{ matrix.storage }}:v1"
+                    - "--storage-driver=${{ matrix.storage }}"
+                    - "--reproducible"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-repro-1 -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=100
+
+      - name: Test 8 - Reproducible build 2
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+        run: |
+          echo "=== K8s Test 8: Reproducible Build #2 ==="
+          sleep 5
+          VOLUMES=""; VOLUME_MOUNTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUMES="volumes:
+                - name: kimia-local
+                  emptyDir: {}"
+            VOLUME_MOUNTS="volumeMounts:
+                    - name: kimia-local
+                      mountPath: /home/kimia/.local"
+          fi
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-repro-2
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/rapidfort/kimia.git"
+                    - "--git-branch=main"
+                    - "--dockerfile=tests/examples/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-reproducible-test-${{ matrix.storage }}:v2"
+                    - "--storage-driver=${{ matrix.storage }}"
+                    - "--reproducible"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+                  ${VOLUME_MOUNTS}
+                ${VOLUMES}
+          EOF
+          kubectl wait --for=condition=complete --timeout=600s job/test-repro-2 -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=100
+
+      - name: Get all job logs
         if: always()
         run: |
-          echo "=== Job Status ==="
-          kubectl get job kimia-build-test -n ${{ env.NAMESPACE }} -o wide
+          echo "=== All Job Statuses ==="
+          kubectl get jobs -n ${{ env.NAMESPACE }} -o wide
           echo ""
-          echo "=== Pod Logs ==="
-          kubectl logs -l job-name=kimia-build-test -n ${{ env.NAMESPACE }} --tail=500
-
-      - name: Check job result
-        run: |
-          STATUS=$(kubectl get job kimia-build-test -n ${{ env.NAMESPACE }} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}')
-          if [ "$STATUS" = "True" ]; then
-            echo "Job completed successfully!"
-            exit 0
-          else
-            echo "Job failed!"
-            kubectl describe job kimia-build-test -n ${{ env.NAMESPACE }}
-            exit 1
-          fi
+          echo "=== Failed Job Details ==="
+          for job in $(kubectl get jobs -n ${{ env.NAMESPACE }} -o jsonpath='{.items[?(@.status.failed)].metadata.name}'); do
+            echo "--- Job: $job ---"
+            kubectl describe job $job -n ${{ env.NAMESPACE }}
+            kubectl logs -l job-name=$job -n ${{ env.NAMESPACE }} --tail=200
+          done
 
       - name: Output test summary
         if: always()
         run: |
-          echo "## Kubernetes Mode Test - kimia-bud" >> $GITHUB_STEP_SUMMARY
+          echo "## K8s Tests - kimia-bud (${{ matrix.storage }})" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_bud_image }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Build Context** | nginx from Git |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Mode** | Rootless (UID 1000) |" >> $GITHUB_STEP_SUMMARY
-          echo "| **K8s Cluster** | kind (local) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1 | Version check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2 | Environment check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3 | Git build (no push) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 4 | Build with arguments (no push) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 5 | Git build with push |" >> $GITHUB_STEP_SUMMARY
+          echo "| 6 | Context sub-path build |" >> $GITHUB_STEP_SUMMARY
+          echo "| 7-8 | Reproducible builds |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Storage Driver:** ${{ matrix.storage }}" >> $GITHUB_STEP_SUMMARY
+          echo "**K8s Cluster:** kind (local)" >> $GITHUB_STEP_SUMMARY
