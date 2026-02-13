@@ -1,0 +1,23 @@
+# Copy this to user-config.yaml and fill in your details
+# user-config.yaml is git-ignored
+
+registry: ghcr.io/myorg  # Your container registry
+namespace: default        # Kubernetes namespace
+
+# Authentication method (choose one):
+auth:
+  # Option 1: Use existing Kubernetes secret
+  secretName: registry-credentials
+  
+  # Option 2: Create secret from credentials (comment out secretName above)
+  # username: myuser
+  # password: mytoken
+  # email: myemail@example.com
+  # server: ghcr.io
+
+# Optional: Override specific image builds
+overrides:
+  alpine:
+    destination: ghcr.io/myorg/alpine-custom
+  # nginx:
+  #   destination: docker.io/myuser/nginx

@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-alpine-build
+  namespace: kimia
+  labels:
+    image: alpine
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-alpine-build
+        image: ghcr.io/rapidfort/kimia-bud:latest
+        imagePullPolicy: Always
+        args:
+        - --context=https://github.com/alpinelinux/docker-alpine.git
+        - --dockerfile=Dockerfile
+        - --destination=REGISTRY_PLACEHOLDER
+        - --insecure
+        - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

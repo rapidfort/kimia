@@ -1,0 +1,28 @@
+registryAuth:
+  enabled: true
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json
+
+builds:
+  - name: spark
+    init:
+      - name: build-scala-java
+        args:
+          context: https://github.com/apache/spark-docker.git
+          contextSubPath: 4.0.0/scala2.13-java21-ubuntu
+          dockerfile: Dockerfile
+          destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/spark:4.0.0-scala2.13-java21-ubuntu
+          verbose: true
+    main:
+      name: build-scala-python
+      args:
+        context: https://github.com/apache/spark-docker.git
+        contextSubPath: 4.0.0/scala2.13-java21-python3-ubuntu
+        dockerfile: Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/spark
+        verbose: true
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

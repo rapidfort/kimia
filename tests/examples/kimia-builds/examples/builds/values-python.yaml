@@ -1,0 +1,11 @@
+builds:
+  - name: python
+    main:
+      name: python
+      args:
+        context: https://github.com/docker-library/python.git
+        contextSubPath: 3.14/alpine3.22
+        dockerfile: Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/python
+        verbose: true
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD, --storage-driver=overlay]

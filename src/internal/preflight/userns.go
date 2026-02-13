@@ -105,6 +105,7 @@ func readMaxUserNamespaces() (int, error) {
 
 // checkSubIDFile checks /etc/subuid or /etc/subgid for user configuration
 func checkSubIDFile(filename, username string, uid int) (string, error) {
+	// #nosec G304 -- reading system files /etc/subuid and /etc/subgid with known paths
 	file, err := os.Open(filename)
 	if err != nil {
 		return "", err

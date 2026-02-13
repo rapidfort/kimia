@@ -1,0 +1,11 @@
+builds:
+  - name: mongo
+    main:
+      name: mongo
+      args:
+        context: https://github.com/docker-library/mongo.git
+        contextSubPath: !!str 8.0
+        dockerfile: Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/mongo
+        verbose: true
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

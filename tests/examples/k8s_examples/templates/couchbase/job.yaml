@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-couchbase-build
+  namespace: kimia
+  labels:
+    image: couchbase  
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 60
+  template:
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+      - name: kimia-couchbase-build
+        image: ghcr.io/rapidfort/kimia:latest
+        imagePullPolicy: Always
+        args:
+          - --context=git://github.com/couchbase/docker.git
+          - --context-sub-path=enterprise/couchbase-server/7.6.7
+          - --dockerfile=Dockerfile
+          - --destination=<org_repo>/couchbase:latest
+          - -v
+        resources:
+          limits:
+            cpu: "1"
+            memory: "1Gi"  
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            drop: [ALL]
+            add: [SETUID, SETGID]

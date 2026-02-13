@@ -336,7 +336,8 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 		dockerConfig = filepath.Join(os.Getenv("HOME"), ".docker")
 	}
 
-	configFile := filepath.Join(dockerConfig, "config.json")
+	configFile := filepath.Clean(filepath.Join(dockerConfig, "config.json"))
+	// #nosec G703 -- path constructed with filepath.Clean and known base
 	if _, err := os.Stat(configFile); err == nil {
 		logger.Info("  Docker Config:           %s", configFile)
 		logger.Info("  Auth File Readable:      Yes %s", getCheckmark(true))
@@ -610,6 +611,19 @@ func checkDependency(name, path string) {
 }
 
 func checkDependencyVersion(name, command string, versionArg string) {
+	// Validate command against allowlist
+	validCommands := map[string]bool{
+		"git":      true,
+		"buildctl": true,
+		"buildah":  true,
+	}
+	
+	if !validCommands[command] {
+		logger.Error("Invalid command for version check: %s", command)
+		return
+	}
+	
+	// #nosec G204 -- command validated against static allowlist
 	cmd := exec.Command(command, versionArg)
 	output, err := cmd.CombinedOutput()
 	if err == nil {

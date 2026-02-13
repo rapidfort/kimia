@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rapidfort/kimia/internal/security"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -96,7 +97,29 @@ func TestOverlayMount() *OverlayTestResult {
 
 	// Attempt native overlay mount (works in rootless mode with user namespace)
 	logger.Debug("Testing native kernel overlay mount")
+
+	// Validate all directory paths
+	if err := security.ValidateDirectoryPath(lowerDir); err != nil {
+		return result
+	}
+	if err := security.ValidateDirectoryPath(upperDir); err != nil {
+		return result
+	}
+	if err := security.ValidateDirectoryPath(workDir); err != nil {
+		return result
+	}
+	if err := security.ValidateDirectoryPath(mergedDir); err != nil {
+		return result
+	}
+
+	// Clean paths
+	lowerDir = filepath.Clean(lowerDir)
+	upperDir = filepath.Clean(upperDir)
+	workDir = filepath.Clean(workDir)
+	mergedDir = filepath.Clean(mergedDir)
+
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	// #nosec G204 -- all directory paths validated and cleaned above
 	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, mergedDir)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -148,7 +171,16 @@ func TestOverlayMount() *OverlayTestResult {
 
 // unmountOverlay unmounts an overlay filesystem
 func unmountOverlay(mountPoint string) error {
-	// Use umount for native kernel overlay in rootless mode
+	// Validate mountPoint is within /tmp for security
+	cleanPath := filepath.Clean(mountPoint)
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("mount point must be absolute path")
+	}
+	if !strings.HasPrefix(cleanPath, "/tmp/") {
+		return fmt.Errorf("mount point must be under /tmp")
+	}
+	
+	// #nosec G204 -- mountPoint validated to be absolute path under /tmp
 	cmd := exec.Command("umount", mountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))

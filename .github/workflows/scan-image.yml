@@ -1,9 +1,6 @@
 name: Container Image Security Scanners
 
 on:
-  push:
-    branches:
-      - update-github-actions
   workflow_dispatch:
     inputs:
       images:

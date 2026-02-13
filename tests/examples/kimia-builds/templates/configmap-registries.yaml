@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-%s" (include "kimia-builds.fullname" .) .Values.volumeNames.registriesConf }}
+data:
+  registries.conf: |
+{{ include "kimia-builds.registriesConf" . | indent 4 }}

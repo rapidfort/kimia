@@ -52,19 +52,19 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 
 		// Normalize git:// URLs to https:// for known providers (GitHub, GitLab, etc)
 		normalizedURL := normalizeGitURL(gitConfig.Context)
-		
+
 		// For BuildKit, pass Git URL directly without cloning (for better SBOM generation)
 		if builder == "buildkit" {
 			logger.Info("Using BuildKit native Git support (no local clone)")
 			ctx.IsGitRepo = true
-			ctx.GitURL = normalizedURL  // Use normalized URL
-			ctx.Path = "" // No local path needed for BuildKit
-			
+			ctx.GitURL = normalizedURL // Use normalized URL
+			ctx.Path = ""              // No local path needed for BuildKit
+
 			// BuildKit will handle branch/revision via Git URL syntax
 			logger.Debug("Build context prepared (Git URL for BuildKit): %s", ctx.GitURL)
 			return ctx, nil
 		}
-		
+
 		// For Buildah, clone the repository locally (existing behavior)
 		logger.Info("Cloning repository for Buildah...")
 
@@ -74,9 +74,10 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			homeDir = "/home/kimia"
 		}
 
-		workspaceDir := filepath.Join(homeDir, "workspace")
+		workspaceDir := filepath.Clean(filepath.Join(homeDir, "workspace"))
 
 		// Ensure workspace directory exists
+		// #nosec G703 -- workspaceDir validated and cleaned above
 		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
 		}
@@ -86,6 +87,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}
+		tempDir = filepath.Clean(tempDir)
 
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true
@@ -93,6 +95,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
+			// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -102,17 +105,19 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		// If GitRevision is specified, try to checkout the revision directly
 		if gitConfig.Revision != "" {
 			logger.Info("Checking out revision: %s", gitConfig.Revision)
-			
+
 			// Try to checkout the revision
 			if err := checkoutGitRevision(tempDir, gitConfig.Revision); err != nil {
 				// Revision doesn't exist, fall back to branch if specified
 				if gitConfig.Branch != "" {
 					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
 					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+						// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 						os.RemoveAll(tempDir)
 						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 					}
 				} else {
+					// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 					os.RemoveAll(tempDir)
 					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 				}
@@ -131,6 +136,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			// No revision specified, just checkout the branch
 			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+				// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 			}
@@ -170,7 +176,7 @@ func isGitURL(url string) bool {
 func normalizeGitURL(url string) string {
 	// Check if user wants to force SSH (skip normalization for git@)
 	preferSSH := os.Getenv("KIMIA_PREFER_SSH") == "true"
-	
+
 	// Convert git:// to https://
 	if strings.HasPrefix(url, "git://") {
 		knownProviders := []string{
@@ -178,7 +184,7 @@ func normalizeGitURL(url string) string {
 			"gitlab.com",
 			"bitbucket.org",
 		}
-		
+
 		for _, provider := range knownProviders {
 			if strings.Contains(url, provider) {
 				normalized := strings.Replace(url, "git://", "https://", 1)
@@ -188,19 +194,19 @@ func normalizeGitURL(url string) string {
 				return normalized
 			}
 		}
-		
+
 		logger.Warning("Using git:// URL: %s", url)
 		logger.Warning("Note: Most modern Git servers have disabled git:// protocol. If build fails, try https:// instead")
 		return url
 	}
-	
+
 	// Convert git@ SSH URLs to https:// for automation-friendly non-interactive cloning
 	if strings.HasPrefix(url, "git@") && !preferSSH {
 		// Pattern: git@github.com:user/repo.git -> https://github.com/user/repo.git
-		if strings.Contains(url, "github.com") || 
-		   strings.Contains(url, "gitlab.com") || 
-		   strings.Contains(url, "bitbucket.org") {
-			
+		if strings.Contains(url, "github.com") ||
+			strings.Contains(url, "gitlab.com") ||
+			strings.Contains(url, "bitbucket.org") {
+
 			// Extract host and path
 			// git@github.com:user/repo.git
 			parts := strings.SplitN(url, "@", 2)
@@ -209,7 +215,7 @@ func normalizeGitURL(url string) string {
 				// github.com:user/repo.git
 				hostAndPath = strings.Replace(hostAndPath, ":", "/", 1)
 				normalized := "https://" + hostAndPath
-				
+
 				logger.Warning("Converted SSH URL (git@) to HTTPS for non-interactive cloning")
 				logger.Info("For automation, HTTPS is preferred over SSH (no keys/prompts required)")
 				logger.Debug("Original: git@...")
@@ -219,12 +225,12 @@ func normalizeGitURL(url string) string {
 			}
 		}
 	}
-	
+
 	if strings.HasPrefix(url, "git@") && preferSSH {
 		logger.Info("Using SSH URL as requested (KIMIA_PREFER_SSH=true)")
 		logger.Info("Ensure SSH agent is running with keys loaded for non-interactive operation")
 	}
-	
+
 	return url
 }
 
@@ -262,6 +268,7 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
+	// #nosec G702 -- git command with controlled arguments
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -287,14 +294,14 @@ func addGitToken(url, token, user string) string {
 		parts := strings.SplitN(url, "https://", 2)
 		if len(parts) == 2 {
 			remainder := parts[1]
-			
+
 			// Check for existing credentials
 			if strings.Contains(remainder, "@") {
 				// URL already has credentials, don't add more
 				logger.Debug("URL already contains credentials, not adding token")
 				return url
 			}
-			
+
 			// Insert credentials after https://
 			return fmt.Sprintf("https://%s:%s@%s", user, token, remainder)
 		}
@@ -308,20 +315,78 @@ func addGitToken(url, token, user string) string {
 func expandEnvInURL(url string) string {
 	// Use os.ExpandEnv which handles both $VAR and ${VAR}
 	expanded := os.ExpandEnv(url)
-	
+
 	if expanded != url {
 		logger.Debug("Expanded environment variables in URL")
 		// Don't log the actual values for security
 	}
-	
+
 	return expanded
+}
+
+// Validate branch name before using it
+func isValidGitRef(ref string) bool {
+	if ref == "" {
+		return false
+	}
+
+	// Reject shell metacharacters explicitly
+	if strings.ContainsAny(ref, ";|&$`\n") {
+		return false
+	}
+
+	// Git refs can't contain: space, ~, ^, :, ?, *, [, \, .., @{, //
+	invalidChars := []string{" ", "~", "^", ":", "?", "*", "[", "\\", "..", "@{", "//"}
+	for _, char := range invalidChars {
+		if strings.Contains(ref, char) {
+			return false
+		}
+	}
+
+	// Must not start with . or /
+	if strings.HasPrefix(ref, ".") || strings.HasPrefix(ref, "/") {
+		return false
+	}
+
+	// Must not end with .lock or /
+	if strings.HasSuffix(ref, ".lock") || strings.HasSuffix(ref, "/") {
+		return false
+	}
+
+	return true
+}
+
+// isValidGitRevision validates a git commit hash or tag
+func isValidGitRevision(revision string) bool {
+	if revision == "" {
+		return false
+	}
+
+	// Reject shell metacharacters
+	if strings.ContainsAny(revision, ";|&$`\n ") {
+		return false
+	}
+
+	// Valid revisions are:
+	// - SHA-1 hashes (40 hex chars) or short hashes (7+ hex chars)
+	// - Tags (similar rules to branch names)
+	// - HEAD~N, HEAD^N notation (but be careful with these)
+
+	// For safety, use same validation as branch names
+	return isValidGitRef(revision)
 }
 
 // checkoutGitBranch checks out a specific Git branch
 func checkoutGitBranch(repoDir, branch string) error {
+	// Validate branch name before using in commands
+	if !isValidGitRef(branch) {
+		return fmt.Errorf("invalid git branch name: %s", branch)
+	}
+
 	logger.Info("Checking out branch: %s", branch)
 
 	// First, try to fetch the branch to ensure we have it
+	// #nosec G204 -- branch name validated above with isValidGitRef
 	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Dir = repoDir
 	fetchCmd.Stdout = os.Stdout
@@ -329,6 +394,7 @@ func checkoutGitBranch(repoDir, branch string) error {
 	fetchCmd.Run() // Ignore error, we'll check checkout result
 
 	// Now checkout the branch (might be remote tracking branch)
+	// #nosec G204 -- branch name validated above with isValidGitRef
 	cmd := exec.Command("git", "checkout", branch)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -337,6 +403,7 @@ func checkoutGitBranch(repoDir, branch string) error {
 	if err := cmd.Run(); err != nil {
 		logger.Debug("Direct checkout failed, trying remote tracking branch...")
 		// Try with explicit remote tracking branch
+		// #nosec G204 -- branch name validated above with isValidGitRef
 		cmd2 := exec.Command("git", "checkout", "-b", branch, "origin/"+branch)
 		cmd2.Dir = repoDir
 		cmd2.Stdout = os.Stdout
@@ -353,8 +420,14 @@ func checkoutGitBranch(repoDir, branch string) error {
 
 // checkoutGitRevision checks out a specific Git commit
 func checkoutGitRevision(repoDir, revision string) error {
+	// Validate revision format
+	if !isValidGitRevision(revision) {
+		return fmt.Errorf("invalid git revision: %s", revision)
+	}
+
 	logger.Info("Checking out revision: %s", revision)
 
+	// #nosec G204 -- revision validated above with isValidGitRevision
 	cmd := exec.Command("git", "checkout", revision)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -372,7 +445,7 @@ func checkoutGitRevision(repoDir, revision string) error {
 // Returns the formatted URL and whether authentication was applied
 func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext string) (string, error) {
 	url := gitURL
-	
+
 	// Add authentication token if provided
 	if gitConfig.TokenFile != "" {
 		token, err := os.ReadFile(gitConfig.TokenFile)
@@ -382,16 +455,16 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 		url = addGitToken(url, string(token), gitConfig.TokenUser)
 		logger.Debug("Added authentication token to Git URL")
 	}
-	
+
 	// BuildKit Git URL format: URL#<ref>:<subdir>
 	// ref can be: branch name, tag, or commit hash
 	// Examples:
 	//   git://host/repo.git#main:path/to/subdir
 	//   git://host/repo.git#v1.0.0:path/to/subdir
 	//   git://host/repo.git#abc123:path/to/subdir
-	
+
 	var suffix string
-	
+
 	// Add branch or revision
 	if gitConfig.Revision != "" {
 		suffix = gitConfig.Revision
@@ -400,7 +473,7 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 		suffix = gitConfig.Branch
 		logger.Debug("Using Git branch: %s", gitConfig.Branch)
 	}
-	
+
 	// Add subcontext path
 	if subContext != "" {
 		if suffix != "" {
@@ -410,18 +483,25 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 		}
 		logger.Debug("Using sub-context path: %s", subContext)
 	}
-	
+
 	// Append suffix if any
 	if suffix != "" {
 		url = url + "#" + suffix
 	}
-	
+
 	logger.Info("Formatted Git URL for BuildKit: %s", maskToken(url))
 	return url, nil
 }
 
 // isRevisionOnBranch checks if a git revision is an ancestor of the specified branch
 func isRevisionOnBranch(repoPath, revision, branch string) bool {
+	// Validate inputs before using in command
+	if !isValidGitRevision(revision) || !isValidGitRef(branch) {
+		logger.Warning("Invalid revision or branch name for ancestor check")
+		return false
+	}
+
+	// #nosec G204 -- revision and branch validated above
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", revision, branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil

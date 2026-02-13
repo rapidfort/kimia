@@ -1,0 +1,336 @@
+{{- /* 0) Collect (build, overrides) pairs instead of a single global accumulator */ -}}
+{{- $root := . -}}
+{{- $items := list -}}
+
+{{- /* 1) .Values.builds come in with no extra overrides */ -}}
+{{- range .Values.builds }}
+  {{- $items = append $items (dict "build" . "ov" (dict)) }}
+{{- end }}
+
+{{/* Helper: dedupe list of strings */}}
+{{- define "list.uniq" -}}
+  {{- $in := . -}}
+  {{- $seen := dict -}}
+  {{- $out := list -}}
+  {{- range $v := $in }}
+    {{- if not (has $v $seen) }}
+      {{- $seen = set $seen $v true }}
+      {{- $out = append $out $v }}
+    {{- end }}
+  {{- end }}
+  {{- $out -}}
+{{- end }}
+
+{{- /* 2) Each file in examples/builds/*.yaml contributes builds + per-file overrides */ -}}
+{{- range $path, $_ := .Files.Glob "examples/builds/*.yaml" }}
+  {{- $raw := $root.Files.Get $path }}
+  {{- $doc := fromYaml $raw }}
+  {{- $ov  := dict }} {{/* IMPORTANT: predeclare so it's in scope for all branches */}}
+
+  {{- if kindIs "slice" $doc }}
+    {{/* Pure list → treat as a list of build objects (no overrides) */}}
+    {{- range $doc }}
+      {{- $items = append $items (dict "build" . "ov" $ov) }}
+    {{- end }}
+
+  {{- else if kindIs "map" $doc }}
+
+    {{/* Start with the raw override fragment (everything but builds) */}}
+    {{- $ovRaw := omit $doc "builds" }}
+
+    {{/* ----- Append logic for global.registries.* ----- */}}
+    {{- if hasKey $ovRaw "global" }}
+      {{- $gdoc := $ovRaw.global }}
+      {{- $g := dict }}
+
+      {{- if hasKey $gdoc "registries" }}
+        {{- $rdoc := $gdoc.registries }}
+        {{- $greg := dict }}
+
+        {{/* unqualifiedSearch: base + add → uniq */}}
+        {{- if hasKey $rdoc "unqualifiedSearch" }}
+          {{- $base := default (list) $root.Values.global.registries.unqualifiedSearch }}
+          {{- $add  := default (list) $rdoc.unqualifiedSearch }}
+          {{- $merged := include "list.uniq" (concat $base $add) }}
+          {{- $greg = set $greg "unqualifiedSearch" $merged }}
+        {{- end }}
+
+        {{/* entries: base + add → dedupe by .location (last wins) */}}
+        {{- if hasKey $rdoc "entries" }}
+          {{- $base := default (list) $root.Values.global.registries.entries }}
+          {{- $add  := default (list) $rdoc.entries }}
+          {{- $all := concat $base $add }}
+          {{- $byLoc := dict }} {{- $order := list }}
+          {{- range $e := $all }}
+            {{- $loc := (get $e "location") | default "" }}
+            {{- if not (has $loc $byLoc) }}{{- $order = append $order $loc }}{{- end }}
+            {{- $byLoc = set $byLoc $loc $e }}
+          {{- end }}
+          {{- $merged := list }}
+          {{- range $loc := $order }}
+            {{- $merged = append $merged (get $byLoc $loc) }}
+          {{- end }}
+          {{- $greg = set $greg "entries" $merged }}
+        {{- end }}
+
+        {{- if gt (len $greg) 0 }}
+          {{- $g = set $g "registries" $greg }}
+        {{- end }}
+      {{- end }}
+
+      {{/* copy any other global fields (non-registries) straight through */}}
+      {{- $g = merge $g (omit $gdoc "registries") }}
+      {{- if gt (len $g) 0 }}
+        {{- $ov = set $ov "global" $g }}
+      {{- end }}
+    {{- end }}
+
+    {{/* ----- Append logic for jobDefaults.containerSecurityContext.capabilities add/drop ----- */}}
+    {{- if hasKey $ovRaw "jobDefaults" }}
+      {{- $jd := $ovRaw.jobDefaults }}
+      {{- $jdOut := merge (dict) (omit $jd "containerSecurityContext") }}
+
+      {{- if hasKey $jd "containerSecurityContext" }}
+        {{- $cs := $jd.containerSecurityContext }}
+        {{- $csOut := merge (dict) (omit $cs "capabilities") }}
+
+        {{- if hasKey $cs "capabilities" }}
+          {{- $cap := $cs.capabilities }}
+          {{- $capOut := dict }}
+
+          {{- if hasKey $cap "add" }}
+            {{- $base := default (list) $root.Values.jobDefaults.containerSecurityContext.capabilities.add }}
+            {{- $add  := default (list) $cap.add }}
+            {{- $merged := include "list.uniq" (concat $base $add) }}
+            {{- $capOut = set $capOut "add" $merged }}
+          {{- end }}
+
+          {{- if hasKey $cap "drop" }}
+            {{- $base := default (list) $root.Values.jobDefaults.containerSecurityContext.capabilities.drop }}
+            {{- $add  := default (list) $cap.drop }}
+            {{- $merged := include "list.uniq" (concat $base $add) }}
+            {{- $capOut = set $capOut "drop" $merged }}
+          {{- end }}
+
+          {{- if gt (len $capOut) 0 }}
+            {{- $csOut = set $csOut "capabilities" $capOut }}
+          {{- end }}
+        {{- end }}
+
+        {{- if gt (len $csOut) 0 }}
+          {{- $jdOut = set $jdOut "containerSecurityContext" $csOut }}
+        {{- end }}
+      {{- end }}
+
+      {{- if gt (len $jdOut) 0 }}
+        {{- $ov = set $ov "jobDefaults" $jdOut }}
+      {{- end }}
+    {{- end }}
+
+    {{/* pass-through other top-level keys (registryAuth, volumeNames, etc.) */}}
+    {{- $ov = merge $ov (omit $ovRaw "global" "jobDefaults") }} 
+
+    {{/* finally, attach builds with this per-file $ov */}}
+    {{- if hasKey $doc "builds" }}
+      {{- range $doc.builds }}
+        {{- $items = append $items (dict "build" . "ov" $ov) }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{/* 3) Render each job using its own merged values: .Values + item.ov */}}
+{{- range $i, $it := $items }}
+  {{- $vals := merge (deepCopy $.Values) $it.ov }}
+  {{- $b := $it.build }}
+  {{- $cmName := printf "%s-%s" (include "kimia-builds.fullname" $) $vals.volumeNames.registriesConf -}}
+
+  {{- /* Ensure clean YAML doc separation */ -}}
+  {{- if gt $i 0 }}
+{{- print "\n---\n" -}}
+  {{- else }}
+{{- print "---\n" -}}
+  {{- end }}
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-%s" (include "kimia-builds.fullname" $) $b.name | trunc 63 | trimSuffix "-" }}
+  labels:
+    app.kubernetes.io/name: kimia-build
+    app.kubernetes.io/instance: {{ include "kimia-builds.fullname" $ }}
+    app.kubernetes.io/part-of: kimia-builds
+    kimia-build/name: {{ $b.name }}
+    {{- with $b.labels }}
+{{ toYaml . | indent 4 }}
+    {{- end }}
+  {{- with $b.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+  {{- end }}
+spec:
+  backoffLimit: {{ default 1 $vals.jobDefaults.backoffLimit }}
+  ttlSecondsAfterFinished: {{ default 60 $vals.jobDefaults.ttlSecondsAfterFinished }}
+  {{ include "debug.comment" (dict "name" "registryAuth" "value" $vals.registryAuth) }}
+  template:
+    spec:
+      restartPolicy: {{ default "Never" $vals.jobDefaults.restartPolicy }}
+      securityContext:
+{{ toYaml $vals.jobDefaults.securityContext | indent 8 }}
+      volumes:
+        - name: {{ $vals.volumeNames.registriesConf }}
+          configMap:
+            name: {{ $cmName }}
+        - name: cosign-key
+          secret:
+            secretName: cosign-key
+            items:
+              - key: cosign.key
+                path: cosign.key
+        - name: kimia-local
+          emptyDir: {} 
+{{- if $vals.registryAuth.enabled }}
+        - name: docker-config
+          secret:
+            secretName: {{ $vals.registryAuth.secretName }}
+            items:
+              - key: {{ $vals.registryAuth.key | default ".dockerconfigjson" }}
+                path: {{ $vals.registryAuth.subPathFile | default "config.json" }}
+{{- end }}
+
+{{- if $b.init }}
+      initContainers:
+        {{- range $step := $b.init }}
+        - name: {{ printf "build-%s" $step.name }}
+          image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $step.kimiaTag) }}
+          imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "500Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          env:
+            - name: COSIGN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cosign-key
+                  key: password
+{{- if $vals.registryAuth.enabled }}
+            - name: {{ $vals.registryAuth.envVar }}
+              value: {{ $vals.registryAuth.envPath }}
+{{- else }}
+            - name: DOCKER_USERNAME
+              value: {{ $vals.registryAuth.dockerUsername }}
+            - name: DOCKER_PASSWORD
+              value: {{ $vals.registryAuth.dockerPassword }}
+            - name: DOCKER_REGISTRY
+              value: {{ $vals.registryAuth.dockerRegistry }}
+{{- end }}
+          args:
+            - --context={{ $step.args.context }}
+            - --dockerfile={{ $step.args.dockerfile | default "Dockerfile" }}
+            - --destination={{ $step.args.destination }}
+            {{- if $step.args.contextSubPath }}
+            - --context-sub-path={{ $step.args.contextSubPath }}
+            {{- end }}
+            {{- if $step.args.insecureRegistry }}
+            - --insecure-registry={{ $step.args.insecureRegistry }}
+            {{- end }}
+            {{- if $step.args.reproducible }}
+            - --reproducible
+            {{- end }}
+            {{- if $step.args.extraArgs }}
+            {{- range $ea := $step.args.extraArgs }}
+            - {{ $ea }}
+            {{- end }}
+            {{- end }}
+            {{- if $step.args.verbose }}
+            - -v
+            {{- end }}
+          volumeMounts:
+            - name: {{ $vals.volumeNames.registriesConf }}
+              mountPath: /home/kimia/.config/containers/registries.conf
+              subPath: registries.conf
+            - name: cosign-key
+              mountPath: /secrets
+            - name: kimia-local
+              mountPath: /home/kimia/.local
+{{- if $vals.registryAuth.enabled }}
+            - name: docker-config
+              mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
+              subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
+              readOnly: true
+{{- end }}
+          securityContext:
+{{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
+        {{- end }}
+{{- end }}
+
+      containers:
+        - name: {{ printf "build-%s" (default "main" $b.main.name) }}
+          image: {{ printf "%s:%s" $vals.global.kimia.image (default $vals.global.kimia.tag $b.main.kimiaTag) }}
+          imagePullPolicy: {{ $vals.global.kimia.pullPolicy }}
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "500Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+          env:
+            - name: COSIGN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cosign-key
+                  key: password
+{{- if $vals.registryAuth.enabled }}
+            - name: {{ $vals.registryAuth.envVar }}
+              value: {{ $vals.registryAuth.envPath }}
+{{- else }}
+            - name: DOCKER_USERNAME
+              value: {{ $vals.registryAuth.dockerUsername }}
+            - name: DOCKER_PASSWORD
+              value: {{ $vals.registryAuth.dockerPassword }}
+            - name: DOCKER_REGISTRY
+              value: {{ $vals.registryAuth.dockerRegistry }}
+{{- end }}
+          args:
+            - --context={{ $b.main.args.context }}
+            - --dockerfile={{ $b.main.args.dockerfile | default "Dockerfile" }}
+            - --destination={{ printf "%s:%s" $b.main.args.destination $vals.global.kimia.destinationTag }}
+            {{- if $b.main.args.contextSubPath }}
+            - --context-sub-path={{ $b.main.args.contextSubPath }}
+            {{- end }}
+            {{- if $b.main.args.insecureRegistry }}
+            - --insecure-registry={{ $b.main.args.insecureRegistry }}
+            {{- end }}
+            {{- if $b.main.args.reproducible }}
+            - --reproducible
+            {{- end }}
+            {{- if $b.main.args.extraArgs }}
+            {{- range $ea := $b.main.args.extraArgs }}
+            - {{ $ea }}
+            {{- end }}
+            {{- end }}
+            {{- if $b.main.args.verbose }}
+            - -v
+            {{- end }}
+          volumeMounts:
+            - name: {{ $vals.volumeNames.registriesConf }}
+              mountPath: /home/kimia/.config/containers/registries.conf
+              subPath: registries.conf
+            - name: cosign-key
+              mountPath: /secrets
+            - name: kimia-local
+              mountPath: /home/kimia/.local
+{{- if $vals.registryAuth.enabled }}
+            - name: docker-config
+              mountPath: {{ printf "%s/%s" $vals.registryAuth.mountDir ($vals.registryAuth.subPathFile | default "config.json") }}
+              subPath: {{ $vals.registryAuth.subPathFile | default "config.json" }}
+              readOnly: true
+{{- end }}
+          securityContext:
+{{ toYaml $vals.jobDefaults.containerSecurityContext | indent 12 }}
+{{- end }}

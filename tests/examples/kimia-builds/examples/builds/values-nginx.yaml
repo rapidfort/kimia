@@ -1,0 +1,19 @@
+registryAuth:
+  enabled: true
+  secretName: harbor-secret
+  key: .dockerconfigjson
+  subPathFile: config.json
+  mountDir: /home/kimia/.docker
+  envVar: REGISTRY_AUTH_FILE
+  envPath: /home/kimia/.docker/config.json
+
+builds:
+  - name: nginx
+    main:
+      name: nginx
+      args:
+        context: https://github.com/nginx/docker-nginx.git
+        dockerfile: mainline/alpine/Dockerfile
+        destination: harbor.rfinnovate.rapidfort.io/kimia-e2e/nginx
+        verbose: true
+        extraArgs: [--attestation=max, --sign, --cosign-key=/secrets/cosign.key, --cosign-password-env=COSIGN_PASSWORD]

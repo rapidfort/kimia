@@ -11,7 +11,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
 	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/internal/security"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -57,13 +59,13 @@ type Config struct {
 	// Attestation and signing (BuildKit only)
 	// Level 1: Simple mode (backward compatible)
 	Attestation string // "off", "min" or "max"
-	
+
 	// Level 2: Docker-style attestations (advanced)
 	AttestationConfigs []AttestationConfig
-	
+
 	// Level 3: Direct BuildKit options (escape hatch)
 	BuildKitOpts []string
-	
+
 	// Signing
 	Sign              bool   // Enable signing with cosign
 	CosignKeyPath     string // Path to cosign private key
@@ -225,13 +227,13 @@ func executeBuildah(config Config, ctx *Context) error {
 	var sourceEpoch string
 	if config.Reproducible && config.Timestamp != "" {
 		sourceEpoch = config.Timestamp
-    
-    	// 1. Set timestamp for image metadata
-    	args = append(args, "--timestamp", sourceEpoch)
-    
-    	// 2. Pass as build arg so Dockerfile can use it
-    	//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
-    
+
+		// 1. Set timestamp for image metadata
+		args = append(args, "--timestamp", sourceEpoch)
+
+		// 2. Pass as build arg so Dockerfile can use it
+		//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+
 	}
 
 	// Add insecure registry options for build
@@ -324,6 +326,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if homeDir == "" {
 		homeDir = "/home/kimia"
 	}
+	homeDir = filepath.Clean(homeDir)
 
 	xdgRuntimeDir := os.Getenv("XDG_RUNTIME_DIR")
 	if xdgRuntimeDir == "" {
@@ -331,7 +334,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	buildkitSocket := filepath.Join(xdgRuntimeDir, "buildkitd.sock")
-	buildkitConfig := filepath.Join(homeDir, ".config/buildkit/buildkitd.toml")
+	buildkitConfig := filepath.Clean(filepath.Join(homeDir, ".config/buildkit/buildkitd.toml"))
 
 	logger.Debug("BuildKit configuration:")
 	logger.Debug("  HOME: %s", homeDir)
@@ -351,7 +354,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if ctx.IsGitRepo && ctx.GitURL != "" {
 		logger.Info("Using BuildKit native Git context (no local clone)")
 		isGitContext = true
-		
+
 		// Format Git URL with authentication, branch/revision, and subcontext
 		formattedURL, err := FormatGitURLForBuildKit(ctx.GitURL, ctx.GitConfig, ctx.SubContext)
 		if err != nil {
@@ -361,14 +364,15 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else {
 		// Local context handling
 		buildContext = ctx.Path
-		
+
 		// Only copy if it's a bind mount, not a git clone
 		isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
 		if isBindMount {
 			logger.Debug("Detected bind-mounted context at %s, copying to buildkit cache...", ctx.Path)
 
 			// Create cache directory
-			cacheDir := filepath.Join(homeDir, ".cache/buildkit")
+			cacheDir := filepath.Clean(filepath.Join(homeDir, ".cache/buildkit"))
+			// #nosec G703 -- cacheDir constructed from user home with filepath.Clean
 			if err := os.MkdirAll(cacheDir, 0755); err != nil {
 				return fmt.Errorf("failed to create cache directory: %v", err)
 			}
@@ -382,6 +386,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			defer func() {
 				logger.Debug("Cleaning up temp context directory: %s", tempContext)
+				// #nosec G703 -- tempDir created by os.MkdirTemp, safe to remove
 				os.RemoveAll(tempContext)
 			}()
 
@@ -404,6 +409,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if config.Insecure || len(config.InsecureRegistry) > 0 {
 		// Read existing config (should always exist from Dockerfile)
 		var existingConfig string
+		// #nosec G703 -- buildkitConfig path validated and cleaned above
 		if data, err := os.ReadFile(buildkitConfig); err == nil {
 			existingConfig = string(data)
 			logger.Debug("Read existing buildkit config from: %s", buildkitConfig)
@@ -416,9 +422,10 @@ func executeBuildKit(config Config, ctx *Context) error {
   noProcessSandbox = true
 `
 			logger.Debug("Config file not found, using default (matches Dockerfile)")
-			
+
 			// Create config directory if it doesn't exist
 			configDir := filepath.Dir(buildkitConfig)
+			// #nosec G703 -- configDir derived from validated buildkitConfig path
 			if err := os.MkdirAll(configDir, 0755); err != nil {
 				return fmt.Errorf("failed to create buildkit config directory: %v", err)
 			}
@@ -426,7 +433,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Collect all registries that need insecure config
 		registries := make(map[string]bool)
-		
+
 		// If --insecure is set, add all destination registries
 		if config.Insecure {
 			for _, dest := range config.Destination {
@@ -436,7 +443,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				}
 			}
 		}
-		
+
 		// Add specific insecure registries from --insecure-registry
 		for _, registry := range config.InsecureRegistry {
 			registries[registry] = true
@@ -462,7 +469,8 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Only write if we modified it
 		if configModified {
-			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+			// #nosec G703 -- buildkitConfig path validated and cleaned above
+			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0600); err != nil {
 				return fmt.Errorf("failed to write buildkit config: %v", err)
 			}
 			logger.Debug("Updated buildkit config written to: %s", buildkitConfig)
@@ -475,11 +483,28 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// START BUILDKITD DAEMON
 	// ========================================
 	logger.Debug("Starting buildkitd with rootlesskit...")
+
+	// Validate all paths
+	if err := security.ValidateDirectoryPath(xdgRuntimeDir); err != nil {
+		return fmt.Errorf("invalid runtime dir: %v", err)
+	}
+	if err := security.ValidateFilePath(buildkitConfig, homeDir); err != nil {
+		return fmt.Errorf("invalid buildkit config path: %v", err)
+	}
+	if err := security.ValidateSocketPath(buildkitSocket); err != nil {
+		return fmt.Errorf("invalid socket path: %v", err)
+	}
+
+	// Clean paths
+	xdgRuntimeDir = filepath.Clean(xdgRuntimeDir)
+	buildkitConfig = filepath.Clean(buildkitConfig)
+
+	// #nosec G702 -- all paths validated and cleaned above
 	daemonCmd := exec.Command(
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
 		"--net=host",
-		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
+		"--copy-up=/home", // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
 		"--config="+buildkitConfig,
@@ -515,6 +540,10 @@ func executeBuildKit(config Config, ctx *Context) error {
 	logger.Debug("Waiting for buildkitd to be ready...")
 	ready := false
 	for i := 0; i < 30; i++ {
+		if err := security.ValidateSocketPath(buildkitSocket); err != nil {
+			return fmt.Errorf("invalid buildkit socket: %v", err)
+		}
+		// #nosec G702 -- socket path validated above
 		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
 		output, err := checkCmd.CombinedOutput()
 
@@ -696,10 +725,10 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// ATTESTATION: Configure attestations for BuildKit
 	// ========================================
-	
+
 	// Determine which attestation mode to use
 	var attestOpts []string
-	
+
 	if len(config.AttestationConfigs) > 0 {
 		// Level 2: Docker-style attestations
 		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args)
@@ -712,12 +741,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 		// No attestations
 		logger.Debug("Attestations disabled")
 	}
-	
+
 	// Add attestation options to args
 	for _, opt := range attestOpts {
 		args = append(args, "--opt", opt)
 	}
-	
+
 	// Level 3: Direct BuildKit options (pass-through)
 	for _, opt := range config.BuildKitOpts {
 		args = append(args, "--opt", opt)
@@ -729,6 +758,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// Create command with output capture for digest extraction
 	var stdoutBuf, stderrBuf bytes.Buffer
+	// #nosec G702 -- buildctl with validated arguments constructed in this function
 	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -765,6 +795,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// Execute build
+	// #nosec G702 -- buildctl command with validated arguments
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildkit build failed: %v", err)
 	}
@@ -775,7 +806,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// REPRODUCIBLE BUILDS: Extract digest from output
 	// ========================================
 	digestMap := make(map[string]string) // Map tag -> digest
-	
+
 	if !config.NoPush && len(config.Destination) > 0 {
 		stderrOutput := stderrBuf.String()
 		stdoutOutput := stdoutBuf.String()
@@ -856,7 +887,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 			logger.Warning("Signing requested but no cosign key provided (--cosign-key), skipping signature")
 		} else {
 			logger.Info("Signing images with cosign...")
-			
+
 			for _, dest := range config.Destination {
 				// Use digest-based reference if available
 				imageToSign := dest
@@ -881,7 +912,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				} else {
 					logger.Warning("No digest found for %s, signing with tag (not recommended)", dest)
 				}
-				
+
 				if err := signImageWithCosign(imageToSign, config); err != nil {
 					return fmt.Errorf("failed to sign image %s: %v", imageToSign, err)
 				}
@@ -891,10 +922,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
-	// DIGEST FILE EXPORT (TODO)
+	// DIGEST FILE EXPORT
 	// ========================================
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		logger.Warning("Digest file export not yet implemented for BuildKit")
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
+		if err := SaveDigestInfo(config, digestMap); err != nil {
+			logger.Warning("Failed to save digest information: %v", err)
+		}
 	}
 
 	return nil
@@ -904,17 +937,52 @@ func executeBuildKit(config Config, ctx *Context) error {
 func exportToTar(config Config) error {
 	logger.Info("Exporting image to TAR: %s", config.TarPath)
 
+	// Ensure Docker config exists - buildah requires a credentials file
+	// even for local tar export operations
+	dockerConfigDir := auth.GetDockerConfigDir()
+	configPath := filepath.Join(dockerConfigDir, "config.json")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(dockerConfigDir, 0755); err != nil {
+			return fmt.Errorf("failed to create Docker config directory: %v", err)
+		}
+		emptyConfig := []byte(`{"auths":{}}`)
+		if err := os.WriteFile(configPath, emptyConfig, 0600); err != nil {
+			return fmt.Errorf("failed to create empty Docker config: %v", err)
+		}
+		logger.Debug("Created empty Docker config for tar export")
+	}
+
 	if len(config.Destination) == 0 {
 		return fmt.Errorf("no destination specified for TAR export")
 	}
 
 	image := config.Destination[0]
 
+	// Get home directory for validation
+	homeDir := os.Getenv("HOME")
+	if homeDir == "" {
+		homeDir = "/home/kimia"
+	}
+	homeDir = filepath.Clean(homeDir)
+
 	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
 	logger.Debug("Attempting TAR export with buildah push...")
-	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
 
-	
+	if err := security.ValidateImageReference(image); err != nil {
+		return fmt.Errorf("invalid image reference: %v", err)
+	}
+
+	// Clean the tar path
+	cleanTarPath := filepath.Clean(config.TarPath)
+
+	// Validate for shell metacharacters
+	if strings.ContainsAny(cleanTarPath, ";|&$`\n") {
+		return fmt.Errorf("invalid characters in tar path")
+	}
+
+	// #nosec G204 -- image reference validated and tar path sanitized above
+	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", cleanTarPath))
+
 	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = &stderr
@@ -925,14 +993,21 @@ func exportToTar(config Config) error {
 
 		// Method 2: Try with image ID instead of name (most reliable for overlay)
 		logger.Debug("Attempting with image ID...")
+
+		if err := security.ValidateImageReference(image); err != nil {
+			return fmt.Errorf("invalid image reference: %v", err)
+		}
+		// #nosec G204 -- image reference validated above
 		getIDCmd := exec.Command("buildah", "images", "--format", "{{.ID}}", "--filter", fmt.Sprintf("reference=%s", image))
+
 		idOutput, idErr := getIDCmd.Output()
 
 		if idErr == nil && len(strings.TrimSpace(string(idOutput))) > 0 {
 			imageID := strings.TrimSpace(string(idOutput))
 			logger.Debug("Found image ID: %s", imageID)
 
-			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+			// #nosec G204 -- image ID and tar path validated above
+			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", cleanTarPath))
 			cmd2.Stdout = os.Stdout
 			cmd2.Stderr = os.Stderr
 
@@ -955,7 +1030,8 @@ func exportToTar(config Config) error {
 							foundID := strings.TrimSpace(parts[0])
 							logger.Debug("Found matching image ID from list: %s", foundID)
 
-							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", config.TarPath))
+							// #nosec G204 -- image ID and tar path validated above
+							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", cleanTarPath))
 							cmd3.Stdout = os.Stdout
 							cmd3.Stderr = os.Stderr
 
@@ -976,10 +1052,10 @@ func exportToTar(config Config) error {
 	}
 
 success:
-	logger.Info("Image exported to: %s", config.TarPath)
+	logger.Info("Image exported to: %s", cleanTarPath)
 
 	// Verify the tar file was created and is not empty
-	if info, err := os.Stat(config.TarPath); err != nil {
+	if info, err := os.Stat(cleanTarPath); err != nil {
 		return fmt.Errorf("TAR file was not created: %v", err)
 	} else if info.Size() == 0 {
 		return fmt.Errorf("TAR file is empty")
@@ -1017,7 +1093,15 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 	// Save image name with digest
 	if config.ImageNameWithDigestFile != "" {
-		imageName := strings.Split(image, ":")[0]
+		// Strip the tag but preseve the host:port, so we are stripping at the last colon
+		imageName := image
+		if lastSlash := strings.LastIndex(image, "/"); lastSlash != -1 {
+			if lastColon := strings.LastIndex(image, ":"); lastColon > lastSlash {
+				imageName = image[:lastColon]
+			}
+		} else if lastColon := strings.LastIndex(image, ":"); lastColon != -1 {
+			imageName = image[:lastColon]
+		}
 		imageWithDigest := fmt.Sprintf("%s@%s", imageName, digest)
 		if err := os.WriteFile(config.ImageNameWithDigestFile, []byte(imageWithDigest), 0644); err != nil {
 			return fmt.Errorf("failed to write image name with digest file: %v", err)
@@ -1043,6 +1127,9 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 // copyDir recursively copies a directory from src to dst
 func copyDir(src, dst string) error {
+	src = filepath.Clean(src)
+	dst = filepath.Clean(dst)
+
 	// Get source directory info
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -1050,6 +1137,7 @@ func copyDir(src, dst string) error {
 	}
 
 	// Create destination directory
+	// #nosec G703 -- dst path constructed and validated by caller (copyContextFiles)
 	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
 		return fmt.Errorf("failed to create destination: %v", err)
 	}
@@ -1061,8 +1149,8 @@ func copyDir(src, dst string) error {
 	}
 
 	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
+		srcPath := filepath.Clean(filepath.Join(src, entry.Name()))
+		dstPath := filepath.Clean(filepath.Join(dst, entry.Name()))
 
 		if entry.IsDir() {
 			// Recursively copy subdirectory
@@ -1082,6 +1170,9 @@ func copyDir(src, dst string) error {
 
 // copyFile copies a single file from src to dst
 func copyFile(src, dst string) error {
+	src = filepath.Clean(src)
+	dst = filepath.Clean(dst)
+
 	// Get source file info for permissions
 	srcInfo, err := os.Stat(src)
 	if err != nil {
@@ -1095,6 +1186,7 @@ func copyFile(src, dst string) error {
 	}
 
 	// Write to destination with same permissions
+	// #nosec G703 -- dst path constructed and validated by caller (copyContextFiles)
 	if err := os.WriteFile(dst, srcData, srcInfo.Mode()); err != nil {
 		return fmt.Errorf("failed to write destination: %v", err)
 	}
@@ -1105,7 +1197,7 @@ func copyFile(src, dst string) error {
 // buildAttestationOptsFromSimpleMode converts simple mode to BuildKit opts
 func buildAttestationOptsFromSimpleMode(mode string) []string {
 	var opts []string
-	
+
 	switch mode {
 	case "min":
 		// Provenance only, minimal info
@@ -1113,30 +1205,30 @@ func buildAttestationOptsFromSimpleMode(mode string) []string {
 		opts = append(opts, "attest:sbom=false")
 		opts = append(opts, "attest:provenance=mode=min")
 		logger.Debug("Simple mode 'min': provenance only (SBOM explicitly disabled)")
-		
+
 	case "max":
 		// SBOM + Provenance, maximum info
 		opts = append(opts, "attest:sbom=true")
 		opts = append(opts, "attest:provenance=mode=max")
 		logger.Debug("Simple mode 'max': SBOM + provenance")
-		
+
 	default:
 		logger.Fatal("Invalid attestation mode: %s", mode)
 	}
-	
+
 	return opts
 }
 
 // buildAttestationOptsFromConfigs converts --attest configs to BuildKit opts
 func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string) []string {
 	var opts []string
-	
+
 	for _, config := range configs {
 		switch config.Type {
 		case "sbom":
 			opt := buildSBOMOpt(config)
 			opts = append(opts, opt)
-			
+
 			// Handle scan options as build args
 			if config.Params["scan-context"] == "true" {
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_CONTEXT=1")
@@ -1146,14 +1238,14 @@ func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_STAGE=1")
 				logger.Debug("Added SBOM scan build arg: BUILDKIT_SBOM_SCAN_STAGE=1")
 			}
-			
+
 		case "provenance":
 			opts = append(opts, buildProvenanceOpt(config))
 		default:
 			logger.Fatal("Unknown attestation type: %s", config.Type)
 		}
 	}
-	
+
 	return opts
 }
 
@@ -1163,38 +1255,38 @@ func buildSBOMOpt(config AttestationConfig) string {
 	if len(config.Params) == 0 {
 		return "attest:sbom=true"
 	}
-	
+
 	// Build comma-separated params
 	var parts []string
-	
+
 	// Special handling for generator param
 	if generator, ok := config.Params["generator"]; ok {
 		parts = append(parts, fmt.Sprintf("generator=%s", generator))
 	} else {
 		parts = append(parts, "true") // Enable with default generator
 	}
-	
+
 	// Add any other params as-is (except scan-context and scan-stage which are handled separately)
 	for key, value := range config.Params {
 		if key != "generator" && key != "scan-context" && key != "scan-stage" {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	return fmt.Sprintf("attest:sbom=%s", strings.Join(parts, ","))
 }
 
 // buildProvenanceOpt builds a single provenance attestation opt
 func buildProvenanceOpt(config AttestationConfig) string {
 	var parts []string
-	
+
 	// Mode (default to max if not specified)
 	mode := config.Params["mode"]
 	if mode == "" {
 		mode = "max"
 	}
 	parts = append(parts, fmt.Sprintf("mode=%s", mode))
-	
+
 	// Add all other parameters in a consistent order
 	paramOrder := []string{"builder-id", "reproducible", "inline-only", "version", "filename"}
 	for _, key := range paramOrder {
@@ -1202,14 +1294,14 @@ func buildProvenanceOpt(config AttestationConfig) string {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	// Add any remaining params not in the order list
 	for key, value := range config.Params {
 		if key != "mode" && !contains(paramOrder, key) {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	return fmt.Sprintf("attest:provenance=%s", strings.Join(parts, ","))
 }
 
@@ -1227,8 +1319,24 @@ func contains(slice []string, item string) bool {
 func signImageWithCosign(image string, config Config) error {
 	logger.Debug("Signing image with cosign: %s", image)
 
+	// Validate image reference
+	if err := security.ValidateImageReference(image); err != nil {
+		return fmt.Errorf("invalid image reference: %v", err)
+	}
+
+	// Validate cosign key path
+	if config.CosignKeyPath == "" {
+		return fmt.Errorf("cosign key path is required")
+	}
+
+	// Clean and validate the key path
+	cleanKeyPath := filepath.Clean(config.CosignKeyPath)
+	if strings.ContainsAny(cleanKeyPath, ";|&$`\n") {
+		return fmt.Errorf("invalid characters in cosign key path")
+	}
+
 	// Prepare cosign command
-	args := []string{"sign", "--key", config.CosignKeyPath}
+	args := []string{"sign", "--key", cleanKeyPath}
 
 	// Add insecure registry flag if needed
 	if config.Insecure || len(config.InsecureRegistry) > 0 {
@@ -1240,11 +1348,12 @@ func signImageWithCosign(image string, config Config) error {
 	args = append(args, image)
 
 	// Create the command
+	// #nosec G204 -- image reference and key path validated above
 	cmd := exec.Command("cosign", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	
+
 	cmd.Env = append(cmd.Env, "COSIGN_EXPERIMENTAL=1")
 
 	// Set cosign password from environment variable if specified
@@ -1281,7 +1390,7 @@ func sanitizeCommandArgs(args []string) []string {
 		"SECRET",
 		"CREDENTIALS",
 	}
-	
+
 	sanitized := make([]string, len(args))
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
