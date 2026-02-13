@@ -188,8 +188,8 @@ jobs:
   # Job: Simple Docker Build Test
   # Runs a single docker build using kimia to verify basic functionality
   # ============================================================================
-  docker-build-test:
-    name: Docker Build Test (kimia)
+  docker-mode-test:
+    name: Docker Mode Test (kimia-bud)
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     needs: build-images
     permissions:
@@ -206,7 +206,7 @@ jobs:
 
       - name: Pull kimia image
         run: |
-          docker pull ${{ needs.build-images.outputs.kimia_image }}
+          docker pull ${{ needs.build-images.outputs.kimia_bud_image }}
 
       - name: Run docker build with kimia
         run: |
@@ -216,7 +216,7 @@ jobs:
             --cap-add SETGID \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
-            ${{ needs.build-images.outputs.kimia_image }} \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
             --context=https://github.com/nginxinc/docker-nginx.git \
             --git-branch=master \
             --dockerfile=mainline/alpine/Dockerfile \
@@ -227,10 +227,10 @@ jobs:
       - name: Output test summary
         if: always()
         run: |
-          echo "## Docker Build Test - kimia" >> $GITHUB_STEP_SUMMARY
+          echo "## Docker MOde Test - kimia-bud" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_bud_image }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Context** | nginx from Git |" >> $GITHUB_STEP_SUMMARY
           echo "| **Mode** | Rootless (UID 1000) |" >> $GITHUB_STEP_SUMMARY
