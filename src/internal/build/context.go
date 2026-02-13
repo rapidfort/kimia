@@ -115,6 +115,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		if err != nil || strings.HasPrefix(relPath, "..") {
 			// If we can't compute relative path or it escapes, something is very wrong
 			// Clean up the temp dir and fail
+			// #nosec G703 -- tempDir created by os.MkdirTemp, cleaning up in error path
 			os.RemoveAll(tempDir) // Safe to ignore error here since we're already in error path
 			return nil, fmt.Errorf("temp directory validation failed: directory not within workspace")
 		}
