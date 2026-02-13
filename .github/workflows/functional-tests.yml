@@ -185,7 +185,7 @@ jobs:
           echo "| --help | Passed |" >> $GITHUB_STEP_SUMMARY
 
   # ============================================================================
-  # Job: Simple Docker Build Test
+  # Job: Simple Docker Mode Test
   # Runs a single docker build using kimia to verify basic functionality
   # ============================================================================
   docker-mode-test:
@@ -235,3 +235,126 @@ jobs:
           echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_bud_image }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Context** | nginx from Git |" >> $GITHUB_STEP_SUMMARY
           echo "| **Mode** | Rootless (UID 1000) |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Job: Kubernetes Mode Test
+  # Runs a single K8s job build using kimia-bud to verify basic functionality
+  # ============================================================================
+  kubernetes-mode-test:
+    name: Kubernetes Mode Test (kimia-bud)
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    needs: build-images
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      NAMESPACE: kimia-test
+
+    steps:
+      - name: Set up kind cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: kimia-test
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and load image into kind
+        run: |
+          docker pull ${{ needs.build-images.outputs.kimia_bud_image }}
+          kind load docker-image ${{ needs.build-images.outputs.kimia_bud_image }} --name kimia-test
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }}
+
+      - name: Run K8s job with kimia-bud
+        run: |
+          cat <<EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: kimia-build-test
+            namespace: ${{ env.NAMESPACE }}
+          spec:
+            ttlSecondsAfterFinished: 300
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                securityContext:
+                  runAsUser: 1000
+                  runAsGroup: 1000
+                  runAsNonRoot: true
+                  fsGroup: 1000
+                containers:
+                - name: kimia
+                  image: ${{ needs.build-images.outputs.kimia_bud_image }}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=test-k8s-nginx:latest"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    runAsUser: 1000
+                    runAsGroup: 1000
+                    runAsNonRoot: true
+                    allowPrivilegeEscalation: true
+                    capabilities:
+                      drop: [ALL]
+                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+      - name: Wait for job completion
+        run: |
+          echo "Waiting for job to complete..."
+          kubectl wait --for=condition=complete --timeout=600s job/kimia-build-test -n ${{ env.NAMESPACE }} || \
+          kubectl wait --for=condition=failed --timeout=10s job/kimia-build-test -n ${{ env.NAMESPACE }}
+
+      - name: Get job logs
+        if: always()
+        run: |
+          echo "=== Job Status ==="
+          kubectl get job kimia-build-test -n ${{ env.NAMESPACE }} -o wide
+          echo ""
+          echo "=== Pod Logs ==="
+          kubectl logs -l job-name=kimia-build-test -n ${{ env.NAMESPACE }} --tail=500
+
+      - name: Check job result
+        run: |
+          STATUS=$(kubectl get job kimia-build-test -n ${{ env.NAMESPACE }} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}')
+          if [ "$STATUS" = "True" ]; then
+            echo "Job completed successfully!"
+            exit 0
+          else
+            echo "Job failed!"
+            kubectl describe job kimia-build-test -n ${{ env.NAMESPACE }}
+            exit 1
+          fi
+
+      - name: Output test summary
+        if: always()
+        run: |
+          echo "## Kubernetes Mode Test - kimia-bud" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Kimia Image** | \`${{ needs.build-images.outputs.kimia_bud_image }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Context** | nginx from Git |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Mode** | Rootless (UID 1000) |" >> $GITHUB_STEP_SUMMARY
+          echo "| **K8s Cluster** | kind (local) |" >> $GITHUB_STEP_SUMMARY
