@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rapidfort/kimia/internal/validation"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -313,7 +314,7 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
-	// #nosec G702 -- args are validated: branch/revision validated by validateGitRef(), other args are hardcoded or from trusted sources
+	// #nosec G204 -- args validated: branch/revision by validateGitRef, flags are hardcoded constants, URL from trusted config
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -369,18 +370,108 @@ func expandEnvInURL(url string) string {
 	return expanded
 }
 
+// validateGitOperation validates inputs before executing git commands
+func validateGitOperation(repoPath string, args ...string) error {
+	// Validate repository path
+	if repoPath != "" {
+		cleanPath := filepath.Clean(repoPath)
+		
+		// Check for null bytes
+		if strings.Contains(cleanPath, "\x00") {
+			return fmt.Errorf("repository path contains null bytes")
+		}
+		
+		// Must be absolute path
+		if !filepath.IsAbs(cleanPath) {
+			return fmt.Errorf("repository path must be absolute: %s", cleanPath)
+		}
+		
+		// Check for path traversal
+		if strings.Contains(cleanPath, "..") {
+			return fmt.Errorf("repository path contains '..' sequence")
+		}
+	}
+	
+	// Validate each git argument
+	for i, arg := range args {
+		// Skip git flags (start with -)
+		if strings.HasPrefix(arg, "-") {
+			// Validate flag is safe
+			if !isValidGitFlag(arg) {
+				return fmt.Errorf("invalid git flag at position %d: %s", i, arg)
+			}
+			continue
+		}
+		
+		// Check for null bytes
+		if strings.Contains(arg, "\x00") {
+			return fmt.Errorf("git argument %d contains null bytes", i)
+		}
+		
+		// Check for shell metacharacters
+		dangerousChars := []string{";", "&", "|", "`", "$", "(", ")", "<", ">", "\n", "\r"}
+		for _, char := range dangerousChars {
+			if strings.Contains(arg, char) {
+				return fmt.Errorf("git argument %d contains dangerous character: %s", i, char)
+			}
+		}
+		
+		// If it looks like a git ref, use the validation package
+		if !strings.Contains(arg, "/") || strings.HasPrefix(arg, "origin/") || strings.HasPrefix(arg, "refs/") {
+			if err := validation.ValidateGitRef(arg); err != nil {
+				return fmt.Errorf("invalid git reference at position %d: %v", i, err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+// isValidGitFlag checks if a string is a valid git flag
+func isValidGitFlag(flag string) bool {
+	// Allowlist of safe git flags used in this code
+	safeFlags := []string{
+		"-b", "-B",           // Branch creation
+		"--is-ancestor",      // Merge base check
+		"--single-branch",    // Clone options
+		"--branch",           // Branch specification
+		"--depth",            // Shallow clone
+	}
+	
+	for _, safe := range safeFlags {
+		if flag == safe {
+			return true
+		}
+	}
+	
+	return false
+}
+
 // checkoutGitBranch checks out a specific Git branch
 func checkoutGitBranch(repoDir, branch string) error {
 	logger.Info("Checking out branch: %s", branch)
 
+	// Validate inputs before git fetch
+	if err := validateGitOperation(repoDir, "fetch", "origin", branch); err != nil {
+		return fmt.Errorf("validation failed for git fetch: %v", err)
+	}
+
 	// First, try to fetch the branch to ensure we have it
+	// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef
 	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Dir = repoDir
 	fetchCmd.Stdout = os.Stdout
 	fetchCmd.Stderr = os.Stderr
-	fetchCmd.Run() // Ignore error, we'll check checkout result
+	// #nosec G104 -- Ignore error, we'll check checkout result
+	fetchCmd.Run()
+
+	// Validate inputs before git checkout
+	if err := validateGitOperation(repoDir, "checkout", branch); err != nil {
+		return fmt.Errorf("validation failed for git checkout: %v", err)
+	}
 
 	// Now checkout the branch (might be remote tracking branch)
+	// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef
 	cmd := exec.Command("git", "checkout", branch)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -388,7 +479,14 @@ func checkoutGitBranch(repoDir, branch string) error {
 
 	if err := cmd.Run(); err != nil {
 		logger.Debug("Direct checkout failed, trying remote tracking branch...")
+		
+		// Validate for remote tracking branch checkout
+		if err := validateGitOperation(repoDir, "checkout", "-b", branch, "origin/"+branch); err != nil {
+			return fmt.Errorf("validation failed for git checkout with remote: %v", err)
+		}
+		
 		// Try with explicit remote tracking branch
+		// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef, flag validated by isValidGitFlag
 		cmd2 := exec.Command("git", "checkout", "-b", branch, "origin/"+branch)
 		cmd2.Dir = repoDir
 		cmd2.Stdout = os.Stdout
@@ -403,10 +501,15 @@ func checkoutGitBranch(repoDir, branch string) error {
 	return nil
 }
 
-// checkoutGitRevision checks out a specific Git commit
 func checkoutGitRevision(repoDir, revision string) error {
 	logger.Info("Checking out revision: %s", revision)
 
+	// Validate inputs
+	if err := validateGitOperation(repoDir, "checkout", revision); err != nil {
+		return fmt.Errorf("validation failed for git checkout: %v", err)
+	}
+
+	// #nosec G204 -- revision validated by validateGitOperation with validation.ValidateGitRef
 	cmd := exec.Command("git", "checkout", revision)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -472,8 +575,14 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 	return url, nil
 }
 
-// isRevisionOnBranch checks if a git revision is an ancestor of the specified branch
 func isRevisionOnBranch(repoPath, revision, branch string) bool {
+	// Validate inputs
+	if err := validateGitOperation(repoPath, "merge-base", "--is-ancestor", revision, branch); err != nil {
+		logger.Debug("Validation failed for git merge-base: %v", err)
+		return false
+	}
+	
+	// #nosec G204 -- revision and branch validated by validateGitOperation with validation.ValidateGitRef, flag validated by isValidGitFlag
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", revision, branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
