@@ -925,12 +925,87 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
+	// FINAL VALIDATION: Validate all buildctl arguments
+	// ========================================
+	logger.Debug("Validating all buildctl arguments before execution...")
+	for i, arg := range args {
+		// Validate each argument for shell metacharacters and injection vectors
+		if err := validation.ValidateBuildctlArg(arg); err != nil {
+			return fmt.Errorf("validation failed for buildctl argument %d (%q): %v", i, arg, err)
+		}
+	}
+	
+	// Specifically validate critical arguments
+	for i, arg := range args {
+		// Validate Git URLs in context
+		if strings.HasPrefix(arg, "context=") {
+			url := strings.TrimPrefix(arg, "context=")
+			if strings.HasPrefix(url, "http") || strings.HasPrefix(url, "git") {
+				if err := validation.ValidateGitURL(url); err != nil {
+					return fmt.Errorf("invalid Git URL in context: %v", err)
+				}
+			}
+		}
+		
+		// Validate image names in output
+		if strings.HasPrefix(arg, "type=image,name=") {
+			// Extract image name from output parameter
+			parts := strings.Split(arg, ",")
+			for _, part := range parts {
+				if strings.HasPrefix(part, "name=") {
+					imageName := strings.TrimPrefix(part, "name=")
+					if err := validation.ValidateImageReference(imageName); err != nil {
+						return fmt.Errorf("invalid image name in output: %v", err)
+					}
+				}
+			}
+		}
+		
+		// Validate platform strings
+		if strings.HasPrefix(arg, "platform=") {
+			platform := strings.TrimPrefix(arg, "platform=")
+			if err := validation.ValidatePlatform(platform); err != nil {
+				return fmt.Errorf("invalid platform: %v", err)
+			}
+		}
+		
+		// Validate build args for proper format
+		if strings.HasPrefix(arg, "build-arg:") {
+			buildArg := strings.TrimPrefix(arg, "build-arg:")
+			if err := validation.ValidateBuildArgKeyValue(buildArg); err != nil {
+				return fmt.Errorf("invalid build argument: %v", err)
+			}
+		}
+		
+		// Validate labels
+		if strings.HasPrefix(arg, "label:") {
+			label := strings.TrimPrefix(arg, "label:")
+			if err := validation.ValidateLabelKeyValue(label); err != nil {
+				return fmt.Errorf("invalid label: %v", err)
+			}
+		}
+	}
+	logger.Debug("All buildctl arguments validated successfully")
+
+	// ========================================
 	// EXECUTE BUILDCTL
 	// ========================================
 	// Create command with output capture for digest extraction
 	var stdoutBuf, stderrBuf bytes.Buffer
-	// Validate args were constructed safely (done in buildBuildctlArgs)
-	// #nosec G204 -- args validated by buildBuildctlArgs function
+	
+	// Log the command being executed (with credentials sanitized)
+	logger.Info("Executing: buildctl %s", strings.Join(sanitizeCommandArgs(args), " "))
+
+	// Execute buildctl with validated arguments
+	// #nosec G702 -- Command injection prevented by comprehensive validation above:
+	//   - All arguments validated by validation.ValidateBuildctlArg for shell metacharacters (;, &, |, `, $, etc.)
+	//   - Git URLs validated by validation.ValidateGitURL with protocol allowlist (https://, git://, ssh://)
+	//   - Image names validated by validation.ValidateImageReference with regex patterns
+	//   - Build args validated by validation.ValidateBuildArgKeyValue with strict key format checks
+	//   - Labels validated by validation.ValidateLabelKeyValue with namespace pattern validation
+	//   - Platform strings validated by validation.ValidatePlatform against OS/arch allowlists
+	//   - All validation checks for null bytes, path traversal, and dangerous characters
+	//   - Validation occurs immediately before command execution with no modification of args after validation
 	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -957,9 +1032,6 @@ func executeBuildKit(config Config, ctx *Context) error {
 			logger.Info("  %s", env)
 		}
 	}
-
-	// Log the command being executed
-	logger.Info("Executing: buildctl %s", strings.Join(sanitizeCommandArgs(args), " "))
 
 	// BuildKit may log Git credentials in logs -- warn users accordingly
 	if isGitContext && strings.Contains(buildContext, "@") {
