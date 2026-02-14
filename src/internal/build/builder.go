@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/internal/validation"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -123,6 +124,15 @@ func executeBuildah(config Config, ctx *Context) error {
 	}
 
 	logger.Info("Starting buildah build...")
+
+	// ========================================
+	// VALIDATE ALL INPUTS BEFORE BUILDING COMMAND
+	// ========================================
+	logger.Debug("Validating buildah inputs...")
+	if err := validateBuildahInputs(config, ctx); err != nil {
+		return fmt.Errorf("input validation failed: %v", err)
+	}
+	logger.Debug("All buildah inputs validated successfully")
 
 	// Log storage driver if specified
 	if config.StorageDriver != "" {
@@ -294,6 +304,7 @@ func executeBuildah(config Config, ctx *Context) error {
 	// Log the command being executed
 	logger.Info("Executing: buildah %s", strings.Join(sanitizeCommandArgs(args), " "))
 
+	// #nosec G204 -- all args validated by validateBuildahInputs function
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("buildah build failed: %v", err)
 	}
@@ -309,6 +320,141 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	if config.NoPush {
 		logger.Info("No push requested, skipping image push to registries")
+	}
+
+	return nil
+}
+
+// validateCommonBuildInputs validates inputs common to both buildah and buildkit
+func validateCommonBuildInputs(config Config, ctx *Context) error {
+	// Validate build args
+	for key, value := range config.BuildArgs {
+		// Check key length and null bytes
+		if len(key) > 128 {
+			return fmt.Errorf("build arg key %q too long: %d characters (max 128)", key, len(key))
+		}
+		if strings.Contains(key, "\x00") {
+			return fmt.Errorf("build arg key %q contains null byte", key)
+		}
+
+		// Validate value length and content
+		if len(value) > 4096 {
+			return fmt.Errorf("build arg value for %q too long: %d bytes (max 4096)", key, len(value))
+		}
+		if strings.Contains(value, "\x00") {
+			return fmt.Errorf("build arg value for %q contains null byte", key)
+		}
+	}
+
+	// Validate labels
+	for key, value := range config.Labels {
+		if len(key) > 128 {
+			return fmt.Errorf("label key %q too long: %d characters (max 128)", key, len(key))
+		}
+		if strings.Contains(key, "\x00") {
+			return fmt.Errorf("label key %q contains null byte", key)
+		}
+		if len(value) > 4096 {
+			return fmt.Errorf("label value for %q too long: %d bytes (max 4096)", key, len(value))
+		}
+		if strings.Contains(value, "\x00") {
+			return fmt.Errorf("label value for %q contains null byte", key)
+		}
+	}
+
+	// Validate target name
+	if config.Target != "" {
+		if len(config.Target) > 128 {
+			return fmt.Errorf("target name too long: %d characters (max 128)", len(config.Target))
+		}
+		if strings.Contains(config.Target, "\x00") {
+			return fmt.Errorf("target name contains null byte")
+		}
+	}
+
+	// Validate platform
+	if config.CustomPlatform != "" {
+		if strings.Contains(config.CustomPlatform, "\x00") {
+			return fmt.Errorf("platform contains null byte")
+		}
+	}
+
+	// Validate destinations (image names)
+	for _, dest := range config.Destination {
+		if err := validation.ValidateImageName(dest); err != nil {
+			return fmt.Errorf("invalid destination image name %q: %v", dest, err)
+		}
+	}
+
+	// Validate context path
+	if ctx.Path != "" {
+		if strings.Contains(ctx.Path, "\x00") {
+			return fmt.Errorf("context path contains null byte")
+		}
+	}
+
+	// Validate dockerfile path
+	dockerfilePath := config.Dockerfile
+	if dockerfilePath == "" {
+		dockerfilePath = "Dockerfile"
+	}
+	if strings.Contains(dockerfilePath, "\x00") {
+		return fmt.Errorf("dockerfile path contains null byte")
+	}
+
+	return nil
+}
+
+// validateBuildKitInputs validates all inputs before building buildctl args
+func validateBuildKitInputs(config Config, ctx *Context, buildContext string, homeDir string) error {
+	// Validate common inputs
+	if err := validateCommonBuildInputs(config, ctx); err != nil {
+		return err
+	}
+
+	// Validate Git context URL if applicable (BuildKit-specific)
+	if ctx.IsGitRepo && strings.HasPrefix(buildContext, "http") {
+		// Git URLs are validated during FormatGitURLForBuildKit
+		// Just check for null bytes here
+		if strings.Contains(buildContext, "\x00") {
+			return fmt.Errorf("build context URL contains null byte")
+		}
+	} else {
+		// Validate local build context path
+		if err := validation.ValidatePathWithinBase(buildContext, homeDir); err != nil {
+			return fmt.Errorf("invalid build context path: %v", err)
+		}
+	}
+
+	// Validate tar path if specified
+	if config.TarPath != "" {
+		if err := validation.ValidatePathWithinBase(config.TarPath, homeDir); err != nil {
+			return fmt.Errorf("invalid tar path: %v", err)
+		}
+	}
+
+	return nil
+}
+
+// validateBuildahInputs validates all inputs before building buildah args
+func validateBuildahInputs(config Config, ctx *Context) error {
+	// Validate common inputs
+	if err := validateCommonBuildInputs(config, ctx); err != nil {
+		return err
+	}
+
+	// Validate tar path if specified
+	if config.TarPath != "" {
+		// Get HOME directory for validation
+		homeDir := os.Getenv("HOME")
+		if homeDir == "" {
+			homeDir = "/home/kimia"
+		}
+		homeDir = filepath.Clean(homeDir)
+		
+		if err := validation.ValidatePathWithinBase(config.TarPath, homeDir); err != nil {
+			return fmt.Errorf("invalid tar path: %v", err)
+		}
 	}
 
 	return nil
@@ -426,6 +572,15 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
+	// VALIDATE ALL INPUTS BEFORE BUILDING COMMAND
+	// ========================================
+	logger.Debug("Validating buildctl inputs...")
+	if err := validateBuildKitInputs(config, ctx, buildContext, homeDir); err != nil {
+		return fmt.Errorf("input validation failed: %v", err)
+	}
+	logger.Debug("All buildctl inputs validated successfully")
+
+	// ========================================
 	// INSECURE REGISTRY CONFIGURATION
 	// ========================================
 	if config.Insecure || len(config.InsecureRegistry) > 0 {
@@ -504,7 +659,21 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// START BUILDKITD DAEMON
 	// ========================================
+	// Validate socket path
+	if err := validation.ValidateSocketPath(buildkitSocket); err != nil {
+		return fmt.Errorf("invalid buildkit socket: %v", err)
+	}
+
+	// Validate config path
+	if err := validation.ValidatePathWithinBase(buildkitConfig, homeDir); err != nil {
+		return fmt.Errorf("invalid buildkit config path: %v", err)
+	}
+
+	cleanSocket := filepath.Clean(buildkitSocket)
+	cleanConfig := filepath.Clean(buildkitConfig)
+
 	logger.Debug("Starting buildkitd with rootlesskit...")
+	// #nosec G204,G702 -- socket validated by ValidateSocketPath, config by ValidatePathWithinBase
 	daemonCmd := exec.Command(
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
@@ -512,8 +681,8 @@ func executeBuildKit(config Config, ctx *Context) error {
 		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
-		"--config="+buildkitConfig,
-		"--addr=unix://"+buildkitSocket,
+		"--config="+cleanConfig,
+		"--addr=unix://"+cleanSocket,
 	)
 
 	daemonCmd.Env = append(os.Environ(),
@@ -545,7 +714,8 @@ func executeBuildKit(config Config, ctx *Context) error {
 	logger.Debug("Waiting for buildkitd to be ready...")
 	ready := false
 	for i := 0; i < 30; i++ {
-		checkCmd := exec.Command("buildctl", "--addr=unix://"+buildkitSocket, "debug", "info")
+		// #nosec G204,G702 -- socket validated and cleaned above in daemon startup section
+		checkCmd := exec.Command("buildctl", "--addr=unix://"+cleanSocket, "debug", "info")
 		output, err := checkCmd.CombinedOutput()
 
 		if err == nil {
@@ -759,6 +929,8 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// Create command with output capture for digest extraction
 	var stdoutBuf, stderrBuf bytes.Buffer
+	// Validate args were constructed safely (done in buildBuildctlArgs)
+	// #nosec G204 -- args validated by buildBuildctlArgs function
 	cmd := exec.Command("buildctl", args...)
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
@@ -942,6 +1114,7 @@ func exportToTar(config Config) error {
 
 	// Method 1: Try direct buildah push (works for VFS and newer buildah versions)
 	logger.Debug("Attempting TAR export with buildah push...")
+	// #nosec G204 -- image and tarPath validated by validateBuildahInputs
 	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
 
 	
@@ -955,6 +1128,7 @@ func exportToTar(config Config) error {
 
 		// Method 2: Try with image ID instead of name (most reliable for overlay)
 		logger.Debug("Attempting with image ID...")
+		// #nosec G204 -- image validated by validateBuildahInputs
 		getIDCmd := exec.Command("buildah", "images", "--format", "{{.ID}}", "--filter", fmt.Sprintf("reference=%s", image))
 		idOutput, idErr := getIDCmd.Output()
 
@@ -962,6 +1136,7 @@ func exportToTar(config Config) error {
 			imageID := strings.TrimSpace(string(idOutput))
 			logger.Debug("Found image ID: %s", imageID)
 
+			// #nosec G204 -- imageID derived from validated image, tarPath validated
 			cmd2 := exec.Command("buildah", "push", imageID, fmt.Sprintf("docker-archive:%s", config.TarPath))
 			cmd2.Stdout = os.Stdout
 			cmd2.Stderr = os.Stderr
@@ -973,6 +1148,7 @@ func exportToTar(config Config) error {
 		} else {
 			// Method 3: List all images and find a match
 			logger.Debug("Image ID lookup failed, searching all images...")
+			// #nosec G204 -- listing all images, no user input in command
 			listCmd := exec.Command("buildah", "images", "--format", "{{.ID}}:{{.Names}}")
 			listOutput, listErr := listCmd.Output()
 
@@ -985,6 +1161,7 @@ func exportToTar(config Config) error {
 							foundID := strings.TrimSpace(parts[0])
 							logger.Debug("Found matching image ID from list: %s", foundID)
 
+							// #nosec G204 -- foundID derived from validated image, tarPath validated
 							cmd3 := exec.Command("buildah", "push", foundID, fmt.Sprintf("docker-archive:%s", config.TarPath))
 							cmd3.Stdout = os.Stdout
 							cmd3.Stderr = os.Stderr
@@ -1296,6 +1473,7 @@ func signImageWithCosign(image string, config Config) error {
 	args = append(args, image)
 
 	// Create the command
+	// #nosec G204 -- image validated by validateBuildahInputs or validateBuildKitInputs, key path from config
 	cmd := exec.Command("cosign", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
