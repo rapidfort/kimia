@@ -936,7 +936,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 	
 	// Specifically validate critical arguments
-	for i, arg := range args {
+	for _, arg := range args {
 		// Validate Git URLs in context
 		if strings.HasPrefix(arg, "context=") {
 			url := strings.TrimPrefix(arg, "context=")
