@@ -25,7 +25,9 @@ type Context struct {
 func (ctx *Context) Cleanup() {
 	if ctx.TempDir != "" {
 		logger.Debug("Cleaning up temporary directory: %s", ctx.TempDir)
-		os.RemoveAll(ctx.TempDir)
+		if err := os.RemoveAll(ctx.TempDir); err != nil {
+			logger.Warn("Failed to cleanup temporary directory %s: %v", ctx.TempDir, err)
+		}
 	}
 }
 
@@ -98,6 +100,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		workspaceDir = filepath.Clean(workspaceDir)
 
 		// Ensure workspace directory exists
+		// #nosec G301 -- 0750 is appropriately restrictive (owner rwx, group rx, no world access)
 		// #nosec G703 -- workspaceDir is constructed from sanitized homeDir (cleaned, validated for null bytes and absolute path)
 		if err := os.MkdirAll(workspaceDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
@@ -314,7 +317,12 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
-	// #nosec G204 -- args validated: branch/revision by validateGitRef, flags are hardcoded constants, URL from trusted config
+	// Validate the complete git clone operation
+	if err := validateGitOperation(targetDir, args...); err != nil {
+		return fmt.Errorf("git clone validation failed: %v", err)
+	}
+
+	// #nosec G204 -- args validated by validateGitOperation, branch/revision by validateGitRef, flags are hardcoded
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -462,8 +470,9 @@ func checkoutGitBranch(repoDir, branch string) error {
 	fetchCmd.Dir = repoDir
 	fetchCmd.Stdout = os.Stdout
 	fetchCmd.Stderr = os.Stderr
-	// #nosec G104 -- Ignore error, we'll check checkout result
-	fetchCmd.Run()
+	if err := fetchCmd.Run(); err != nil {
+		logger.Debug("Git fetch failed (will attempt checkout anyway): %v", err)
+	}
 
 	// Validate inputs before git checkout
 	if err := validateGitOperation(repoDir, "checkout", branch); err != nil {
