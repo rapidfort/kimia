@@ -541,7 +541,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			// Create cache directory
 			cacheDir := filepath.Join(homeDir, ".cache/buildkit")
-			// #nosec G703 -- homeDir is sanitized at function start (cleaned, validated for null bytes and absolute path)
+			// #nosec G301,G703 -- 0755 for cache directory (non-sensitive); homeDir sanitized at function start
 			if err := os.MkdirAll(cacheDir, 0755); err != nil {
 				return fmt.Errorf("failed to create cache directory: %v", err)
 			}
@@ -555,6 +555,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 			defer func() {
 				logger.Debug("Cleaning up temp context directory: %s", tempContext)
+				// #nosec G104 -- Ignoring cleanup error in defer (best-effort)
 				os.RemoveAll(tempContext)
 			}()
 
@@ -602,7 +603,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 			
 			// Create config directory if it doesn't exist
 			configDir := filepath.Dir(buildkitConfig)
-			// #nosec G703 -- configDir derived from buildkitConfig which is constructed from sanitized homeDir
+			// #nosec G301,G703 -- 0755 for config directory (contains TOML, not credentials); configDir from sanitized homeDir
 			if err := os.MkdirAll(configDir, 0755); err != nil {
 				return fmt.Errorf("failed to create buildkit config directory: %v", err)
 			}
@@ -646,8 +647,9 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Only write if we modified it
 		if configModified {
-			// #nosec G703 -- buildkitConfig constructed from sanitized homeDir (cleaned, validated for null bytes and absolute path)
-			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0644); err != nil {
+			// BuildKit config may contain registry credentials in the future, use restrictive permissions
+			// #nosec G703 -- buildkitConfig constructed from sanitized homeDir
+			if err := os.WriteFile(buildkitConfig, []byte(configContent), 0600); err != nil {
 				return fmt.Errorf("failed to write buildkit config: %v", err)
 			}
 			logger.Debug("Updated buildkit config written to: %s", buildkitConfig)
@@ -704,6 +706,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	defer func() {
 		logger.Debug("Stopping buildkitd...")
 		if daemonCmd.Process != nil {
+			// #nosec G104 -- Ignoring kill error in cleanup (process may already be dead)
 			daemonCmd.Process.Kill()
 		}
 	}()
@@ -1288,6 +1291,7 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 	// Save digest file
 	if config.DigestFile != "" {
+		// #nosec G306 -- 0644 for digest file (public build artifact, not sensitive)
 		if err := os.WriteFile(config.DigestFile, []byte(digest), 0644); err != nil {
 			return fmt.Errorf("failed to write digest file: %v", err)
 		}
@@ -1298,6 +1302,7 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 	if config.ImageNameWithDigestFile != "" {
 		imageName := strings.Split(image, ":")[0]
 		imageWithDigest := fmt.Sprintf("%s@%s", imageName, digest)
+		// #nosec G306 -- 0644 for image reference file (public build artifact, not sensitive)
 		if err := os.WriteFile(config.ImageNameWithDigestFile, []byte(imageWithDigest), 0644); err != nil {
 			return fmt.Errorf("failed to write image name with digest file: %v", err)
 		}
@@ -1311,6 +1316,7 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 			"digest": digest,
 		}
 		data, _ := json.MarshalIndent(content, "", "  ")
+		// #nosec G306 -- 0644 for image metadata file (public build artifact, not sensitive)
 		if err := os.WriteFile(config.ImageNameTagWithDigestFile, data, 0644); err != nil {
 			return fmt.Errorf("failed to write image name tag with digest file: %v", err)
 		}
