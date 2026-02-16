@@ -100,8 +100,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		workspaceDir = filepath.Clean(workspaceDir)
 
 		// Ensure workspace directory exists
-		// #nosec G301 -- 0750 is appropriately restrictive (owner rwx, group rx, no world access)
-		// #nosec G703 -- workspaceDir is constructed from sanitized homeDir (cleaned, validated for null bytes and absolute path)
+		// #nosec G301,G703 -- 0750 perms secure; workspaceDir from sanitized homeDir
 		if err := os.MkdirAll(workspaceDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
 		}
@@ -119,7 +118,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		if err != nil || strings.HasPrefix(relPath, "..") {
 			// If we can't compute relative path or it escapes, something is very wrong
 			// Clean up the temp dir and fail
-			// #nosec G703 -- tempDir created by os.MkdirTemp, cleaning up in error path
+			// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir from os.MkdirTemp
 			os.RemoveAll(tempDir) // Safe to ignore error here since we're already in error path
 			return nil, fmt.Errorf("temp directory validation failed: directory not within workspace")
 		}
@@ -130,7 +129,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
-			// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
+			// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -147,12 +146,12 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 				if gitConfig.Branch != "" {
 					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
 					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
-						// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
+						// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 						os.RemoveAll(tempDir)
 						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 					}
 				} else {
-					// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
+					// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 					os.RemoveAll(tempDir)
 					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 				}
@@ -171,7 +170,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			// No revision specified, just checkout the branch
 			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
-				// #nosec G703 -- tempDir is created by os.MkdirTemp and validated to be within workspaceDir above
+				// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 			}
@@ -322,7 +321,7 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 		return fmt.Errorf("git clone validation failed: %v", err)
 	}
 
-	// #nosec G204 -- args validated by validateGitOperation, branch/revision by validateGitRef, flags are hardcoded
+	// #nosec G204,G702 -- args validated by validateGitOperation, refs by validateGitRef
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
