@@ -26,7 +26,7 @@ func (ctx *Context) Cleanup() {
 	if ctx.TempDir != "" {
 		logger.Debug("Cleaning up temporary directory: %s", ctx.TempDir)
 		if err := os.RemoveAll(ctx.TempDir); err != nil {
-			logger.Warn("Failed to cleanup temporary directory %s: %v", ctx.TempDir, err)
+			logger.Warning("Failed to cleanup temporary directory %s: %v", ctx.TempDir, err)
 		}
 	}
 }
