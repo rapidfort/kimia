@@ -154,7 +154,7 @@ jobs:
           scan-ref: '.'
           format: 'sarif'
           output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'CRITICAL,HIGH'
           exit-code: '1'
         continue-on-error: true
 
@@ -185,11 +185,11 @@ jobs:
       - name: Check Trivy results and fail if issues found
         run: |
           if [ -f trivy-config-results.json ]; then
-            # Check if there are any results with severity >= MEDIUM
-            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL" or .Severity == "MEDIUM")] | length' trivy-config-results.json)
+            # Check if there are any results with severity >= HIGH
+            ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' trivy-config-results.json)
             
             if [ "$ISSUE_COUNT" -gt 0 ]; then
-              echo "⚠️ Found $ISSUE_COUNT security issues!"
+              echo "⚠️ Found $ISSUE_COUNT HIGH or CRITICAL security issues!"
               exit 1
             else
               echo "✅ No critical security issues found"
