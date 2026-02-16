@@ -105,12 +105,18 @@ func readMaxUserNamespaces() (int, error) {
 
 // checkSubIDFile checks /etc/subuid or /etc/subgid for user configuration
 func checkSubIDFile(filename, username string, uid int) (string, error) {
+	// Validate filename is one of the expected system subid files
+	if filename != "/etc/subuid" && filename != "/etc/subgid" {
+		return "", fmt.Errorf("unexpected subid file: %s (expected /etc/subuid or /etc/subgid)", filename)
+	}
+
+	// #nosec G304 -- filename validated to be /etc/subuid or /etc/subgid only
 	file, err := os.Open(filename)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	
+
 	scanner := bufio.NewScanner(file)
 	
 	for scanner.Scan() {
