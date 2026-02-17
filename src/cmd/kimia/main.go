@@ -55,7 +55,12 @@ func main() {
 			}
 		}
 		if !isValid {
-			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", config.StorageDriver)
+			// Sanitize storage driver for safe output
+			// Remove control characters, limit length, keep only printable ASCII
+			sanitized := sanitizeForOutput(config.StorageDriver, 50)
+
+			// #nosec G705 -- sanitized is cleaned by sanitizeForOutput() which removes all control characters and limits length
+			fmt.Fprintf(os.Stderr, "Error: Invalid storage driver '%s'\n", sanitized)
 			fmt.Fprintf(os.Stderr, "Valid options: native, overlay (BuildKit), vfs, overlay (Buildah)\n\n")
 			os.Exit(1)
 		}
@@ -132,16 +137,37 @@ func main() {
 	// Store SubContext in context for BuildKit Git URL formatting
 	ctx.SubContext = config.SubContext
 
+
 	// Apply context-sub-path for local contexts (not Git URLs)
 	// For Git URLs with BuildKit, SubContext is handled in FormatGitURLForBuildKit
 	if config.SubContext != "" && ctx.Path != "" {
-		subPath := filepath.Join(ctx.Path, config.SubContext)
+		// Clean the base context path
+		cleanContextPath := filepath.Clean(ctx.Path)
+
+		// Clean the sub-context to resolve . and .. components
+		cleanSubContext := filepath.Clean(config.SubContext)
 		
+		// Join the paths
+		subPath := filepath.Join(cleanContextPath, cleanSubContext)
+
+		// Validate that subPath is actually within the context path
+		// by checking if the relative path starts with ".."
+		relPath, err := filepath.Rel(cleanContextPath, subPath)
+		if err != nil {
+			logger.Fatal("Invalid context sub-path: %s", config.SubContext)
+		}
+
+		// If the relative path starts with "..", it's trying to escape
+		if strings.HasPrefix(relPath, "..") {
+			logger.Fatal("Context sub-path attempts to escape build context: %s", config.SubContext)
+		}
+
 		// Verify the subdirectory exists
+		// #nosec G703 -- subPath is validated to be within cleanContextPath using filepath.Rel() check above
 		if _, err := os.Stat(subPath); err != nil {
 			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
 		}
-		
+
 		logger.Info("Using context sub-path: %s", config.SubContext)
 		ctx.Path = subPath
 	}
@@ -228,4 +254,26 @@ func convertAttestationConfigs(mainConfigs []AttestationConfig) []build.Attestat
 		}
 	}
 	return buildConfigs
+}
+
+// sanitizeForOutput removes control characters and limits length
+// for safe terminal output
+func sanitizeForOutput(input string, maxLen int) string {
+	// Remove control characters, null bytes, and escape sequences
+	var sanitized strings.Builder
+	for _, r := range input {
+		// Only allow printable ASCII characters (space through tilde)
+		if r >= 32 && r <= 126 {
+			sanitized.WriteRune(r)
+		}
+	}
+
+	result := sanitized.String()
+
+	// Limit length
+	if len(result) > maxLen {
+		result = result[:maxLen] + "..."
+	}
+
+	return result
 }

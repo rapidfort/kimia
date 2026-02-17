@@ -9,8 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added --digest-file export handling for BuildKit output.
 
+### Changed
+
 ### Fixed
 - Buildah --tar-path export now works without registry auth configuration
+- Remediations and updates for security scanner findings
+
+### Removed
 
 ## [1.0.22] - 2025-12-02
 
