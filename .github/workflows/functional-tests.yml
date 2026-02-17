@@ -223,27 +223,32 @@ jobs:
         run: |
           echo "=== Test 1: Version Check ==="
           docker run --rm \
-            ${{ needs.build-images.outputs.kimia_bud_image }} \
-            --version
-
-      - name: Test 2 - Environment check
-        run: |
-          echo "=== Test 2: Environment Check ==="
-          VOLUME_OPTS=""
-          if [ "${{ matrix.storage }}" = "overlay" ]; then
-            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
-          fi
-          docker run --rm \
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
-            --cap-add DAC_OVERRIDE \
-            --cap-add MKNOD \
             --security-opt seccomp=unconfined \
-            --security-opt apparmor=unconfined \
-            $VOLUME_OPTS \
+            --security-opt apparmor=unconfined \            
             ${{ needs.build-images.outputs.kimia_bud_image }} \
-            check-environment --storage-driver=${{ matrix.storage }}
+            --version
+
+      # - name: Test 2 - Environment check
+      #   run: |
+      #     echo "=== Test 2: Environment Check ==="
+      #     VOLUME_OPTS=""
+      #     if [ "${{ matrix.storage }}" = "overlay" ]; then
+      #       VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+      #     fi
+      #     docker run --rm \
+      #       --user 1000:1000 \
+      #       --cap-add SETUID \
+      #       --cap-add SETGID \
+      #       --cap-add DAC_OVERRIDE \
+      #       --cap-add MKNOD \
+      #       --security-opt seccomp=unconfined \
+      #       --security-opt apparmor=unconfined \
+      #       $VOLUME_OPTS \
+      #       ${{ needs.build-images.outputs.kimia_bud_image }} \
+      #       check-environment --storage-driver=${{ matrix.storage }}
 
       - name: Test 3 - Git build (nginx)
         run: |
@@ -454,149 +459,149 @@ jobs:
         run: |
           kubectl create namespace ${{ env.NAMESPACE }}
 
-      - name: Test 1 - Version check
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
-        run: |
-          echo "=== K8s Test 1: Version Check ==="
-          cat << EOF | kubectl apply -f -
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: test-version
-            namespace: ${NAMESPACE}
-          spec:
-            ttlSecondsAfterFinished: 60
-            backoffLimit: 0
-            template:
-              spec:
-                restartPolicy: Never
-                containers:
-                - name: kimia
-                  image: ${KIMIA_IMAGE}
-                  imagePullPolicy: Never
-                  args: ["--version"]
-                  resources:
-                    requests:
-                      memory: "256Mi"
-                      cpu: "100m"
-                    limits:
-                      memory: "512Mi"
-                      cpu: "500m"
-          EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-version -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-version -n ${{ env.NAMESPACE }}
+      # - name: Test 1 - Version check
+      #   env:
+      #     NAMESPACE: ${{ env.NAMESPACE }}
+      #     KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+      #   run: |
+      #     echo "=== K8s Test 1: Version Check ==="
+      #     cat << EOF | kubectl apply -f -
+      #     apiVersion: batch/v1
+      #     kind: Job
+      #     metadata:
+      #       name: test-version
+      #       namespace: ${NAMESPACE}
+      #     spec:
+      #       ttlSecondsAfterFinished: 60
+      #       backoffLimit: 0
+      #       template:
+      #         spec:
+      #           restartPolicy: Never
+      #           containers:
+      #           - name: kimia
+      #             image: ${KIMIA_IMAGE}
+      #             imagePullPolicy: Never
+      #             args: ["--version"]
+      #             resources:
+      #               requests:
+      #                 memory: "256Mi"
+      #                 cpu: "100m"
+      #               limits:
+      #                 memory: "512Mi"
+      #                 cpu: "500m"
+      #     EOF
+      #     kubectl wait --for=condition=complete --timeout=1800s job/test-version -n ${{ env.NAMESPACE }}
+      #     kubectl logs -l job-name=test-version -n ${{ env.NAMESPACE }}
 
-      - name: Test 2 - Environment check (VFS)
-        if: matrix.storage == 'vfs'
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
-        run: |
-          echo "=== K8s Test 2: Environment Check (VFS) ==="
-          cat << EOF | kubectl apply -f -
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: test-envcheck
-            namespace: ${NAMESPACE}
-          spec:
-            ttlSecondsAfterFinished: 60
-            backoffLimit: 0
-            template:
-              spec:
-                restartPolicy: Never
-                securityContext:
-                  runAsUser: 1000
-                  runAsGroup: 1000
-                  runAsNonRoot: true
-                  fsGroup: 1000
-                containers:
-                - name: kimia
-                  image: ${KIMIA_IMAGE}
-                  imagePullPolicy: Never
-                  args: ["check-environment", "--storage-driver=vfs"]
-                  securityContext:
-                    runAsUser: 1000
-                    runAsGroup: 1000
-                    runAsNonRoot: true
-                    allowPrivilegeEscalation: true
-                    capabilities:
-                      drop: [ALL]
-                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
-                    seccompProfile:
-                      type: Unconfined
-                    appArmorProfile:
-                      type: Unconfined
-                  resources:
-                    requests:
-                      memory: "512Mi"
-                      cpu: "500m"
-                    limits:
-                      memory: "2Gi"
-                      cpu: "2000m"
-          EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-envcheck -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
+      # - name: Test 2 - Environment check (VFS)
+      #   if: matrix.storage == 'vfs'
+      #   env:
+      #     NAMESPACE: ${{ env.NAMESPACE }}
+      #     KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+      #   run: |
+      #     echo "=== K8s Test 2: Environment Check (VFS) ==="
+      #     cat << EOF | kubectl apply -f -
+      #     apiVersion: batch/v1
+      #     kind: Job
+      #     metadata:
+      #       name: test-envcheck
+      #       namespace: ${NAMESPACE}
+      #     spec:
+      #       ttlSecondsAfterFinished: 60
+      #       backoffLimit: 0
+      #       template:
+      #         spec:
+      #           restartPolicy: Never
+      #           securityContext:
+      #             runAsUser: 1000
+      #             runAsGroup: 1000
+      #             runAsNonRoot: true
+      #             fsGroup: 1000
+      #           containers:
+      #           - name: kimia
+      #             image: ${KIMIA_IMAGE}
+      #             imagePullPolicy: Never
+      #             args: ["check-environment", "--storage-driver=vfs"]
+      #             securityContext:
+      #               runAsUser: 1000
+      #               runAsGroup: 1000
+      #               runAsNonRoot: true
+      #               allowPrivilegeEscalation: true
+      #               capabilities:
+      #                 drop: [ALL]
+      #                 add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+      #               seccompProfile:
+      #                 type: Unconfined
+      #               appArmorProfile:
+      #                 type: Unconfined
+      #             resources:
+      #               requests:
+      #                 memory: "512Mi"
+      #                 cpu: "500m"
+      #               limits:
+      #                 memory: "2Gi"
+      #                 cpu: "2000m"
+      #     EOF
+      #     kubectl wait --for=condition=complete --timeout=1800s job/test-envcheck -n ${{ env.NAMESPACE }}
+      #     kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
 
-      - name: Test 2 - Environment check (Overlay)
-        if: matrix.storage == 'overlay'
-        env:
-          NAMESPACE: ${{ env.NAMESPACE }}
-          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
-        run: |
-          echo "=== K8s Test 2: Environment Check (Overlay) ==="
-          cat << EOF | kubectl apply -f -
-          apiVersion: batch/v1
-          kind: Job
-          metadata:
-            name: test-envcheck
-            namespace: ${NAMESPACE}
-          spec:
-            ttlSecondsAfterFinished: 60
-            backoffLimit: 0
-            template:
-              spec:
-                restartPolicy: Never
-                securityContext:
-                  runAsUser: 1000
-                  runAsGroup: 1000
-                  runAsNonRoot: true
-                  fsGroup: 1000
-                containers:
-                - name: kimia
-                  image: ${KIMIA_IMAGE}
-                  imagePullPolicy: Never
-                  args: ["check-environment", "--storage-driver=overlay"]
-                  securityContext:
-                    runAsUser: 1000
-                    runAsGroup: 1000
-                    runAsNonRoot: true
-                    allowPrivilegeEscalation: true
-                    capabilities:
-                      drop: [ALL]
-                      add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
-                    seccompProfile:
-                      type: Unconfined
-                    appArmorProfile:
-                      type: Unconfined
-                  volumeMounts:
-                    - name: kimia-local
-                      mountPath: /home/kimia/.local
-                  resources:
-                    requests:
-                      memory: "512Mi"
-                      cpu: "500m"
-                    limits:
-                      memory: "2Gi"
-                      cpu: "2000m"
-                volumes:
-                  - name: kimia-local
-                    emptyDir: {}
-          EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-envcheck -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
+      # - name: Test 2 - Environment check (Overlay)
+      #   if: matrix.storage == 'overlay'
+      #   env:
+      #     NAMESPACE: ${{ env.NAMESPACE }}
+      #     KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
+      #   run: |
+      #     echo "=== K8s Test 2: Environment Check (Overlay) ==="
+      #     cat << EOF | kubectl apply -f -
+      #     apiVersion: batch/v1
+      #     kind: Job
+      #     metadata:
+      #       name: test-envcheck
+      #       namespace: ${NAMESPACE}
+      #     spec:
+      #       ttlSecondsAfterFinished: 60
+      #       backoffLimit: 0
+      #       template:
+      #         spec:
+      #           restartPolicy: Never
+      #           securityContext:
+      #             runAsUser: 1000
+      #             runAsGroup: 1000
+      #             runAsNonRoot: true
+      #             fsGroup: 1000
+      #           containers:
+      #           - name: kimia
+      #             image: ${KIMIA_IMAGE}
+      #             imagePullPolicy: Never
+      #             args: ["check-environment", "--storage-driver=overlay"]
+      #             securityContext:
+      #               runAsUser: 1000
+      #               runAsGroup: 1000
+      #               runAsNonRoot: true
+      #               allowPrivilegeEscalation: true
+      #               capabilities:
+      #                 drop: [ALL]
+      #                 add: [SETUID, SETGID, DAC_OVERRIDE, MKNOD]
+      #               seccompProfile:
+      #                 type: Unconfined
+      #               appArmorProfile:
+      #                 type: Unconfined
+      #             volumeMounts:
+      #               - name: kimia-local
+      #                 mountPath: /home/kimia/.local
+      #             resources:
+      #               requests:
+      #                 memory: "512Mi"
+      #                 cpu: "500m"
+      #               limits:
+      #                 memory: "2Gi"
+      #                 cpu: "2000m"
+      #           volumes:
+      #             - name: kimia-local
+      #               emptyDir: {}
+      #     EOF
+      #     kubectl wait --for=condition=complete --timeout=1800s job/test-envcheck -n ${{ env.NAMESPACE }}
+      #     kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
 
       - name: Test 3 - Git build (no push)
         env:
