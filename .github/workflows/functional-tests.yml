@@ -227,28 +227,28 @@ jobs:
             --cap-add SETUID \
             --cap-add SETGID \
             --security-opt seccomp=unconfined \
-            --security-opt apparmor=unconfined \            
+            --security-opt apparmor=unconfined \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
             --version
 
-      # - name: Test 2 - Environment check
-      #   run: |
-      #     echo "=== Test 2: Environment Check ==="
-      #     VOLUME_OPTS=""
-      #     if [ "${{ matrix.storage }}" = "overlay" ]; then
-      #       VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
-      #     fi
-      #     docker run --rm \
-      #       --user 1000:1000 \
-      #       --cap-add SETUID \
-      #       --cap-add SETGID \
-      #       --cap-add DAC_OVERRIDE \
-      #       --cap-add MKNOD \
-      #       --security-opt seccomp=unconfined \
-      #       --security-opt apparmor=unconfined \
-      #       $VOLUME_OPTS \
-      #       ${{ needs.build-images.outputs.kimia_bud_image }} \
-      #       check-environment --storage-driver=${{ matrix.storage }}
+      - name: Test 2 - Environment check
+        run: |
+          echo "=== Test 2: Environment Check ==="
+          VOLUME_OPTS=""
+          if [ "${{ matrix.storage }}" = "overlay" ]; then
+            VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
+          fi
+          docker run --rm \
+            --user 1000:1000 \
+            --cap-add SETUID \
+            --cap-add SETGID \
+            --cap-add DAC_OVERRIDE \
+            --cap-add MKNOD \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            $VOLUME_OPTS \
+            ${{ needs.build-images.outputs.kimia_bud_image }} \
+            check-environment --storage-driver=${{ matrix.storage }}
 
       - name: Test 3 - Git build (nginx)
         run: |
