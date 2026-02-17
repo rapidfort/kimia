@@ -63,6 +63,7 @@ func ValidateGitRef(ref string) error {
 
 // ValidateImageName validates an OCI/Docker image name
 // Does not validate tag or digest - use ValidateImageTag for those
+// Registry hostnames are case-insensitive (DNS); repository paths must be lowercase (OCI spec)
 func ValidateImageName(name string) error {
 	if name == "" {
 		return fmt.Errorf("image name cannot be empty")
@@ -77,15 +78,48 @@ func ValidateImageName(name string) error {
 		return fmt.Errorf("image name contains null byte")
 	}
 
-	// Split on tag/digest separators
+	// Strip tag/digest to get the name-only portion, but only treat ':'
+	// as a tag separator if it comes after the last '/' (not a registry:port).
 	nameOnly := name
-	if idx := strings.IndexAny(name, ":@"); idx != -1 {
-		nameOnly = name[:idx]
+	slashIdx := strings.LastIndex(name, "/")
+	if atIdx := strings.Index(name, "@"); atIdx != -1 {
+		nameOnly = name[:atIdx]
+	} else if colonIdx := strings.Index(name, ":"); colonIdx != -1 {
+		if slashIdx == -1 || colonIdx > slashIdx {
+			nameOnly = name[:colonIdx]
+		}
 	}
 
-	// Basic validation for image name
-	if !imageNamePattern.MatchString(nameOnly) {
-		return fmt.Errorf("invalid image name format: %s", nameOnly)
+	// Split into registry host and repository path.
+	// A registry host is present if the first component contains a '.' or ':'
+	// (hostname/IP) or is "localhost" — matching Docker's own heuristic.
+	var registryHost, repoPath string
+	firstSlash := strings.Index(nameOnly, "/")
+	if firstSlash == -1 {
+		// No slash: entire string is the repository name (e.g. "ubuntu")
+		repoPath = nameOnly
+	} else {
+		first := nameOnly[:firstSlash]
+		if strings.ContainsAny(first, ".:") || first == "localhost" {
+			// First component looks like a registry host
+			registryHost = first
+			repoPath = nameOnly[firstSlash+1:]
+		} else {
+			// No registry host (e.g. "library/ubuntu")
+			repoPath = nameOnly
+		}
+	}
+
+	// Validate registry host if present (case-insensitive DNS name, optional port)
+	if registryHost != "" {
+		if err := ValidateRegistryHost(registryHost); err != nil {
+			return fmt.Errorf("invalid registry host in image name: %v", err)
+		}
+	}
+
+	// Validate repository path — must be lowercase per OCI spec
+	if !imageNamePattern.MatchString(repoPath) {
+		return fmt.Errorf("invalid image name format: %s", repoPath)
 	}
 
 	return nil
@@ -587,7 +621,7 @@ func ValidateLabelKeyValue(label string) error {
 }
 
 // ValidateImageReference validates a complete image reference
-// Format: [registry/][namespace/]repository[:tag][@digest]
+// Format: [registry[:port]/][namespace/]repository[:tag][@digest]
 func ValidateImageReference(ref string) error {
 	if ref == "" {
 		return fmt.Errorf("image reference cannot be empty")
@@ -607,42 +641,50 @@ func ValidateImageReference(ref string) error {
 		return fmt.Errorf("invalid image reference: %v", err)
 	}
 
-	// Split into components
+	// Find digest separator
 	digestIdx := strings.Index(ref, "@")
-	tagIdx := strings.Index(ref, ":")
-	
-	// Extract name (everything before tag or digest)
+
+	// Find the TAG colon: it must come after the last '/' to distinguish
+	// it from a registry:port colon.
+	// e.g. "10.228.98.157:5000/repo/image:latest"
+	//       ↑ port colon (ignored)           ↑ tag colon (used)
+	tagColonIdx := -1
+	slashIdx := strings.LastIndex(ref, "/")
+	searchFrom := slashIdx + 1 // search only within the final path component
+	if relIdx := strings.Index(ref[searchFrom:], ":"); relIdx != -1 {
+		tagColonIdx = searchFrom + relIdx
+	}
+
+	// Determine where the name portion ends
 	nameEndIdx := len(ref)
 	if digestIdx != -1 {
 		nameEndIdx = digestIdx
-	} else if tagIdx != -1 {
-		// Only use tag index if it's not part of the registry port
-		// e.g., registry.io:5000/image:tag -> don't split at first :
-		slashIdx := strings.LastIndex(ref, "/")
-		if slashIdx == -1 || tagIdx > slashIdx {
-			nameEndIdx = tagIdx
-		}
+	} else if tagColonIdx != -1 {
+		nameEndIdx = tagColonIdx
 	}
 
 	name := ref[:nameEndIdx]
 
-	// Validate the name portion
+	// Validate the name portion (registry:port + path, no tag/digest)
 	if err := ValidateImageName(name); err != nil {
 		return err
 	}
 
-	// Validate tag if present
-	if tagIdx != -1 && tagIdx < nameEndIdx {
-		tag := ref[tagIdx+1:]
-		if digestIdx != -1 {
-			tag = ref[tagIdx+1:digestIdx]
+	// Validate tag if present (and not superseded by a digest)
+	if tagColonIdx != -1 && digestIdx == -1 {
+		tag := ref[tagColonIdx+1:]
+		if err := ValidateImageTag(tag); err != nil {
+			return err
 		}
+	} else if tagColonIdx != -1 && digestIdx != -1 && tagColonIdx < digestIdx {
+		// tag present alongside digest: repo:tag@sha256:...
+		tag := ref[tagColonIdx+1 : digestIdx]
 		if err := ValidateImageTag(tag); err != nil {
 			return err
 		}
 	}
 
-	// Validate digest if present (basic check)
+	// Validate digest if present
 	if digestIdx != -1 {
 		digest := ref[digestIdx+1:]
 		digestPattern := regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
