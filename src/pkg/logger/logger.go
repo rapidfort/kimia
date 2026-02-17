@@ -85,7 +85,7 @@ func SanitizeGitURL(gitURL string) string {
 	u, err := url.Parse(gitURL)
 	if err != nil {
 		// Not a valid URL, return as-is (might be SSH or local path)
-		return gitURL  // ← YOU NEED TO UNCOMMENT THIS!
+		return gitURL
 	}
 
 	// If there's user info (credentials), redact the password but keep username
