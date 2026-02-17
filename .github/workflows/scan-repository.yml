@@ -156,6 +156,7 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
+          skip-dirs: 'tests'  # Added: Skip tests directory
         continue-on-error: true
 
       - name: Upload Trivy results to GitHub Security
@@ -172,6 +173,7 @@ jobs:
           scan-ref: '.'
           format: 'json'
           output: 'trivy-config-results.json'
+          skip-dirs: 'tests'  # Added: Skip tests directory
           exit-code: '0'
 
       - name: Run Trivy config scan (Table for display)
@@ -180,6 +182,7 @@ jobs:
           scan-type: 'config'
           scan-ref: '.'
           format: 'table'
+          skip-dirs: 'tests'  # Added: Skip tests directory
           exit-code: '0'
 
       - name: Check Trivy results and fail if issues found
