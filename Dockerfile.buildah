@@ -50,7 +50,7 @@ ARG KIMIA_USER
 ARG TARGETARCH
 
 # Install system dependencies
-RUN apk update && apk add gnutls
+RUN apk update && apk add --no-cache gnutls
 
 # Install runtime dependencies for Buildah
 RUN apk add --no-cache \

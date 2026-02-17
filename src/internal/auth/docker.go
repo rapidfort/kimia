@@ -22,13 +22,45 @@ type DockerConfig struct {
 type DockerAuth struct {
 	Auth     string `json:"auth,omitempty"`
 	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
+	Password string `json:"password,omitempty"` // #nosec G117 -- Required for Docker registry authentication
 }
 
 // SetupConfig holds configuration for authentication setup
 type SetupConfig struct {
 	Destinations     []string
 	InsecureRegistry []string
+}
+
+// validateDockerConfigPath validates that a config path is within the expected Docker config directory
+func validateDockerConfigPath(configPath string) error {
+	// Clean the path
+	cleanPath := filepath.Clean(configPath)
+	
+	// Check for null bytes
+	if strings.Contains(cleanPath, "\x00") {
+		return fmt.Errorf("config path contains null bytes")
+	}
+	
+	// Get expected base directory
+	dockerConfigDir := GetDockerConfigDir()
+	expectedBase := filepath.Clean(dockerConfigDir)
+	
+	// Ensure it's an absolute path
+	if !filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("config path must be absolute: %s", cleanPath)
+	}
+	
+	// Check if path is within Docker config directory
+	if !strings.HasPrefix(cleanPath, expectedBase) {
+		return fmt.Errorf("config path must be within Docker config directory (%s)", expectedBase)
+	}
+	
+	// Additional check for path traversal
+	if strings.Contains(configPath, "..") {
+		return fmt.Errorf("config path contains directory traversal")
+	}
+	
+	return nil
 }
 
 // GetDockerConfigDir returns the Docker config directory
@@ -107,7 +139,8 @@ func Setup(config SetupConfig) error {
 				}
 
 				// Create the config directory if it doesn't exist
-				if err := os.MkdirAll(dockerConfigDir, 0755); err != nil {
+				// Docker config directory should be restrictive (contains credentials)
+				if err := os.MkdirAll(dockerConfigDir, 0700); err != nil {
 					return fmt.Errorf("failed to create Docker config directory: %v", err)
 				}
 
@@ -128,6 +161,11 @@ func Setup(config SetupConfig) error {
 	}
 
 	// Read and validate the config
+	// Validate config path is within expected Docker config location
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return fmt.Errorf("invalid Docker config path: %v", err)
+	}
+	// #nosec G304 -- configPath validated to be within Docker config directory
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read Docker config: %v", err)
@@ -187,6 +225,11 @@ func Setup(config SetupConfig) error {
 
 // ValidateDockerConfig validates a Docker config.json file
 func ValidateDockerConfig(configPath string) error {
+	// Validate config path is within expected Docker config location
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return fmt.Errorf("invalid Docker config path: %v", err)
+	}
+	// #nosec G304 -- configPath validated to be within Docker config directory
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to read config: %v", err)
@@ -226,6 +269,7 @@ func CreateRegistriesConf(configDir string, insecureRegistries []string, destina
 
 	// Write registries.conf
 	confPath := filepath.Join(configDir, "registries.conf")
+	// #nosec G306 -- registries.conf is configuration file, not credentials (0644 is appropriate)
 	if err := os.WriteFile(confPath, []byte(sb.String()), 0644); err != nil {
 		return fmt.Errorf("failed to write registries.conf: %v", err)
 	}
@@ -259,6 +303,11 @@ func GetRegistryAuth(registry string) (string, error) {
 	dockerConfigDir := GetDockerConfigDir()
 	configPath := filepath.Join(dockerConfigDir, "config.json")
 
+	// Validate config path is within expected Docker config location
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return "", fmt.Errorf("invalid Docker config path: %v", err)
+	}
+	// #nosec G304 -- configPath validated to be within Docker config directory
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read Docker config: %v", err)
@@ -309,7 +358,8 @@ func CreateDockerConfig(outputPath string, auths map[string]DockerAuth) error {
 
 	// Ensure directory exists
 	dir := filepath.Dir(outputPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	// Docker config directory should be restrictive (contains credentials)
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("failed to create directory: %v", err)
 	}
 
@@ -330,6 +380,11 @@ func AddCredentialHelper(registry, helper string) error {
 	var config DockerConfig
 
 	// Read existing config if it exists
+	// Validate config path is within expected Docker config location
+	if err := validateDockerConfigPath(configPath); err != nil {
+		return fmt.Errorf("invalid Docker config path: %v", err)
+	}
+	// #nosec G304 -- configPath validated to be within Docker config directory
 	if data, err := os.ReadFile(configPath); err == nil {
 		if err := json.Unmarshal(data, &config); err != nil {
 			logger.Warning("Failed to parse existing config, creating new one")
