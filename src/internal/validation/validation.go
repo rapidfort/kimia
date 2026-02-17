@@ -78,36 +78,32 @@ func ValidateImageName(name string) error {
 		return fmt.Errorf("image name contains null byte")
 	}
 
-	// Strip tag/digest to get the name-only portion, but only treat ':'
-	// as a tag separator if it comes after the last '/' (not a registry:port).
-	nameOnly := name
-	slashIdx := strings.LastIndex(name, "/")
-	if atIdx := strings.Index(name, "@"); atIdx != -1 {
-		nameOnly = name[:atIdx]
-	} else if colonIdx := strings.Index(name, ":"); colonIdx != -1 {
-		if slashIdx == -1 || colonIdx > slashIdx {
-			nameOnly = name[:colonIdx]
-		}
-	}
-
-	// Split into registry host and repository path.
+	// Split into registry host and repository path FIRST, using the raw name.
 	// A registry host is present if the first component contains a '.' or ':'
 	// (hostname/IP) or is "localhost" — matching Docker's own heuristic.
 	var registryHost, repoPath string
-	firstSlash := strings.Index(nameOnly, "/")
+	firstSlash := strings.Index(name, "/")
 	if firstSlash == -1 {
-		// No slash: entire string is the repository name (e.g. "ubuntu")
-		repoPath = nameOnly
+		// No slash: entire string is the repository name (e.g. "ubuntu:latest")
+		repoPath = name
 	} else {
-		first := nameOnly[:firstSlash]
+		first := name[:firstSlash]
 		if strings.ContainsAny(first, ".:") || first == "localhost" {
 			// First component looks like a registry host
 			registryHost = first
-			repoPath = nameOnly[firstSlash+1:]
+			repoPath = name[firstSlash+1:]
 		} else {
-			// No registry host (e.g. "library/ubuntu")
-			repoPath = nameOnly
+			// No registry host (e.g. "library/ubuntu:latest")
+			repoPath = name
 		}
+	}
+
+	// Strip tag/digest from repoPath. Since we're past the registry host,
+	// any ':' here is unambiguously a tag separator (not a port).
+	if atIdx := strings.Index(repoPath, "@"); atIdx != -1 {
+		repoPath = repoPath[:atIdx]
+	} else if colonIdx := strings.Index(repoPath, ":"); colonIdx != -1 {
+		repoPath = repoPath[:colonIdx]
 	}
 
 	// Validate registry host if present (case-insensitive DNS name, optional port)
@@ -118,6 +114,9 @@ func ValidateImageName(name string) error {
 	}
 
 	// Validate repository path — must be lowercase per OCI spec
+	if repoPath == "" {
+		return fmt.Errorf("image name missing repository path")
+	}
 	if !imageNamePattern.MatchString(repoPath) {
 		return fmt.Errorf("invalid image name format: %s", repoPath)
 	}
