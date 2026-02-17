@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rapidfort/kimia/internal/validation"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -24,7 +25,9 @@ type Context struct {
 func (ctx *Context) Cleanup() {
 	if ctx.TempDir != "" {
 		logger.Debug("Cleaning up temporary directory: %s", ctx.TempDir)
-		os.RemoveAll(ctx.TempDir)
+		if err := os.RemoveAll(ctx.TempDir); err != nil {
+			logger.Warning("Failed to cleanup temporary directory %s: %v", ctx.TempDir, err)
+		}
 	}
 }
 
@@ -74,10 +77,31 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			homeDir = "/home/kimia"
 		}
 
+		// Sanitize HOME directory path
+		homeDir = filepath.Clean(homeDir)
+
+		// Warn if HOME path looks suspicious
+		if strings.Contains(homeDir, "..") {
+			logger.Warning("HOME directory contains '..' - this may be suspicious: %s", homeDir)
+		}
+
+		// Check for null bytes
+		if strings.Contains(homeDir, "\x00") {
+			return nil, fmt.Errorf("HOME directory contains null bytes - invalid path")
+		}
+
+		// Ensure HOME is an absolute path
+		if !filepath.IsAbs(homeDir) {
+			return nil, fmt.Errorf("HOME directory must be an absolute path, got: %s", homeDir)
+		}
+
 		workspaceDir := filepath.Join(homeDir, "workspace")
+		// Clean the final workspace path
+		workspaceDir = filepath.Clean(workspaceDir)
 
 		// Ensure workspace directory exists
-		if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		// #nosec G301,G703 -- 0750 perms secure; workspaceDir from sanitized homeDir
+		if err := os.MkdirAll(workspaceDir, 0750); err != nil {
 			return nil, fmt.Errorf("failed to create workspace directory: %v", err)
 		}
 
@@ -87,12 +111,25 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			return nil, fmt.Errorf("failed to create temp directory: %v", err)
 		}
 
+		// Validate that tempDir is actually within workspaceDir
+		// This is a defense-in-depth check since os.MkdirTemp should always create within workspaceDir
+		tempDir = filepath.Clean(tempDir)
+		relPath, err := filepath.Rel(workspaceDir, tempDir)
+		if err != nil || strings.HasPrefix(relPath, "..") {
+			// If we can't compute relative path or it escapes, something is very wrong
+			// Clean up the temp dir and fail
+			// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir from os.MkdirTemp
+			os.RemoveAll(tempDir) // Safe to ignore error here since we're already in error path
+			return nil, fmt.Errorf("temp directory validation failed: directory not within workspace")
+		}
+
 		ctx.TempDir = tempDir
 		ctx.IsGitRepo = true
 
 		// Clone the repository (use normalized URL from line 51)
 		normalizedURL = normalizeGitURL(gitConfig.Context)
 		if err := cloneGitRepo(normalizedURL, tempDir, gitConfig); err != nil {
+			// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 			os.RemoveAll(tempDir)
 			return nil, fmt.Errorf("failed to clone repository: %v", err)
 		}
@@ -109,10 +146,12 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 				if gitConfig.Branch != "" {
 					logger.Warning("Revision %s not found, falling back to branch %s", gitConfig.Revision, gitConfig.Branch)
 					if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+						// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 						os.RemoveAll(tempDir)
 						return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 					}
 				} else {
+					// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 					os.RemoveAll(tempDir)
 					return nil, fmt.Errorf("failed to checkout revision %s: %v", gitConfig.Revision, err)
 				}
@@ -131,6 +170,7 @@ func Prepare(gitConfig GitConfig, builder string) (*Context, error) {
 			// No revision specified, just checkout the branch
 			logger.Info("Checking out branch: %s", gitConfig.Branch)
 			if err := checkoutGitBranch(tempDir, gitConfig.Branch); err != nil {
+				// #nosec G104,G703 -- Ignoring cleanup error in error path; tempDir validated above
 				os.RemoveAll(tempDir)
 				return nil, fmt.Errorf("failed to checkout branch %s: %v", gitConfig.Branch, err)
 			}
@@ -232,6 +272,20 @@ func normalizeGitURL(url string) string {
 func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 	logger.Info("Cloning git repository...")
 
+	// Validate git branch name if provided
+	if gitConfig.Branch != "" {
+		if err := validateGitRef(gitConfig.Branch); err != nil {
+			return fmt.Errorf("invalid git branch name: %v", err)
+		}
+	}
+
+	// Validate git revision if provided
+	if gitConfig.Revision != "" {
+		if err := validateGitRef(gitConfig.Revision); err != nil {
+			return fmt.Errorf("invalid git revision: %v", err)
+		}
+	}
+
 	// Prepare git clone command
 	args := []string{"clone"}
 
@@ -262,6 +316,12 @@ func cloneGitRepo(url, targetDir string, gitConfig GitConfig) error {
 
 	args = append(args, url, targetDir)
 
+	// Validate the complete git clone operation
+	if err := validateGitOperation(targetDir, args...); err != nil {
+		return fmt.Errorf("git clone validation failed: %v", err)
+	}
+
+	// #nosec G204,G702 -- args validated by validateGitOperation, refs by validateGitRef
 	cmd := exec.Command("git", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -317,18 +377,109 @@ func expandEnvInURL(url string) string {
 	return expanded
 }
 
+// validateGitOperation validates inputs before executing git commands
+func validateGitOperation(repoPath string, args ...string) error {
+	// Validate repository path
+	if repoPath != "" {
+		cleanPath := filepath.Clean(repoPath)
+		
+		// Check for null bytes
+		if strings.Contains(cleanPath, "\x00") {
+			return fmt.Errorf("repository path contains null bytes")
+		}
+		
+		// Must be absolute path
+		if !filepath.IsAbs(cleanPath) {
+			return fmt.Errorf("repository path must be absolute: %s", cleanPath)
+		}
+		
+		// Check for path traversal
+		if strings.Contains(cleanPath, "..") {
+			return fmt.Errorf("repository path contains '..' sequence")
+		}
+	}
+	
+	// Validate each git argument
+	for i, arg := range args {
+		// Skip git flags (start with -)
+		if strings.HasPrefix(arg, "-") {
+			// Validate flag is safe
+			if !isValidGitFlag(arg) {
+				return fmt.Errorf("invalid git flag at position %d: %s", i, arg)
+			}
+			continue
+		}
+		
+		// Check for null bytes
+		if strings.Contains(arg, "\x00") {
+			return fmt.Errorf("git argument %d contains null bytes", i)
+		}
+		
+		// Check for shell metacharacters
+		dangerousChars := []string{";", "&", "|", "`", "$", "(", ")", "<", ">", "\n", "\r"}
+		for _, char := range dangerousChars {
+			if strings.Contains(arg, char) {
+				return fmt.Errorf("git argument %d contains dangerous character: %s", i, char)
+			}
+		}
+		
+		// If it looks like a git ref, use the validation package
+		if !strings.Contains(arg, "/") || strings.HasPrefix(arg, "origin/") || strings.HasPrefix(arg, "refs/") {
+			if err := validation.ValidateGitRef(arg); err != nil {
+				return fmt.Errorf("invalid git reference at position %d: %v", i, err)
+			}
+		}
+	}
+	
+	return nil
+}
+
+// isValidGitFlag checks if a string is a valid git flag
+func isValidGitFlag(flag string) bool {
+	// Allowlist of safe git flags used in this code
+	safeFlags := []string{
+		"-b", "-B",           // Branch creation
+		"--is-ancestor",      // Merge base check
+		"--single-branch",    // Clone options
+		"--branch",           // Branch specification
+		"--depth",            // Shallow clone
+	}
+	
+	for _, safe := range safeFlags {
+		if flag == safe {
+			return true
+		}
+	}
+	
+	return false
+}
+
 // checkoutGitBranch checks out a specific Git branch
 func checkoutGitBranch(repoDir, branch string) error {
 	logger.Info("Checking out branch: %s", branch)
 
+	// Validate inputs before git fetch
+	if err := validateGitOperation(repoDir, "fetch", "origin", branch); err != nil {
+		return fmt.Errorf("validation failed for git fetch: %v", err)
+	}
+
 	// First, try to fetch the branch to ensure we have it
+	// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef
 	fetchCmd := exec.Command("git", "fetch", "origin", branch)
 	fetchCmd.Dir = repoDir
 	fetchCmd.Stdout = os.Stdout
 	fetchCmd.Stderr = os.Stderr
-	fetchCmd.Run() // Ignore error, we'll check checkout result
+	if err := fetchCmd.Run(); err != nil {
+		logger.Debug("Git fetch failed (will attempt checkout anyway): %v", err)
+	}
+
+	// Validate inputs before git checkout
+	if err := validateGitOperation(repoDir, "checkout", branch); err != nil {
+		return fmt.Errorf("validation failed for git checkout: %v", err)
+	}
 
 	// Now checkout the branch (might be remote tracking branch)
+	// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef
 	cmd := exec.Command("git", "checkout", branch)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -336,7 +487,14 @@ func checkoutGitBranch(repoDir, branch string) error {
 
 	if err := cmd.Run(); err != nil {
 		logger.Debug("Direct checkout failed, trying remote tracking branch...")
+		
+		// Validate for remote tracking branch checkout
+		if err := validateGitOperation(repoDir, "checkout", "-b", branch, "origin/"+branch); err != nil {
+			return fmt.Errorf("validation failed for git checkout with remote: %v", err)
+		}
+		
 		// Try with explicit remote tracking branch
+		// #nosec G204 -- branch validated by validateGitOperation with validation.ValidateGitRef, flag validated by isValidGitFlag
 		cmd2 := exec.Command("git", "checkout", "-b", branch, "origin/"+branch)
 		cmd2.Dir = repoDir
 		cmd2.Stdout = os.Stdout
@@ -351,10 +509,15 @@ func checkoutGitBranch(repoDir, branch string) error {
 	return nil
 }
 
-// checkoutGitRevision checks out a specific Git commit
 func checkoutGitRevision(repoDir, revision string) error {
 	logger.Info("Checking out revision: %s", revision)
 
+	// Validate inputs
+	if err := validateGitOperation(repoDir, "checkout", revision); err != nil {
+		return fmt.Errorf("validation failed for git checkout: %v", err)
+	}
+
+	// #nosec G204 -- revision validated by validateGitOperation with validation.ValidateGitRef
 	cmd := exec.Command("git", "checkout", revision)
 	cmd.Dir = repoDir
 	cmd.Stdout = os.Stdout
@@ -420,8 +583,14 @@ func FormatGitURLForBuildKit(gitURL string, gitConfig GitConfig, subContext stri
 	return url, nil
 }
 
-// isRevisionOnBranch checks if a git revision is an ancestor of the specified branch
 func isRevisionOnBranch(repoPath, revision, branch string) bool {
+	// Validate inputs
+	if err := validateGitOperation(repoPath, "merge-base", "--is-ancestor", revision, branch); err != nil {
+		logger.Debug("Validation failed for git merge-base: %v", err)
+		return false
+	}
+	
+	// #nosec G204 -- revision and branch validated by validateGitOperation with validation.ValidateGitRef, flag validated by isValidGitFlag
 	cmd := exec.Command("git", "merge-base", "--is-ancestor", revision, branch)
 	cmd.Dir = repoPath
 	return cmd.Run() == nil
@@ -445,4 +614,44 @@ func maskToken(url string) string {
 		}
 	}
 	return url
+}
+
+// validateGitRef validates a git reference (branch name, tag, or commit SHA)
+// to prevent command injection and ensure it follows git naming conventions
+func validateGitRef(ref string) error {
+	if ref == "" {
+		return fmt.Errorf("git reference cannot be empty")
+	}
+
+	// Check for shell metacharacters that could be used for injection
+	dangerousChars := []string{";", "|", "&", "$", "`", "<", ">", "(", ")", "{", "}", "\\", "'", "\"", "\n", "\r", "\x00"}
+	for _, char := range dangerousChars {
+		if strings.Contains(ref, char) {
+			return fmt.Errorf("git reference contains invalid character: %s", char)
+		}
+	}
+
+	// Check for git option injection (references starting with -)
+	if strings.HasPrefix(ref, "-") {
+		return fmt.Errorf("git reference cannot start with '-' (potential option injection)")
+	}
+
+	// Check for suspicious patterns
+	if strings.Contains(ref, "..") {
+		return fmt.Errorf("git reference cannot contain '..' (path traversal pattern)")
+	}
+
+	// Git references can contain: a-z, A-Z, 0-9, /, -, _, .
+	// This is a reasonable subset of valid git ref characters
+	// Full git ref validation is complex, but this catches most injection attempts
+	for _, r := range ref {
+		if !((r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '/' || r == '-' || r == '_' || r == '.') {
+			return fmt.Errorf("git reference contains invalid character: %c", r)
+		}
+	}
+
+	return nil
 }

@@ -77,6 +77,7 @@ func TestOverlayMount() *OverlayTestResult {
 	mergedDir := filepath.Join(testBase, "merged")
 
 	for _, dir := range []string{lowerDir, upperDir, workDir, mergedDir} {
+		// #nosec G301 -- 0755 for temporary test directories (non-sensitive)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			result.ErrorMessage = fmt.Sprintf("Failed to create test directory: %v", err)
 			result.Duration = time.Since(startTime)
@@ -88,6 +89,7 @@ func TestOverlayMount() *OverlayTestResult {
 
 	// Create a test file in lower layer
 	testFile := filepath.Join(lowerDir, "test.txt")
+	// #nosec G306 -- 0644 for temporary test file (non-sensitive)
 	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
 		result.ErrorMessage = fmt.Sprintf("Failed to create test file: %v", err)
 		result.Duration = time.Since(startTime)
@@ -97,6 +99,7 @@ func TestOverlayMount() *OverlayTestResult {
 	// Attempt native overlay mount (works in rootless mode with user namespace)
 	logger.Debug("Testing native kernel overlay mount")
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
+	// #nosec G204 -- mount command with paths from controlled temp directory (created by os.MkdirTemp in /tmp)
 	cmd := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, mergedDir)
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -112,8 +115,10 @@ func TestOverlayMount() *OverlayTestResult {
 
 	// Test write to merged directory
 	writeTestFile := filepath.Join(mergedDir, "write-test.txt")
+	// #nosec G306 -- 0644 for temporary test file (non-sensitive)
 	if err := os.WriteFile(writeTestFile, []byte("write test"), 0644); err != nil {
 		// Try to unmount before returning error
+		// #nosec G104 -- Ignoring unmount error in error path (cleanup is best-effort)
 		unmountOverlay(mergedDir)
 		result.ErrorMessage = fmt.Sprintf("Write test to overlay failed: %v", err)
 		result.Duration = time.Since(startTime)
@@ -124,6 +129,7 @@ func TestOverlayMount() *OverlayTestResult {
 	// Verify file appears in upper layer
 	upperTestFile := filepath.Join(upperDir, "write-test.txt")
 	if _, err := os.Stat(upperTestFile); err != nil {
+		// #nosec G104 -- Ignoring unmount error in error path (cleanup is best-effort)
 		unmountOverlay(mergedDir)
 		result.ErrorMessage = fmt.Sprintf("File did not appear in upper layer: %v", err)
 		result.Duration = time.Since(startTime)
@@ -149,6 +155,7 @@ func TestOverlayMount() *OverlayTestResult {
 // unmountOverlay unmounts an overlay filesystem
 func unmountOverlay(mountPoint string) error {
 	// Use umount for native kernel overlay in rootless mode
+	// #nosec G204 -- umount command with path from controlled temp directory
 	cmd := exec.Command("umount", mountPoint)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("umount failed: %v\nOutput: %s", err, string(output))
@@ -164,6 +171,7 @@ func cleanupOverlayTest(testBase string) {
 	mergedDir := filepath.Join(testBase, "merged")
 	if _, err := os.Stat(mergedDir); err == nil {
 		// Attempt unmount, ignore errors (might not be mounted)
+		// #nosec G104 -- Best-effort cleanup, mount might not exist
 		unmountOverlay(mergedDir)
 	}
 

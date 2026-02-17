@@ -10,8 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added --digest-file export handling for BuildKit output.
 - Added --reproducible flag support for BuildKit provenance attestations.
 
+### Changed
+
 ### Fixed
 - Buildah --tar-path export now works without registry auth configuration
+- Remediations and updates for security scanner findings
+
+### Removed
 
 ## [1.0.22] - 2025-12-02
 

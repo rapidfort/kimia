@@ -331,19 +331,51 @@ func CheckEnvironmentWithDriver(storageDriver string) int {
 
 	// Authentication
 	logger.Info("AUTHENTICATION")
+
+	// Get DOCKER_CONFIG, sanitize and warn if suspicious
 	dockerConfig := os.Getenv("DOCKER_CONFIG")
 	if dockerConfig == "" {
-		dockerConfig = filepath.Join(os.Getenv("HOME"), ".docker")
+		homeDir := os.Getenv("HOME")
+		if homeDir != "" {
+			dockerConfig = filepath.Join(homeDir, ".docker")
+		}
 	}
 
-	configFile := filepath.Join(dockerConfig, "config.json")
-	if _, err := os.Stat(configFile); err == nil {
-		logger.Info("  Docker Config:           %s", configFile)
-		logger.Info("  Auth File Readable:      Yes %s", getCheckmark(true))
+	// Sanitize the path - resolve any .. or . components
+	if dockerConfig != "" {
+		cleanDockerConfig := filepath.Clean(dockerConfig)
+
+		// Warn if path looks suspicious (contains .. traversal attempts)
+		if strings.Contains(dockerConfig, "..") {
+			logger.Warning("  Docker Config path contains '..' - this may be suspicious: %s", dockerConfig)
+		}
+
+		// Warn if path contains null bytes
+		if strings.Contains(dockerConfig, "\x00") {
+			logger.Warning("  Docker Config path contains null bytes - this is suspicious")
+			dockerConfig = "" // Reject paths with null bytes
+		} else {
+			dockerConfig = cleanDockerConfig
+		}
+	}
+
+	if dockerConfig == "" {
+		logger.Info("  Docker Config:           Not configured")
+		logger.Info("    Note: Set DOCKER_CONFIG or HOME environment variable")
 	} else {
-		logger.Info("  Docker Config:           %s", configFile)
-		logger.Info("  Auth File Readable:      No (file not found)")
-		logger.Info("    Note: Authentication may be configured via environment variables")
+		// Safely join the config file path
+		configFile := filepath.Join(dockerConfig, "config.json")
+		configFile = filepath.Clean(configFile)
+
+		// #nosec G703 -- configFile is constructed from sanitized dockerConfig (cleaned with filepath.Clean and validated for null bytes)
+		if _, err := os.Stat(configFile); err == nil {
+			logger.Info("  Docker Config:           %s", configFile)
+			logger.Info("  Auth File Readable:      Yes %s", getCheckmark(true))
+		} else {
+			logger.Info("  Docker Config:           %s", configFile)
+			logger.Info("  Auth File Readable:      No (file not found)")
+			logger.Info("    Note: Authentication may be configured via environment variables")
+		}
 	}
 	logger.Info("")
 
@@ -610,6 +642,29 @@ func checkDependency(name, path string) {
 }
 
 func checkDependencyVersion(name, command string, versionArg string) {
+	// Sanitize command - check for shell metacharacters
+	if strings.ContainsAny(command, ";|&$`<>(){}\\'\"\n\r\x00") {
+		logger.Warning("  %s version: Command contains suspicious characters, skipping", name)
+		return
+	}
+
+	// Sanitize version argument - check for shell metacharacters
+	if strings.ContainsAny(versionArg, ";|&$`<>(){}\\'\"\n\r\x00") {
+		logger.Warning("  %s version: Argument contains suspicious characters, skipping", name)
+		return
+	}
+
+	// Trim whitespace from inputs
+	command = strings.TrimSpace(command)
+	versionArg = strings.TrimSpace(versionArg)
+
+	// Ensure neither is empty after trimming
+	if command == "" || versionArg == "" {
+		logger.Warning("  %s version: Empty command or argument, skipping", name)
+		return
+	}
+
+	// #nosec G204 -- command and versionArg are validated above to reject shell metacharacters and null bytes
 	cmd := exec.Command(command, versionArg)
 	output, err := cmd.CombinedOutput()
 	if err == nil {
