@@ -1194,3 +1194,566 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Storage Driver:** ${{ matrix.storage }}" >> $GITHUB_STEP_SUMMARY
           echo "**K8s Cluster:** kind (local)" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Job: Docker Mode Tests (kimia)
+  # Comprehensive Docker tests for BuildKit
+  # ============================================================================
+  docker-tests:
+    name: Docker Tests - kimia
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    needs: build-images
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull kimia image
+        run: |
+          docker pull ${{ needs.build-images.outputs.kimia_image }}
+
+      - name: Test 1 - Version check
+        run: |
+          echo "=== Test 1: Version Check ==="
+          docker run --rm ${{ needs.build-images.outputs.kimia_image }} --version
+
+      - name: Test 2 - Environment diagnostics
+        run: |
+          echo "=== Test 2: Environment Diagnostics ==="
+          docker run --rm --privileged --entrypoint="" \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            sh -c 'echo "Testing BuildKit setup..." && buildctl --version || true'
+
+      - name: Test 3 - Git build (nginx)
+        run: |
+          echo "=== Test 3: Git Build - nginx ==="
+          docker run --rm --privileged \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            --context=https://github.com/nginxinc/docker-nginx.git \
+            --git-branch=master \
+            --dockerfile=mainline/alpine/Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildkit-rootless-nginx:latest \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 4 - HTTPS alpine with context sub-path
+        run: |
+          echo "=== Test 4: HTTPS Alpine with Context Sub-path ==="
+          docker run --rm --privileged \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            --context=https://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
+            --dockerfile=Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildkit-rootless-sub-path-alpine:latest \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 5 - Git alpine with context sub-path
+        run: |
+          echo "=== Test 5: Git Alpine with Context Sub-path ==="
+          docker run --rm --privileged \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            --context=git://github.com/alpinelinux/docker-alpine.git \
+            --context-sub-path="" \
+            --dockerfile=Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildkit-rootless-git-alpine:latest \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 6 - Reproducible build 1
+        run: |
+          echo "=== Test 6: Reproducible Build #1 ==="
+          docker run --rm --privileged \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildkit-reproducible-test:v1 \
+            --reproducible \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 7 - Reproducible build 2
+        run: |
+          echo "=== Test 7: Reproducible Build #2 ==="
+          sleep 2
+          docker run --rm --privileged \
+            ${{ needs.build-images.outputs.kimia_image }} \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${{ env.REGISTRY }}/buildkit-reproducible-test:v2 \
+            --reproducible \
+            --insecure \
+            --no-push \
+            --verbosity=debug
+
+      - name: Test 8 - Compare reproducible builds
+        run: |
+          echo "=== Test 8: Compare Reproducible Builds ==="
+          docker pull ${{ env.REGISTRY }}/buildkit-reproducible-test:v1 || true
+          docker pull ${{ env.REGISTRY }}/buildkit-reproducible-test:v2 || true
+
+          DIGEST1=$(docker inspect ${{ env.REGISTRY }}/buildkit-reproducible-test:v1 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2 || echo "none")
+          DIGEST2=$(docker inspect ${{ env.REGISTRY }}/buildkit-reproducible-test:v2 --format='{{index .RepoDigests 0}}' 2>/dev/null | cut -d'@' -f2 || echo "none")
+
+          echo "Build 1 digest: $DIGEST1"
+          echo "Build 2 digest: $DIGEST2"
+
+          if [ "$DIGEST1" = "$DIGEST2" ] && [ "$DIGEST1" != "none" ]; then
+            echo "SUCCESS: Builds are reproducible!"
+          else
+            echo "WARNING: Builds may not be reproducible (digests differ or unavailable)"
+          fi
+
+      - name: Output test summary
+        if: always()
+        run: |
+          echo "## Docker Tests - kimia (BuildKit)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1 | Version check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2 | Environment diagnostics |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3 | Git build (nginx) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 4 | HTTPS alpine with context sub-path |" >> $GITHUB_STEP_SUMMARY
+          echo "| 5 | Git alpine with context sub-path |" >> $GITHUB_STEP_SUMMARY
+          echo "| 6-8 | Reproducible builds comparison |" >> $GITHUB_STEP_SUMMARY
+
+  # ============================================================================
+  # Job: Kubernetes Mode Tests (kimia)
+  # Comprehensive K8s tests for BuildKit
+  # ============================================================================
+  k8s-tests:
+    name: K8s Tests - kimia
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    needs: build-images
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      NAMESPACE: kimia-test-buildkit
+
+    steps:
+      - name: Set up kind cluster
+        uses: helm/kind-action@a1b0e391336a6ee6713a0583f8c6240d70863de3 # v1.12.0
+        with:
+          cluster_name: kimia-test-buildkit
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull and load image into kind
+        run: |
+          docker pull ${{ needs.build-images.outputs.kimia_image }}
+          kind load docker-image ${{ needs.build-images.outputs.kimia_image }} --name kimia-test-buildkit
+
+      - name: Create namespace
+        run: |
+          kubectl create namespace ${{ env.NAMESPACE }}
+
+      - name: Test 1 - Version check
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 1: Version Check ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-version
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args: ["--version"]
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "256Mi"
+                      cpu: "100m"
+                    limits:
+                      memory: "512Mi"
+                      cpu: "500m"
+          EOF
+          kubectl wait --for=condition=complete --timeout=1800s job/test-version -n ${{ env.NAMESPACE }}
+          kubectl logs -l job-name=test-version -n ${{ env.NAMESPACE }}
+
+      - name: Test 2 - Git build (no push)
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 2: Git Build (no push) ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-git-build
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=test-buildkit-k8s-rootless-git:latest"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-git-build -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-git-build -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
+
+      - name: Test 3 - Build with arguments (no push)
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 3: Build with Arguments (no push) ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-buildargs
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=test-buildkit-k8s-rootless-buildargs:latest"
+                    - "--build-arg=NGINX_VERSION=1.25"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-buildargs -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-buildargs -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
+
+      - name: Test 4 - Git build with no push
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 4: Git Build with Registry ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-git-push
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--git-branch=master"
+                    - "--dockerfile=mainline/alpine/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildkit-k8s-rootless-git:latest"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-git-push -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-git-push -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
+
+      - name: Test 5 - Context sub-path build
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 5: Context Sub-path Build ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-subpath
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--context-sub-path=stable/alpine"
+                    - "--dockerfile=Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildkit-k8s-nginx-subpath:latest"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait for job with better error handling
+          echo "Waiting for test-subpath job to complete (timeout: 30 minutes)..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-subpath -n ${{ env.NAMESPACE }}; then
+            echo "Job completed successfully"
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            echo ""
+            echo "=== Job Status ==="
+            kubectl get job test-subpath -n ${{ env.NAMESPACE }} -o yaml
+            echo ""
+            echo "=== Pod Status ==="
+            kubectl get pods -l job-name=test-subpath -n ${{ env.NAMESPACE }} -o wide
+            echo ""
+            echo "=== Pod Events ==="
+            kubectl describe pods -l job-name=test-subpath -n ${{ env.NAMESPACE }} | grep -A 50 Events: || true
+            echo ""
+            echo "=== Pod Logs (all available) ==="
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            echo ""
+            echo "=== Previous Pod Logs (if restarted) ==="
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --previous --tail=200 --all-containers=true || echo "No previous logs"
+            exit 1
+          fi
+
+      - name: Test 6 - Reproducible build 1
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 6: Reproducible Build #1 ==="
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-repro-1
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/rapidfort/kimia.git"
+                    - "--git-branch=main"
+                    - "--dockerfile=tests/examples/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildkit-k8s-reproducible-test:v1"
+                    - "--reproducible"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait with error handling
+          echo "Waiting for test-repro-1 job to complete..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-repro-1 -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
+
+      - name: Test 7 - Reproducible build 2
+        env:
+          NAMESPACE: ${{ env.NAMESPACE }}
+          KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_image }}
+        run: |
+          echo "=== K8s Test 7: Reproducible Build #2 ==="
+          sleep 5
+          cat << EOF | kubectl apply -f -
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: test-repro-2
+            namespace: ${NAMESPACE}
+          spec:
+            ttlSecondsAfterFinished: 60
+            backoffLimit: 0
+            template:
+              spec:
+                restartPolicy: Never
+                containers:
+                - name: kimia
+                  image: ${KIMIA_IMAGE}
+                  imagePullPolicy: Never
+                  args:
+                    - "--context=https://github.com/rapidfort/kimia.git"
+                    - "--git-branch=main"
+                    - "--dockerfile=tests/examples/Dockerfile"
+                    - "--destination=${{ env.REGISTRY }}/buildkit-k8s-reproducible-test:v2"
+                    - "--reproducible"
+                    - "--insecure"
+                    - "--no-push"
+                    - "--verbosity=debug"
+                  securityContext:
+                    privileged: true
+                  resources:
+                    requests:
+                      memory: "512Mi"
+                      cpu: "500m"
+                    limits:
+                      memory: "2Gi"
+                      cpu: "2000m"
+          EOF
+
+          # Wait with error handling
+          echo "Waiting for test-repro-2 job to complete..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-repro-2 -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
+
+      - name: Get all job logs
+        if: always()
+        run: |
+          echo "=== All Job Statuses ==="
+          kubectl get jobs -n ${{ env.NAMESPACE }} -o wide
+          echo ""
+          echo "=== Failed Job Details ==="
+          for job in $(kubectl get jobs -n ${{ env.NAMESPACE }} -o jsonpath='{.items[?(@.status.failed)].metadata.name}'); do
+            echo "--- Job: $job ---"
+            kubectl describe job $job -n ${{ env.NAMESPACE }}
+            kubectl logs -l job-name=$job -n ${{ env.NAMESPACE }} --tail=200
+          done
+
+      - name: Output test summary
+        if: always()
+        run: |
+          echo "## K8s Tests - kimia (BuildKit)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Description |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1 | Version check |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2 | Git build (no push) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3 | Build with arguments (no push) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 4 | Git build with registry |" >> $GITHUB_STEP_SUMMARY
+          echo "| 5 | Context sub-path build |" >> $GITHUB_STEP_SUMMARY
+          echo "| 6-7 | Reproducible builds |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**K8s Cluster:** kind (local)" >> $GITHUB_STEP_SUMMARY
