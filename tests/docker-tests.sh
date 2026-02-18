@@ -776,6 +776,7 @@ run_rootless_tests() {
         # Note: BASE_CMD_WITH_VOL inserts the -v volume mount before the image name
         local local_cache_dir="/tmp/kimia-cache-${driver}"
         mkdir -p "${local_cache_dir}"
+        chown 1000:1000 "${local_cache_dir}"
         local BASE_CMD_NOVOL="${BASE_CMD%${KIMIA_IMAGE}}"
         local BASE_CMD_WITH_VOL="${BASE_CMD_NOVOL} -v ${local_cache_dir}:${local_cache_dir} ${KIMIA_IMAGE}"
         run_test \
