@@ -201,6 +201,8 @@ func main() {
 		CustomPlatform:             config.CustomPlatform,
 		Cache:                      config.Cache,
 		CacheDir:                   config.CacheDir,
+		ExportCache:                config.ExportCache,
+		ImportCache:                config.ImportCache,
 		StorageDriver:              config.StorageDriver,
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,

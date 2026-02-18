@@ -9,8 +9,10 @@ type Config struct {
 	Destination []string
 
 	// Cache configuration
-	Cache    bool
-	CacheDir string
+	Cache        bool
+	CacheDir     string
+	ExportCache  []string // BuildKit --export-cache options (e.g. "type=registry,ref=...,mode=max")
+	ImportCache  []string // BuildKit --import-cache options (e.g. "type=registry,ref=...")
 
 	// Build arguments
 	BuildArgs map[string]string

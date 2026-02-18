@@ -81,6 +81,7 @@ show_help() {
     echo "                           - Docker-style: sbom, provenance, scan options"
     echo "                           - Combined: both attestations, pass-through"
     echo "    signing                 Signing tests (1 test, ~3 min, BuildKit only)"
+    echo "    caching                 Cache export/import tests (6 tests, ~10 min, BuildKit only)"
     echo "                           - Attestation with cosign signing"
     echo ""
     echo -e "${YELLOW}EXAMPLES:${NC}"
@@ -154,14 +155,14 @@ if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
 fi
 
 # Validate test suite
-if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing)$ ]]; then
+if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching)$ ]]; then
     echo -e "${RED}Error: Invalid test suite '$TEST_SUITE'.${NC}"
     echo -e "${RED}Must be: all, simple, reproducible, attestation, or signing${NC}"
     exit 1
 fi
 
 # Validate attestation/signing tests require BuildKit
-if [[ "$TEST_SUITE" =~ ^(attestation|signing)$ ]] && [ "$BUILDER" != "buildkit" ]; then
+if [[ "$TEST_SUITE" =~ ^(attestation|signing|caching)$ ]] && [ "$BUILDER" != "buildkit" ]; then
     echo -e "${RED}Error: ${TEST_SUITE} tests require BuildKit builder${NC}"
     echo -e "${YELLOW}Please use: --builder buildkit${NC}"
     exit 1
@@ -337,6 +338,10 @@ should_run_attestation() {
 
 should_run_signing() {
     [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "signing" ]] && [ "$BUILDER" = "buildkit" ]
+}
+
+should_run_caching() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "caching" ]] && [ "$BUILDER" = "buildkit" ]
 }
 
 run_rootless_tests() {
@@ -706,6 +711,118 @@ run_rootless_tests() {
             --destination=${REGISTRY}/${BUILDER}-rootless-passthrough-${driver}:latest \
             --attest type=sbom \
             --buildkit-opt attest:provenance=mode=min \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+    fi
+
+    # ========================================================================
+    # CACHE EXPORT/IMPORT TESTS (BuildKit only)
+    # ========================================================================
+
+    if should_run_caching; then
+        # Test: Export inline cache (embedded in pushed image)
+        run_test \
+            "cache-export-inline" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-inline-${driver}:latest \
+            --cache \
+            --export-cache type=inline \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: Export registry cache (push cache layers to separate tag)
+        local cache_ref="${REGISTRY}/${BUILDER}-cache-${driver}:buildcache"
+        run_test \
+            "cache-export-registry" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-export-${driver}:latest \
+            --cache \
+            --export-cache "type=registry,ref=${cache_ref},mode=max" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: Import + export registry cache (full roundtrip)
+        # This test verifies that a second build can import the cache exported above
+        run_test \
+            "cache-roundtrip-registry" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-roundtrip-${driver}:latest \
+            --cache \
+            --import-cache "type=registry,ref=${cache_ref}" \
+            --export-cache "type=registry,ref=${cache_ref},mode=max" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: Local cache export (useful for CI systems with mounted volumes)
+        # Note: BASE_CMD_WITH_VOL inserts the -v volume mount before the image name
+        local local_cache_dir="/tmp/kimia-cache-${driver}"
+        mkdir -p "${local_cache_dir}"
+        chown 1000:1000 "${local_cache_dir}"
+        local BASE_CMD_NOVOL="${BASE_CMD%${KIMIA_IMAGE}}"
+        local BASE_CMD_WITH_VOL="${BASE_CMD_NOVOL} -v ${local_cache_dir}:${local_cache_dir} ${KIMIA_IMAGE}"
+        run_test \
+            "cache-export-local" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD_WITH_VOL \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-local-export-${driver}:latest \
+            --cache \
+            --export-cache "type=local,dest=${local_cache_dir},mode=max" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: Local cache import (use the exported cache from above)
+        run_test \
+            "cache-import-local" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD_WITH_VOL \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-local-import-${driver}:latest \
+            --cache \
+            --import-cache "type=local,src=${local_cache_dir}" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: Reproducible build ignores cache flags (should warn but not fail)
+        run_test \
+            "cache-ignored-in-reproducible" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile \
+            --destination=${REGISTRY}/${BUILDER}-rootless-cache-repro-${driver}:latest \
+            --reproducible \
+            --import-cache "type=registry,ref=${cache_ref}" \
+            --export-cache "type=registry,ref=${cache_ref},mode=max" \
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug

@@ -31,8 +31,10 @@ type Config struct {
 	CustomPlatform string
 
 	// Cache options
-	Cache    bool
-	CacheDir string
+	Cache       bool
+	CacheDir    string
+	ExportCache []string // BuildKit --export-cache options (e.g. "type=registry,ref=...,mode=max")
+	ImportCache []string // BuildKit --import-cache options (e.g. "type=registry,ref=...")
 
 	// Storage driver
 	StorageDriver string
@@ -1029,6 +1031,34 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
+	// CACHE EXPORT / IMPORT (BuildKit advanced caching)
+	// ========================================
+	// Import cache sources first (used during build)
+	for _, ic := range config.ImportCache {
+		if config.Reproducible {
+			logger.Warning("--import-cache ignored: reproducible builds disable caching")
+		} else {
+			if err := validation.ValidateBuildKitCacheSpec(ic); err != nil {
+				return fmt.Errorf("invalid --import-cache value %q: %v", ic, err)
+			}
+			args = append(args, "--import-cache", ic)
+			logger.Debug("Added import-cache: %s", ic)
+		}
+	}
+	// Export cache after build (push cache layers to registry/local/inline)
+	for _, ec := range config.ExportCache {
+		if config.Reproducible {
+			logger.Warning("--export-cache ignored: reproducible builds disable caching")
+		} else {
+			if err := validation.ValidateBuildKitCacheSpec(ec); err != nil {
+				return fmt.Errorf("invalid --export-cache value %q: %v", ec, err)
+			}
+			args = append(args, "--export-cache", ec)
+			logger.Debug("Added export-cache: %s", ec)
+		}
+	}
+
+	// ========================================
 	// REPRODUCIBLE BUILDS: Sort destinations
 	// ========================================
 	sortedDests := make([]string, len(config.Destination))
@@ -1077,11 +1107,11 @@ func executeBuildKit(config Config, ctx *Context) error {
 	
 	if len(config.AttestationConfigs) > 0 {
 		// Level 2: Docker-style attestations
-		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args)
+		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args, config.Reproducible)
 		logger.Info("Attestation mode: advanced (--attest)")
 	} else if config.Attestation != "off" && config.Attestation != "" {
 		// Level 1: Simple mode
-		attestOpts = buildAttestationOptsFromSimpleMode(config.Attestation)
+		attestOpts = buildAttestationOptsFromSimpleMode(config.Attestation, config.Reproducible)
 		logger.Info("Attestation mode: %s", config.Attestation)
 	} else {
 		// No attestations
@@ -1091,6 +1121,11 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// Add attestation options to args
 	for _, opt := range attestOpts {
 		args = append(args, "--opt", opt)
+	}
+
+	// Warn: BuildKit attestations include non-deterministic metadata
+	if config.Reproducible && len(attestOpts) > 0 {
+		logger.Warning("Reproducible build with attestations enabled. Attestation payloads include timestamps/IDs, so the image index digest will vary across runs. Compare the platform manifest digest or disable attestations if you need a stable digest.")
 	}
 	
 	// Level 3: Direct BuildKit options (pass-through)
@@ -1340,10 +1375,12 @@ func executeBuildKit(config Config, ctx *Context) error {
 	}
 
 	// ========================================
-	// DIGEST FILE EXPORT (TODO)
+	// DIGEST FILE EXPORT
 	// ========================================
-	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" {
-		logger.Warning("Digest file export not yet implemented for BuildKit")
+	if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
+		if err := SaveDigestInfo(config, digestMap); err != nil {
+			logger.Warning("Failed to save digest information: %v", err)
+		}
 	}
 
 	return nil
@@ -1352,6 +1389,21 @@ func executeBuildKit(config Config, ctx *Context) error {
 // exportToTar exports the built image to a tar file (Buildah only)
 func exportToTar(config Config) error {
 	logger.Info("Exporting image to TAR: %s", config.TarPath)
+
+	// Ensure Docker config exists - buildah requires a credentials file
+	// even for local tar export operations
+	dockerConfigDir := auth.GetDockerConfigDir()
+	configPath := filepath.Join(dockerConfigDir, "config.json")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(dockerConfigDir, 0700); err != nil {
+			return fmt.Errorf("failed to create Docker config directory: %v", err)
+		}
+		emptyConfig := []byte(`{"auths":{}}`)
+		if err := os.WriteFile(configPath, emptyConfig, 0600); err != nil {
+			return fmt.Errorf("failed to create empty Docker config: %v", err)
+		}
+		logger.Debug("Created empty Docker config for tar export")
+	}
 
 	if len(config.Destination) == 0 {
 		return fmt.Errorf("no destination specified for TAR export")
@@ -1472,7 +1524,15 @@ func SaveDigestInfo(config Config, digestMap map[string]string) error {
 
 	// Save image name with digest
 	if config.ImageNameWithDigestFile != "" {
-		imageName := strings.Split(image, ":")[0]
+		// Strip the tag but preseve the host:port, so we are stripping at the last colon
+		imageName := image
+		if lastSlash := strings.LastIndex(image, "/"); lastSlash != -1 {
+			if lastColon := strings.LastIndex(image, ":"); lastColon > lastSlash {
+				imageName = image[:lastColon]
+			}
+		} else if lastColon := strings.LastIndex(image, ":"); lastColon != -1 {
+			imageName = image[:lastColon]
+		}
 		imageWithDigest := fmt.Sprintf("%s@%s", imageName, digest)
 		// #nosec G306 -- 0644 for image reference file (public build artifact, not sensitive)
 		if err := os.WriteFile(config.ImageNameWithDigestFile, []byte(imageWithDigest), 0644); err != nil {
@@ -1529,6 +1589,9 @@ func copyDir(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read directory: %v", err)
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
 
 	for _, entry := range entries {
 		srcPath := filepath.Join(src, entry.Name())
@@ -1586,21 +1649,28 @@ func copyFile(src, dst string) error {
 }
 
 // buildAttestationOptsFromSimpleMode converts simple mode to BuildKit opts
-func buildAttestationOptsFromSimpleMode(mode string) []string {
+func buildAttestationOptsFromSimpleMode(mode string, reproducible bool) []string {
 	var opts []string
+	
+	// Build reproducible suffix for provenance
+	reproducibleSuffix := ""
+	if reproducible {
+		reproducibleSuffix = ",reproducible=true"
+		logger.Debug("Adding reproducible=true to provenance attestation")
+	}
 	
 	switch mode {
 	case "min":
 		// Provenance only, minimal info
 		// CRITICAL: Explicitly disable SBOM to fix bug where BuildKit enables it by default
 		opts = append(opts, "attest:sbom=false")
-		opts = append(opts, "attest:provenance=mode=min")
+		opts = append(opts, "attest:provenance=mode=min"+reproducibleSuffix)
 		logger.Debug("Simple mode 'min': provenance only (SBOM explicitly disabled)")
 		
 	case "max":
 		// SBOM + Provenance, maximum info
 		opts = append(opts, "attest:sbom=true")
-		opts = append(opts, "attest:provenance=mode=max")
+		opts = append(opts, "attest:provenance=mode=max"+reproducibleSuffix)
 		logger.Debug("Simple mode 'max': SBOM + provenance")
 		
 	default:
@@ -1611,8 +1681,9 @@ func buildAttestationOptsFromSimpleMode(mode string) []string {
 }
 
 // buildAttestationOptsFromConfigs converts --attest configs to BuildKit opts
-func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string) []string {
+func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string, reproducible bool) []string {
 	var opts []string
+	hasProvenance := false
 	
 	for _, config := range configs {
 		switch config.Type {
@@ -1631,10 +1702,18 @@ func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string
 			}
 			
 		case "provenance":
-			opts = append(opts, buildProvenanceOpt(config))
+			opts = append(opts, buildProvenanceOpt(config, reproducible))
+			hasProvenance = true
 		default:
 			logger.Fatal("Unknown attestation type: %s", config.Type)
 		}
+	}
+	
+	// If reproducible is set and no explicit provenance config was provided,
+	// BuildKit may still generate default provenance. Add reproducible flag.
+	if reproducible && !hasProvenance {
+		opts = append(opts, "attest:provenance=mode=min,reproducible=true")
+		logger.Debug("Auto-added reproducible provenance attestation")
 	}
 	
 	return opts
@@ -1658,17 +1737,23 @@ func buildSBOMOpt(config AttestationConfig) string {
 	}
 	
 	// Add any other params as-is (except scan-context and scan-stage which are handled separately)
-	for key, value := range config.Params {
+	// Sort keys for reproducible output
+	sbomKeys := make([]string, 0, len(config.Params))
+	for key := range config.Params {
 		if key != "generator" && key != "scan-context" && key != "scan-stage" {
-			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+			sbomKeys = append(sbomKeys, key)
 		}
+	}
+	sort.Strings(sbomKeys)
+	for _, key := range sbomKeys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, config.Params[key]))
 	}
 	
 	return fmt.Sprintf("attest:sbom=%s", strings.Join(parts, ","))
 }
 
 // buildProvenanceOpt builds a single provenance attestation opt
-func buildProvenanceOpt(config AttestationConfig) string {
+func buildProvenanceOpt(config AttestationConfig, reproducible bool) string {
 	var parts []string
 	
 	// Mode (default to max if not specified)
@@ -1678,6 +1763,14 @@ func buildProvenanceOpt(config AttestationConfig) string {
 	}
 	parts = append(parts, fmt.Sprintf("mode=%s", mode))
 	
+	// Force reproducible=true for reproducible builds if not already set
+	if reproducible {
+		if _, ok := config.Params["reproducible"]; !ok {
+			parts = append(parts, "reproducible=true")
+			logger.Debug("Auto-injected reproducible=true into provenance attestation")
+		}
+	}
+	
 	// Add all other parameters in a consistent order
 	paramOrder := []string{"builder-id", "reproducible", "inline-only", "version", "filename"}
 	for _, key := range paramOrder {
@@ -1686,11 +1779,16 @@ func buildProvenanceOpt(config AttestationConfig) string {
 		}
 	}
 	
-	// Add any remaining params not in the order list
-	for key, value := range config.Params {
+	// Add any remaining params not in the order list (sorted for reproducibility)
+	remainingKeys := make([]string, 0)
+	for key := range config.Params {
 		if key != "mode" && !contains(paramOrder, key) {
-			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
+			remainingKeys = append(remainingKeys, key)
 		}
+	}
+	sort.Strings(remainingKeys)
+	for _, key := range remainingKeys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, config.Params[key]))
 	}
 	
 	return fmt.Sprintf("attest:provenance=%s", strings.Join(parts, ","))

@@ -8,11 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Added `--export-cache` and `--import-cache` flags for BuildKit advanced caching.
 
 ### Changed
 
 ### Fixed
 - Fix storage drivers for BuildKit and Buildah
+
+### Removed
+
+## [1.0.23] - 2026-02-18
+
+### Added
+- Added --digest-file export handling for BuildKit output.
+- Added --reproducible flag support for BuildKit provenance attestations.
+
+### Changed
+
+### Fixed
+- Buildah --tar-path export now works without registry auth configuration
 - Remediations and updates for security scanner findings
 
 ### Removed
