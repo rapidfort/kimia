@@ -31,8 +31,10 @@ type Config struct {
 	CustomPlatform string
 
 	// Cache options
-	Cache    bool
-	CacheDir string
+	Cache       bool
+	CacheDir    string
+	ExportCache []string // BuildKit --export-cache options (e.g. "type=registry,ref=...,mode=max")
+	ImportCache []string // BuildKit --import-cache options (e.g. "type=registry,ref=...")
 
 	// Storage driver
 	StorageDriver string
@@ -853,6 +855,34 @@ func executeBuildKit(config Config, ctx *Context) error {
 		args = append(args, "--no-cache")
 		if config.Reproducible {
 			logger.Debug("Cache disabled for reproducible build")
+		}
+	}
+
+	// ========================================
+	// CACHE EXPORT / IMPORT (BuildKit advanced caching)
+	// ========================================
+	// Import cache sources first (used during build)
+	for _, ic := range config.ImportCache {
+		if config.Reproducible {
+			logger.Warning("--import-cache ignored: reproducible builds disable caching")
+		} else {
+			if err := validation.ValidateBuildKitCacheSpec(ic); err != nil {
+				return fmt.Errorf("invalid --import-cache value %q: %v", ic, err)
+			}
+			args = append(args, "--import-cache", ic)
+			logger.Debug("Added import-cache: %s", ic)
+		}
+	}
+	// Export cache after build (push cache layers to registry/local/inline)
+	for _, ec := range config.ExportCache {
+		if config.Reproducible {
+			logger.Warning("--export-cache ignored: reproducible builds disable caching")
+		} else {
+			if err := validation.ValidateBuildKitCacheSpec(ec); err != nil {
+				return fmt.Errorf("invalid --export-cache value %q: %v", ec, err)
+			}
+			args = append(args, "--export-cache", ec)
+			logger.Debug("Added export-cache: %s", ec)
 		}
 	}
 

@@ -481,6 +481,64 @@ func ValidateCachePath(path string) error {
 	return ValidateOutputPath(path)
 }
 
+// ValidateBuildKitCacheSpec validates a BuildKit --export-cache or --import-cache value.
+// Valid examples:
+//   type=registry,ref=registry.io/cache:latest,mode=max
+//   type=inline
+//   type=local,dest=/tmp/cache
+//   type=local,src=/tmp/cache
+//   type=s3,bucket=my-bucket,region=us-east-1,prefix=build-cache
+func ValidateBuildKitCacheSpec(spec string) error {
+	if spec == "" {
+		return fmt.Errorf("cache spec cannot be empty")
+	}
+	if len(spec) > 2048 {
+		return fmt.Errorf("cache spec too long: %d characters (max 2048)", len(spec))
+	}
+
+	// Check for null bytes and shell metacharacters
+	if strings.ContainsAny(spec, "\x00;|&`$(){}[]<>\n\r\t") {
+		return fmt.Errorf("cache spec contains invalid characters")
+	}
+
+	// Must be key=value pairs separated by commas
+	pairs := strings.Split(spec, ",")
+	if len(pairs) == 0 {
+		return fmt.Errorf("cache spec must contain at least one key=value pair")
+	}
+
+	// First pair must specify a valid type
+	first := strings.SplitN(pairs[0], "=", 2)
+	if len(first) != 2 || first[0] != "type" {
+		return fmt.Errorf("cache spec must begin with type=<value> (e.g., type=registry)")
+	}
+	validTypes := map[string]bool{
+		"registry": true,
+		"inline":   true,
+		"local":    true,
+		"s3":       true,
+		"azblob":   true,
+		"gha":      true,
+	}
+	cacheType := first[1]
+	if !validTypes[cacheType] {
+		return fmt.Errorf("invalid cache type: %q (must be one of: registry, inline, local, s3, azblob, gha)", cacheType)
+	}
+
+	// Validate each key=value pair format
+	for _, pair := range pairs[1:] {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) != 2 {
+			return fmt.Errorf("cache spec pair %q is not in key=value format", pair)
+		}
+		if kv[0] == "" {
+			return fmt.Errorf("cache spec has empty key in pair %q", pair)
+		}
+	}
+
+	return nil
+}
+
 // ValidateSecretID validates secret identifiers used in buildctl
 func ValidateSecretID(secretID string) error {
 	if secretID == "" {
