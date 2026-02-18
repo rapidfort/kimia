@@ -172,9 +172,9 @@ func TestConvertEpochStringToHumanReadable(t *testing.T) {
 		},
 		{
 			name:        "large epoch (far future)",
-			input:       "4102444800", // Around 2100
+			input:       "4260211200", // 2105-01-01 00:00 UTC (always 210x in all timezones)
 			checkYear:   true,
-			expectedYear: "20", // 2099 or 2100 depending on timezone
+			expectedYear: "210", // 2105 contains "210" in all timezones
 		},
 	}
 
