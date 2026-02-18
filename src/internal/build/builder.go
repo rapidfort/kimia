@@ -1193,7 +1193,7 @@ func exportToTar(config Config) error {
 	dockerConfigDir := auth.GetDockerConfigDir()
 	configPath := filepath.Join(dockerConfigDir, "config.json")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(dockerConfigDir, 0755); err != nil {
+		if err := os.MkdirAll(dockerConfigDir, 0700); err != nil {
 			return fmt.Errorf("failed to create Docker config directory: %v", err)
 		}
 		emptyConfig := []byte(`{"auths":{}}`)
