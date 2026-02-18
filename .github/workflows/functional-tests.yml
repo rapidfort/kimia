@@ -252,7 +252,7 @@ jobs:
       - name: Test 2b - Diagnostics (Container without caps)
         run: |
           echo "=== Test 2b: Container Diagnostics (without caps) ==="
-          docker run --rm --user 1000:1000 \
+          docker run --rm --user 1000:1000 --entrypoint="" \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
             sh -c 'echo "NoNewPrivs:" && cat /proc/self/status | grep NoNewPrivs || true; \
                    echo "Capabilities:" && cat /proc/self/status | grep Cap || true'
@@ -266,6 +266,7 @@ jobs:
             --cap-add SETGID \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
+            --entrypoint="" \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
             sh -c 'echo "NoNewPrivs:" && cat /proc/self/status | grep NoNewPrivs || true; \
                    echo "" && echo "Capabilities:" && cat /proc/self/status | grep Cap || true; \
@@ -282,6 +283,7 @@ jobs:
             --cap-add SETGID \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
+            --entrypoint="" \
             ${{ needs.build-images.outputs.kimia_bud_image }} \
             sh -c 'echo "Testing unshare with userns=host:" && unshare --user --pid --map-root-user echo "Success" 2>&1 || echo "Failed: exit code $?"'       
 
