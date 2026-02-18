@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Added
+- Added `--export-cache` and `--import-cache` flags for BuildKit advanced caching.
 - Added --digest-file export handling for BuildKit output.
 - Added --reproducible flag support for BuildKit provenance attestations.
 
