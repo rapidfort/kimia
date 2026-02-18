@@ -54,7 +54,7 @@ Below is a table comparing Kimia and Kaniko for Kubernetes-native container imag
 | **User Namespaces** | Required & utilized | Not used | ✅ Kimia: Additional isolation layer |
 | **Complex Dockerfiles** | Full support | Limited (chown issues) | ✅ Kimia: Better compatibility with ownership changes |
 | **Storage Driver** | VFS/Overlay (configurable) | Various | ✅ Kimia: Configurable, consistent |
-| **Build Cache** | Layer caching | Layer caching | ✅ Equal: Efficient rebuilds |
+| **Build Cache** | Layer + registry/inline/local/S3 caching | Layer caching only | ✅ Kimia: Advanced distributed caching |
 | **Registry Authentication** | Multiple methods | Multiple methods | ✅ Equal: Flexible auth options |
 | **Multi-stage Builds** | Full support | Full support | ✅ Equal: Modern Dockerfile features |
 | **Git Integration** | Built-in (via args) | Built-in (via executor) | ✅ Equal: Both support Git directly |
@@ -235,6 +235,8 @@ Kimia supports a comprehensive set of command-line arguments. Key options includ
 | `--build-arg` | Build-time variables (repeatable) | - |
 | `--cache` | Enable layer caching | `false` |
 | `--cache-dir` | Custom cache directory | - |
+| `--export-cache` | Export build cache (BuildKit, repeatable) | `type=registry,ref=...` |
+| `--import-cache` | Import build cache (BuildKit, repeatable) | `type=registry,ref=...` |
 | `--storage-driver` | Storage backend (native\|overlay) | `native` |
 | `--label` | Image labels (repeatable) | - |
 
@@ -412,6 +414,74 @@ kimia --context=. --destination=myapp:v1 --reproducible
 ```
 
 **Complete guide:** [Reproducible Builds Documentation](docs/reproducible-builds.md)
+
+---
+
+## Build Cache
+
+Kimia supports advanced BuildKit caching strategies to significantly speed up builds by reusing previously built layers.
+
+### Cache Backends
+
+| Backend | Description | Best For |
+|---------|-------------|----------|
+| **registry** | Store cache in an OCI registry | CI/CD pipelines, distributed teams |
+| **inline** | Embed cache metadata in the built image | Simple setups, no extra storage |
+| **local** | Cache to a local/mounted directory | CI runners with shared volumes |
+| **s3** | Cache to an S3-compatible bucket | Cloud-native workflows |
+| **gha** | GitHub Actions cache | GitHub CI |
+
+### Usage
+
+```bash
+# Registry cache (recommended for CI/CD)
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --cache \
+  --import-cache type=registry,ref=registry.io/cache/myapp:latest \
+  --export-cache type=registry,ref=registry.io/cache/myapp:latest,mode=max
+
+# Inline cache (simplest — no extra storage needed)
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --cache \
+  --export-cache type=inline
+
+# Local cache (for CI runners with persistent volumes)
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --cache \
+  --import-cache type=local,src=/mnt/cache \
+  --export-cache type=local,dest=/mnt/cache,mode=max
+```
+
+### Kubernetes Example
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-build-cached
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kimia
+          image: ghcr.io/rapidfort/kimia:latest
+          args:
+            - --context=https://github.com/myorg/myapp.git
+            - --destination=registry.io/myapp:v1
+            - --cache
+            - --import-cache
+            - type=registry,ref=registry.io/cache/myapp:latest
+            - --export-cache
+            - type=registry,ref=registry.io/cache/myapp:latest,mode=max
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              drop: [ALL]
+              add: [SETUID, SETGID]
+```
+
+> **Note:** `--export-cache` and `--import-cache` are repeatable and BuildKit-only. Cache flags are automatically ignored when `--reproducible` is set.
 
 ---
 
