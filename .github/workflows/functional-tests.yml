@@ -743,8 +743,16 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-git-build -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-git-build -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-git-build -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
 
       - name: Test 4 - Build with arguments (no push)
         env:
@@ -813,8 +821,16 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-buildargs -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-buildargs -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-buildargs -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-buildargs -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
 
       - name: Test 5 - Git build with no push
         env:
@@ -883,8 +899,16 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-git-push -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait with error handling
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-git-push -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-git-push -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-git-push -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
 
       - name: Test 6 - Context sub-path build
         env:
@@ -923,10 +947,10 @@ jobs:
                   image: ${KIMIA_IMAGE}
                   imagePullPolicy: Never
                   args:
-                    - "--context=https://github.com/docker-library/postgres.git"
-                    - "--context-sub-path=17/alpine3.21"
+                    - "--context=https://github.com/nginxinc/docker-nginx.git"
+                    - "--context-sub-path=stable/alpine"
                     - "--dockerfile=Dockerfile"
-                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-postgres-${{ matrix.storage }}:latest"
+                    - "--destination=${{ env.REGISTRY }}/buildah-k8s-nginx-subpath-${{ matrix.storage }}:latest"
                     - "--storage-driver=${{ matrix.storage }}"
                     - "--insecure"
                     - "--no-push"
@@ -953,8 +977,31 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-subpath -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait for job with better error handling
+          echo "Waiting for test-subpath job to complete (timeout: 30 minutes)..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-subpath -n ${{ env.NAMESPACE }}; then
+            echo "Job completed successfully"
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            echo ""
+            echo "=== Job Status ==="
+            kubectl get job test-subpath -n ${{ env.NAMESPACE }} -o yaml
+            echo ""
+            echo "=== Pod Status ==="
+            kubectl get pods -l job-name=test-subpath -n ${{ env.NAMESPACE }} -o wide
+            echo ""
+            echo "=== Pod Events ==="
+            kubectl describe pods -l job-name=test-subpath -n ${{ env.NAMESPACE }} | grep -A 50 Events: || true
+            echo ""
+            echo "=== Pod Logs (all available) ==="
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            echo ""
+            echo "=== Previous Pod Logs (if restarted) ==="
+            kubectl logs -l job-name=test-subpath -n ${{ env.NAMESPACE }} --previous --tail=200 --all-containers=true || echo "No previous logs"
+            exit 1
+          fi
 
       - name: Test 7 - Reproducible build 1
         env:
@@ -1024,8 +1071,17 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-repro-1 -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait with error handling
+          echo "Waiting for test-repro-1 job to complete..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-repro-1 -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-repro-1 -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
 
       - name: Test 8 - Reproducible build 2
         env:
@@ -1096,8 +1152,17 @@ jobs:
                   ${VOLUME_MOUNTS}
                 ${VOLUMES}
           EOF
-          kubectl wait --for=condition=complete --timeout=1800s job/test-repro-2 -n ${{ env.NAMESPACE }}
-          kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=100
+
+          # Wait with error handling
+          echo "Waiting for test-repro-2 job to complete..."
+          if kubectl wait --for=condition=complete --timeout=1800s job/test-repro-2 -n ${{ env.NAMESPACE }}; then
+            kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=100
+          else
+            echo "Job timed out or failed. Gathering diagnostics..."
+            kubectl get pods -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} -o wide
+            kubectl logs -l job-name=test-repro-2 -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            exit 1
+          fi
 
       - name: Get all job logs
         if: always()
