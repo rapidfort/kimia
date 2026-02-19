@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
-
+- Temporary build directories are now cleaned up on failed builds
 ### Removed
 
 ## [1.0.23] - 2026-02-18
