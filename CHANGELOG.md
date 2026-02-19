@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+### Added
+- Added `--export-cache` and `--import-cache` flags for BuildKit advanced caching.
+### Changed
+
+### Fixed
+
+### Removed
+
+## [1.0.23] - 2026-02-18
+
 ### Added
 - Added --digest-file export handling for BuildKit output.
 - Added --reproducible flag support for BuildKit provenance attestations.

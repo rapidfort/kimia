@@ -19,6 +19,8 @@ func parseArgs(args []string) *Config {
 		Attestation:        "", // Empty by default, can be "off", "min" or "max"
 		AttestationConfigs: []AttestationConfig{}, // Docker-style attestations
 		BuildKitOpts:       []string{},            // Direct BuildKit options
+		ExportCache:        []string{},            // BuildKit --export-cache options
+		ImportCache:        []string{},            // BuildKit --import-cache options
 		CosignKeyPath:      "/etc/cosign/cosign.key",
 		CosignPasswordEnv:  "COSIGN_PASSWORD",
 	}
@@ -109,6 +111,34 @@ func parseArgs(args []string) *Config {
 				i++
 				config.CacheDir = args[i]
 			}
+
+		case "--export-cache":
+			// BuildKit registry/inline/local cache export (repeatable)
+			// e.g. --export-cache type=registry,ref=registry.io/cache:latest,mode=max
+			var exportStr string
+			if value != "" {
+				exportStr = value
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				exportStr = args[i]
+			} else {
+				logger.Fatal("--export-cache requires a value (e.g., type=registry,ref=registry.io/cache:latest,mode=max)")
+			}
+			config.ExportCache = append(config.ExportCache, exportStr)
+
+		case "--import-cache":
+			// BuildKit registry/inline/local cache import (repeatable)
+			// e.g. --import-cache type=registry,ref=registry.io/cache:latest
+			var importStr string
+			if value != "" {
+				importStr = value
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				importStr = args[i]
+			} else {
+				logger.Fatal("--import-cache requires a value (e.g., type=registry,ref=registry.io/cache:latest)")
+			}
+			config.ImportCache = append(config.ImportCache, importStr)
 
 		case "--storage-driver":
 			if value != "" {
