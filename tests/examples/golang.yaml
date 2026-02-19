@@ -18,7 +18,7 @@ spec:
           - --context=https://github.com/docker-library/golang.git
           - --context-sub-path=1.24/trixie
           - --dockerfile=Dockerfile
-          - --destination=10.228.96.114:5000/my-golang
+          - --destination=golang
           - -v
         securityContext:
           allowPrivilegeEscalation: true

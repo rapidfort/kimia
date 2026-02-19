@@ -38,6 +38,9 @@ mkdir -p "$(dirname "$COSIGN_KEY_PATH")"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SUITES_DIR="${SCRIPT_DIR}/suites"
 
+# Import storage driver verification script
+source "${SCRIPT_DIR}/lib/verify-storage-driver.sh"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -839,6 +842,263 @@ run_k8s_test() {
 }
 
 # ============================================================================
+# Run Kubernetes Job Test with Storage Verification
+# ============================================================================
+
+run_k8s_test_with_storage_verification() {
+    local test_name="$1"
+    local driver="$2"
+    local args="$3"
+    local test_id="$4"
+    local expected_storage="$5"
+    local with_signing="${6:-false}"
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+
+    echo ""
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${CYAN}  Test #${TOTAL_TESTS}: ${test_name}${NC}"
+    echo -e "${CYAN}  Storage: ${driver} | Builder: ${BUILDER}${NC}"
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+
+    local start_time=$(date +%s)
+
+    # Generate unique job name with timestamp
+    local job_name="${BUILDER}-${driver}-${test_id}-$(date +%s)"
+
+    # Create log file FIRST (before yaml generation)
+    local log_file="${SUITES_DIR}/test-${job_name}.log"
+    mkdir -p "${SUITES_DIR}"
+    touch "${log_file}"
+
+    # Generate YAML
+    local yaml_file=$(generate_job_yaml "${job_name}" "${driver}" "${args}" "${with_signing}")
+
+    echo -e "${CYAN}  YAML file: ${yaml_file}${NC}"
+    echo -e "${CYAN}  Log file: ${log_file}${NC}"
+    echo -e "${CYAN}  Creating job: ${job_name}${NC}"
+
+    echo ""
+    # Apply the job
+    local apply_result
+    apply_result=$(kubectl apply -f "${yaml_file}" -n ${NAMESPACE} 2>&1)
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ FAIL${NC} (Failed to create job)"
+        echo "=== Job Creation Failed ===" | tee -a "${log_file}"
+        echo "${apply_result}" | tee -a "${log_file}"
+        echo "" | tee -a "${log_file}"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Job creation failed")
+        return
+    fi
+
+    # Log successful job creation
+    echo "=== Job Created Successfully ===" >> "${log_file}"
+    echo "${apply_result}" >> "${log_file}"
+    echo "" >> "${log_file}"
+    sleep 1
+
+    # Wait for pod to be created
+    echo -e "${CYAN}  Waiting for pod...${NC}"
+    local pod_name=""
+    for i in {1..30}; do
+        pod_name=$(kubectl get pods -n ${NAMESPACE} --selector=job-name=${job_name} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$pod_name" ]; then
+            break
+        fi
+        sleep 1
+    done
+
+    if [ -z "$pod_name" ]; then
+        echo -e "${RED}✗ FAIL${NC} (Pod not created)"
+        echo "=== Pod Creation Timeout ===" | tee -a "${log_file}"
+        kubectl describe job ${job_name} -n ${NAMESPACE} | tee -a "${log_file}"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Pod creation timeout")
+        kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+        return
+    fi
+
+    echo -e "${CYAN}  Pod: ${pod_name}${NC}"
+
+    # Wait for container to start or complete
+    echo -e "${CYAN}  Waiting for container to start${NC}"
+    local ready=false
+    for i in {1..60}; do
+        local phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
+        local container_ready=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].ready}' 2>/dev/null)
+
+        # Container is ready and running
+        if [ "$container_ready" = "true" ]; then
+            ready=true
+            echo ""  # New line after progress
+            break
+        fi
+
+        # Job completed successfully (fast jobs go directly to Succeeded)
+        if [ "$phase" = "Succeeded" ]; then
+            ready=true
+            echo ""  # New line after progress
+            echo -e "${CYAN}  Container completed${NC}"
+            break
+        fi
+
+        # Show progress dots
+        if [ $((i % 5)) -eq 0 ]; then
+            echo -n "."
+        fi
+
+        # Check for failure states
+        if [ "$phase" = "Failed" ]; then
+            echo ""
+            echo -e "${YELLOW}  Container failed to start. Checking reason...${NC}"
+            local reason=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
+            case "$reason" in
+                ImagePullBackOff|ErrImagePull)
+                    echo -e "${RED}  Error: Cannot pull image ${KIMIA_IMAGE}${NC}"
+                    ;;
+                *)
+                    echo -e "${YELLOW}  Reason: ${reason}${NC}"
+                    ;;
+            esac
+        fi
+
+        sleep 1
+    done
+    echo ""  # New line after progress
+
+    if [ "$ready" = false ]; then
+        echo -e "${RED}✗ FAIL${NC} (Container not ready after 60s)"
+        echo "=== Container Start Timeout ===" | tee -a "${log_file}"
+        echo -e "${RED}  Pod description:${NC}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} | tee -a "${log_file}" | sed 's/^/    /'
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Container start timeout")
+        kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+        echo ""
+        return
+    fi
+
+    # Verify storage driver while container is running
+    echo -e "${CYAN}  Verifying storage driver...${NC}"
+    local verify_result=0
+
+    pushd "${SCRIPT_DIR}/lib" > /dev/null
+        set +e  # Temporarily disable exit on error to capture result
+        set -o pipefail  # Ensure we capture the exit status of verify script, not tee
+        VERIFY_CONTAINER="$pod_name" \
+            VERIFY_NAMESPACE="${NAMESPACE}" \
+            ./verify-storage-driver.sh \
+            --mode k8s \
+            --builder "${BUILDER}" \
+            --expected "${expected_storage}" 2>&1 | tee -a "$log_file"
+        verify_result=$?
+        set +o pipefail
+        set -e  # Re-enable exit on error
+    popd > /dev/null
+
+    echo -e "${CYAN}  Streaming logs...${NC}"
+
+    # Check if pod already completed (for fast jobs)
+    local current_phase=$(kubectl get pod ${pod_name} -n ${NAMESPACE} -o jsonpath='{.status.phase}' 2>/dev/null)
+
+    if [ "$current_phase" = "Succeeded" ] || [ "$current_phase" = "Failed" ]; then
+        # Job already completed, just get the logs
+        kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | tee -a "${log_file}" | sed 's/^/    /'
+        local logs_pid=0
+    else
+        # Job still running, stream logs
+        kubectl logs -f ${pod_name} -n ${NAMESPACE} 2>&1 | tee -a "${log_file}" | sed 's/^/    /' &
+        local logs_pid=$!
+    fi
+
+    # Wait for job to complete or fail - poll job status
+    local job_status=""
+    local elapsed=0
+    while [ $elapsed -lt ${JOB_TIMEOUT} ]; do
+        # Check job status
+        job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)
+        if [ "$job_status" = "True" ]; then
+            # Job completed successfully
+            break
+        fi
+
+        job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}' 2>/dev/null)
+        if [ "$job_status" = "True" ]; then
+            # Job failed
+            break
+        fi
+
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+
+    # Stop log streaming (if it's still running)
+    if [ $logs_pid -ne 0 ]; then
+        kill $logs_pid 2>/dev/null || true
+        wait $logs_pid 2>/dev/null || true
+    fi
+
+    # Give logs a moment to flush
+    sleep 1
+
+    # Capture final logs to file
+    kubectl logs ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    # Check if job completed successfully AND verification passed
+    job_status=$(kubectl get job ${job_name} -n ${NAMESPACE} -o jsonpath='{.status.conditions[?(@.type=="Complete")].status}' 2>/dev/null)
+    if [ "$job_status" = "True" ] && [ $verify_result -eq 0 ]; then
+        echo -e "${GREEN}✓ PASS${NC} (${duration}s) - Storage: ${DETECTED_STORAGE_DRIVER}"
+        echo "=== Test PASSED ===" >> "${log_file}"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver}, storage=${DETECTED_STORAGE_DRIVER})")
+    elif [ "$job_status" != "True" ]; then
+        echo -e "${RED}✗ FAIL${NC} (${duration}s) - Build failed"
+        echo "=== Test FAILED - Build Failed ===" >> "${log_file}"
+
+        # Get job status and events
+        echo "" >> "${log_file}"
+        echo "=== Job Status ===" >> "${log_file}"
+        kubectl get job ${job_name} -n ${NAMESPACE} -o yaml >> "${log_file}" 2>&1 || true
+        echo "" >> "${log_file}"
+        echo "=== Pod Description ===" >> "${log_file}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
+
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Build failed")
+
+        echo -e "${RED}  Complete pod logs:${NC}"
+        kubectl logs ${pod_name} -n ${NAMESPACE} 2>&1 | sed 's/^/    /' || true
+        echo -e "${YELLOW}  Check log file: ${log_file}${NC}"
+    else
+        echo -e "${RED}✗ FAIL${NC} (${duration}s) - Storage verification failed"
+        echo "=== Test FAILED - Storage Verification Failed ===" >> "${log_file}"
+
+        # Get job status for reference
+        echo "" >> "${log_file}"
+        echo "=== Job Status ===" >> "${log_file}"
+        kubectl get job ${job_name} -n ${NAMESPACE} -o yaml >> "${log_file}" 2>&1 || true
+        echo "" >> "${log_file}"
+        echo "=== Pod Description ===" >> "${log_file}"
+        kubectl describe pod ${pod_name} -n ${NAMESPACE} >> "${log_file}" 2>&1 || true
+
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Storage verification failed")
+
+        echo -e "${YELLOW}  Check log file: ${log_file}${NC}"
+    fi
+
+    # Cleanup job (but keep YAML file for debugging)
+    echo -e "${CYAN}  Cleaning up job...${NC}"
+    kubectl delete job ${job_name} -n ${NAMESPACE} --force --grace-period=0 &> /dev/null || true
+
+    echo ""
+}
+
+# ============================================================================
 # Rootless Mode Tests (ONLY mode supported in Kubernetes)
 # ============================================================================
 
@@ -891,8 +1151,8 @@ run_rootless_tests() {
             "[\"check-environment\"]" \
             "envcheck"
 
-        # Test 3: Basic build from Git (no push)
-        run_k8s_test \
+        # Test 3: Basic build from Git (no push) - with storage verification
+        run_k8s_test_with_storage_verification \
             "Git Repository Build" \
             "$driver" \
             "[
@@ -904,7 +1164,8 @@ run_rootless_tests() {
                 \"--no-push\",
                 \"--verbosity=debug\"
             ]" \
-            "git-build"
+            "git-build" \
+            "${storage_flag}"
 
         # Test 4: Build with arguments from Git (no push)
         run_k8s_test \

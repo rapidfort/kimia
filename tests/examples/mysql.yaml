@@ -19,10 +19,11 @@ spec:
           - --context-sub-path=8.0/
           - --dockerfile=Dockerfile.debian
           - --destination=10.228.96.114:5000/smithy-test:mysql
+          - --storage-driver=overlay
           - -v
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
-            add: [SETUID, SETGID]
+            add: [SETUID, SETGID, MKNOD, DAC_OVERRIDE]
 
