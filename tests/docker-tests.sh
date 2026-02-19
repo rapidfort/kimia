@@ -35,6 +35,9 @@ COSIGN_PASSWORD=${COSIGN_PASSWORD:-"pib"}
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 SUITES_DIR="${SCRIPT_DIR}/suites"
 
+# Import storage driver verification script
+source "${SCRIPT_DIR}/lib/verify-storage-driver.sh"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -295,6 +298,116 @@ run_test() {
     fi
 }
 
+run_test_with_storage_verification() {
+    local test_name=$1
+    local mode=$2
+    local driver=$3
+    local expected_storage=$4
+    shift 4
+    local cmd="$@"
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_test_header "$test_name" "$mode" "$driver"
+
+    local log_file="${SUITES_DIR}/test-${test_name}-${mode}-${driver}.log"
+    local start_time=$(date +%s)
+
+    # Create unique container name
+    local container_name="kimia-test-$$-$RANDOM"
+
+    # Replace --rm with --name and add -d for detached mode
+    local build_cmd="${cmd//--rm/--name $container_name -d}"
+
+    echo "Log: $log_file"
+    echo "Command: $build_cmd"
+    echo "Container: $container_name"
+    echo ""
+
+    # Start the build in detached mode
+    local container_id=""
+    if container_id=$(eval "$build_cmd" 2>&1); then
+        # Container started successfully, stream logs to file
+        docker logs -f "$container_name" > "$log_file" 2>&1 &
+        local logs_pid=$!
+
+        # Wait a moment for container to initialize
+        sleep 3
+
+        # Check if container is still running (not failed immediately)
+        if docker ps --filter "name=$container_name" --format "{{.Names}}" | grep -q "^${container_name}$"; then
+            # Container is running, verify storage driver
+            echo "Verifying storage driver..."
+            local verify_result=0
+
+            pushd "${SCRIPT_DIR}/lib" > /dev/null
+                set +e  # Temporarily disable exit on error to capture result
+                set -o pipefail  # Ensure we capture the exit status of verify script, not tee
+                VERIFY_CONTAINER="$container_name" \
+                    ./verify-storage-driver.sh \
+                    --mode docker \
+                    --builder "${BUILDER}" \
+                    --expected "${expected_storage}" 2>&1 | tee -a "$log_file"
+                verify_result=$?
+                set +o pipefail
+                set -e  # Re-enable exit on error
+            popd > /dev/null
+
+            # Now wait for build to complete
+            local wait_status=0
+            docker wait "$container_name" >> "$log_file" 2>&1 || wait_status=$?
+
+            # Stop streaming logs
+            kill $logs_pid 2>/dev/null || true
+            wait $logs_pid 2>/dev/null || true
+
+            # Clean up container
+            docker rm "$container_name" > /dev/null 2>&1
+
+            if [ $wait_status -eq 0 ] && [ $verify_result -eq 0 ]; then
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${GREEN}✓ PASSED${NC} (${duration}s) - Storage: ${DETECTED_STORAGE_DRIVER}"
+                PASSED_TESTS=$((PASSED_TESTS + 1))
+                TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, ${mode}, ${driver}, storage=${DETECTED_STORAGE_DRIVER}) - ${duration}s")
+            elif [ $wait_status -ne 0 ]; then
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${RED}✗ FAILED${NC} (${duration}s) - Build failed"
+                echo "Check log: $log_file"
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver}) - Build failed - ${duration}s")
+            else
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${RED}✗ FAILED${NC} (${duration}s) - Storage verification failed"
+                echo "Check log: $log_file"
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver}) - Storage verification failed - ${duration}s")
+            fi
+        else
+            # Container failed immediately
+            kill $logs_pid 2>/dev/null || true
+            wait $logs_pid 2>/dev/null || true
+            docker rm "$container_name" > /dev/null 2>&1
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
+            echo -e "${RED}✗ FAILED${NC} (${duration}s) - Container failed to start"
+            echo "Check log: $log_file"
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+            TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver}) - Failed to start - ${duration}s")
+        fi
+    else
+        # Failed to create container
+        local end_time=$(date +%s)
+        local duration=$((end_time - start_time))
+        echo -e "${RED}✗ FAILED${NC} (${duration}s) - Failed to create container"
+        echo "Check log: $log_file"
+        echo "$container_id" > "$log_file"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, ${mode}, ${driver}) - Failed to create - ${duration}s")
+    fi
+}
+
 print_test_summary() {
     echo ""
     print_section "TEST SUMMARY"
@@ -318,6 +431,7 @@ print_test_summary() {
     done
     echo ""
 }
+
 
 # ============================================================================
 # Test Functions by Suite
@@ -414,12 +528,12 @@ run_rootless_tests() {
             "$driver" \
             $BASE_CMD check-environment
 
-        # Test 3: Build from git - nginx
-        echo $BASE_CMD
-        run_test \
+        # Test 3: Build from git - nginx (with storage verification)
+        run_test_with_storage_verification \
             "git-nginx" \
             "rootless" \
             "$driver" \
+            "${storage_flag}" \
             $BASE_CMD \
             --context=https://github.com/nginxinc/docker-nginx.git \
             --git-branch=master \
@@ -430,7 +544,7 @@ run_rootless_tests() {
             --verbosity=debug
 
         #Test 4: Build from git with context sub-path - alpine
-        echo $BASE_CMD
+        echo "$BASE_CMD"
 
         run_test \
             "https-alpine-subpath" \
@@ -446,7 +560,7 @@ run_rootless_tests() {
             --verbosity=debug
 
         #Test 5: Build from git with context sub-path
-        echo $BASE_CMD
+        echo "$BASE_CMD"
         run_test \
             "git-alpine-subpath" \
             "rootless" \

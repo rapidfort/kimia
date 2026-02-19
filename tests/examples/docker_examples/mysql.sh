@@ -7,5 +7,6 @@ docker run --rm --cap-drop ALL --cap-add SETUID --cap-add SETGID --security-opt 
   --context-sub-path=8.0/ \
   --dockerfile=Dockerfile.debian \
   --destination=${DESTINATION_REPO}/mysql:${IMAGE_TAG} \
+  --storage-driver=overlay \
   --no-push \
   -v

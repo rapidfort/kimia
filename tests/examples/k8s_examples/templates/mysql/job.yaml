@@ -24,6 +24,7 @@ spec:
           - --context-sub-path=8.0
           - --dockerfile=Dockerfile.debian
           - --destination=mysql
+          - --storage-driver=overlay
           - -v
         resources:
           limits:
@@ -33,5 +34,5 @@ spec:
           allowPrivilegeEscalation: true
           capabilities:
             drop: [ALL]
-            add: [SETUID, SETGID]
+            add: [SETUID, SETGID, MKNOD, DAC_OVERRIDE]
 
