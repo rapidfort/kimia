@@ -167,7 +167,7 @@ jobs:
           category: 'trivy-filesystem'
 
       - name: Run Trivy config scan (JSON)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           scan-type: 'config'
           scan-ref: '.'
@@ -177,7 +177,7 @@ jobs:
           exit-code: '0'
 
       - name: Run Trivy config scan (Table for display)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           scan-type: 'config'
           scan-ref: '.'

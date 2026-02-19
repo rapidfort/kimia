@@ -68,7 +68,7 @@ jobs:
         run: docker pull ${{ matrix.image }}
 
       - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           image-ref: ${{ matrix.image }}
           format: 'sarif'
@@ -77,7 +77,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Trivy JSON scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
         with:
           image-ref: ${{ matrix.image }}
           format: 'json'
