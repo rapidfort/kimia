@@ -119,6 +119,19 @@ func main() {
 	}
 	logger.Info("Detected builder: %s", strings.ToUpper(builder))
 
+	// Run the build pipeline in a separate function so that deferred cleanup
+	// use error returns instead and only call Fatal at the very end.
+	if err := run(config, builder); err != nil {
+		logger.Fatal("%v", err)
+	}
+
+	logger.Info("Build completed successfully!")
+}
+
+// run executes the build pipeline. By returning errors instead of calling
+// logger.Fatal directly, we ensure that deferred cleanup (ctx.Cleanup)
+// always runs — even when the build fails.
+func run(config *Config, builder string) error {
 	// Prepare build context
 	gitConfig := build.GitConfig{
 		Context:   config.Context,
@@ -130,13 +143,12 @@ func main() {
 
 	ctx, err := build.Prepare(gitConfig, builder)
 	if err != nil {
-		logger.Fatal("Failed to prepare build context: %v", err)
+		return fmt.Errorf("failed to prepare build context: %v", err)
 	}
 	defer ctx.Cleanup()
-	
+
 	// Store SubContext in context for BuildKit Git URL formatting
 	ctx.SubContext = config.SubContext
-
 
 	// Apply context-sub-path for local contexts (not Git URLs)
 	// For Git URLs with BuildKit, SubContext is handled in FormatGitURLForBuildKit
@@ -146,7 +158,7 @@ func main() {
 
 		// Clean the sub-context to resolve . and .. components
 		cleanSubContext := filepath.Clean(config.SubContext)
-		
+
 		// Join the paths
 		subPath := filepath.Join(cleanContextPath, cleanSubContext)
 
@@ -154,18 +166,18 @@ func main() {
 		// by checking if the relative path starts with ".."
 		relPath, err := filepath.Rel(cleanContextPath, subPath)
 		if err != nil {
-			logger.Fatal("Invalid context sub-path: %s", config.SubContext)
+			return fmt.Errorf("invalid context sub-path: %s", config.SubContext)
 		}
 
 		// If the relative path starts with "..", it's trying to escape
 		if strings.HasPrefix(relPath, "..") {
-			logger.Fatal("Context sub-path attempts to escape build context: %s", config.SubContext)
+			return fmt.Errorf("context sub-path attempts to escape build context: %s", config.SubContext)
 		}
 
 		// Verify the subdirectory exists
 		// #nosec G703 -- subPath is validated to be within cleanContextPath using filepath.Rel() check above
 		if _, err := os.Stat(subPath); err != nil {
-			logger.Fatal("Context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
+			return fmt.Errorf("context sub-path does not exist: %s (full path: %s)", config.SubContext, subPath)
 		}
 
 		logger.Info("Using context sub-path: %s", config.SubContext)
@@ -180,7 +192,7 @@ func main() {
 
 	err = auth.Setup(authSetup)
 	if err != nil {
-		logger.Fatal("Failed to setup authentication: %v", err)
+		return fmt.Errorf("failed to setup authentication: %v", err)
 	}
 
 	// Execute build based on detected builder
@@ -218,7 +230,7 @@ func main() {
 
 	// Execute build
 	if err := build.Execute(buildConfig, ctx); err != nil {
-		logger.Fatal("Build failed: %v", err)
+		return fmt.Errorf("build failed: %v", err)
 	}
 
 	// Push images if not disabled
@@ -234,7 +246,7 @@ func main() {
 
 		digestMap, err := build.Push(pushConfig)
 		if err != nil {
-			logger.Fatal("Push failed: %v", err)
+			return fmt.Errorf("push failed: %v", err)
 		}
 
 		// Save digest information after successful push
@@ -243,7 +255,7 @@ func main() {
 		}
 	}
 
-	logger.Info("Build completed successfully!")
+	return nil
 }
 
 // convertAttestationConfigs converts main package AttestationConfig to build package AttestationConfig
