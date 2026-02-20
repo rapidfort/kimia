@@ -336,8 +336,6 @@ func mapStorageDriverToSnapshotter(driver string) string {
 		return "native"
 	case "fuse-overlayfs":
 		return "fuse-overlayfs"
-	case "stargz":
-		return "stargz"
 	default:
 		// Pass through as-is for any other values
 		logger.Debug("Unknown storage driver '%s', passing through to BuildKit", driver)

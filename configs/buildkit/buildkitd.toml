@@ -20,6 +20,9 @@ binary = "crun"
 # Required for rootless mode to work properly
 noProcessSandbox = true
 
+# Snapshotter (default=native)
+snapshotter = "native"
+
 # Notes:
 # - This configuration is optimized for rootless operation
 # - crun provides better performance than runc
@@ -27,10 +30,6 @@ noProcessSandbox = true
 # - BuildKit will use this config automatically when running as non-root user
 
 # Additional options (commented out, uncomment to use):
-
-# [worker.oci.snapshotter]
-# Configure snapshotter (storage driver)
-# name = "overlayfs"  # Options: overlayfs, native
 
 # [worker.containerd]
 # Enable containerd worker (alternative to OCI worker)
