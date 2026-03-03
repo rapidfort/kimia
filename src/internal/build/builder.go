@@ -71,6 +71,9 @@ type Config struct {
 	Sign              bool   // Enable signing with cosign
 	CosignKeyPath     string // Path to cosign private key
 	CosignPasswordEnv string // Environment variable for cosign password
+
+	// Direct Buildah options
+	BuildahOpts []string
 }
 
 // AttestationConfig represents a single --attest flag
@@ -262,6 +265,18 @@ func executeBuildah(config Config, ctx *Context) error {
 		args = append(args, "-t", dest)
 	}
 
+	// ========================================
+	// Pass-through args — must be added before ctx.Path
+	// ========================================
+	for _, opt := range config.BuildahOpts {
+		parts := strings.SplitN(opt, " ", 2)
+		if len(parts) == 2 {
+			args = append(args, parts[0], parts[1])
+		} else {
+			args = append(args, parts[0])
+		}
+	}
+
 	// Add context path
 	args = append(args, ctx.Path)
 
@@ -269,6 +284,9 @@ func executeBuildah(config Config, ctx *Context) error {
 	logger.Debug("Buildah command: buildah %s", strings.Join(args, " "))
 
 	// Execute buildah
+	// #nosec G204 -- all args validated by validateBuildahInputs:
+	//   - BuildahOpts validated by ValidateBuildctlArg and conflict-checked
+	//     against Kimia-managed flags before being appended
 	cmd := exec.Command("buildah", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -459,6 +477,47 @@ func validateBuildahInputs(config Config, ctx *Context) error {
 		}
 	}
 
+	// Flags already managed explicitly by Kimia.
+	// IMPORTANT: If new flags are added to executeBuildah, add them here too.
+	conflictingFlags := map[string]string{
+		"-f":                  "use -f/--dockerfile instead",
+		"--file":              "use -f/--dockerfile instead",
+		"--build-arg":         "use --build-arg instead",
+		"--label":             "use --label instead",
+		"--target":            "use -t/--target instead",
+		"--platform":          "use --custom-platform instead",
+		"--timestamp":         "use --timestamp or --reproducible instead",
+		"--source-date-epoch": "use --timestamp or --reproducible instead",
+		// Don't prevent users from overriding --tls-verify
+		//"--tls-verify":        "use --insecure or --insecure-registry instead",
+		"--retry":             "use --image-download-retry instead",
+		"-t":                  "use -d/--destination instead",
+		"--tag":               "use -d/--destination instead",
+		"--no-cache":          "use --cache=false instead",
+		"--layers":            "use --cache instead",
+	}
+
+	for i, opt := range config.BuildahOpts {
+		if err := validation.ValidateBuildctlArg(opt); err != nil {
+			return fmt.Errorf("invalid --buildah-opt value %d (%q): %v", i, opt, err)
+		}
+
+		parts := strings.Fields(opt)
+		if len(parts) == 0 {
+			return fmt.Errorf("--buildah-opt value %d is empty", i)
+		}
+		flagName := parts[0]
+		if idx := strings.Index(flagName, "="); idx != -1 {
+			flagName = flagName[:idx]
+		}
+
+		if suggestion, conflicts := conflictingFlags[flagName]; conflicts {
+			return fmt.Errorf(
+				"--buildah-opt %q is managed by Kimia: %s",
+				flagName, suggestion,
+			)
+		}
+	}
 	return nil
 }
 
@@ -1691,7 +1750,7 @@ func sanitizeCommandArgs(args []string) []string {
 		"SECRET",
 		"CREDENTIALS",
 	}
-	
+
 	sanitized := make([]string, len(args))
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
@@ -1724,8 +1783,17 @@ func sanitizeCommandArgs(args []string) []string {
 				sanitized[i] = arg
 			}
 		} else {
-			// For any other arg that might be a URL
-			sanitized[i] = logger.SanitizeGitURL(arg)
+			// Only sanitize args that look like URLs -- calling SanitizeGitURL
+			// on non-URL values (e.g. --buildah-opt scanner commands) causes
+			// spaces and braces to be URL-encoded in log output.
+			if strings.HasPrefix(arg, "http://") ||
+				strings.HasPrefix(arg, "https://") ||
+				strings.HasPrefix(arg, "git://") ||
+				strings.HasPrefix(arg, "git@") {
+				sanitized[i] = logger.SanitizeGitURL(arg)
+			} else {
+				sanitized[i] = arg
+			}
 		}
 	}
 	return sanitized

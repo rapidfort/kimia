@@ -226,6 +226,7 @@ func run(config *Config, builder string) error {
 		Sign:                       config.Sign,
 		CosignKeyPath:              config.CosignKeyPath,
 		CosignPasswordEnv:          config.CosignPasswordEnv,
+		BuildahOpts:                config.BuildahOpts,
 	}
 
 	// Execute build
