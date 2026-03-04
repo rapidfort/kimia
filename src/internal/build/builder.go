@@ -288,8 +288,9 @@ func executeBuildah(config Config, ctx *Context) error {
 	//   - BuildahOpts validated by ValidateBuildctlArg and conflict-checked
 	//     against Kimia-managed flags before being appended
 	cmd := exec.Command("buildah", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &stderrBuf)
 	cmd.Env = os.Environ()
 
 	// Always use chroot isolation for both root and rootless
@@ -340,6 +341,28 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	if config.NoPush {
 		logger.Info("No push requested, skipping image push to registries")
+		
+		// If digest files are requested, we need to extract the local Image ID
+		// since we aren't pushing to a registry to get a manifest digest.
+		if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
+			if len(config.Destination) > 0 {
+				stdoutStr := stdoutBuf.String()
+				lines := strings.Split(strings.TrimSpace(stdoutStr), "\n")
+				if len(lines) > 0 {
+					// Buildah bud outputs the image ID on the last line
+					imageID := lines[len(lines)-1]
+					if imageID != "" {
+						digestMap := make(map[string]string)
+						for _, dest := range config.Destination {
+							digestMap[dest] = imageID
+						}
+						if err := SaveDigestInfo(config, digestMap); err != nil {
+							logger.Warning("Failed to save digest information: %v", err)
+						}
+					}
+				}
+			}
+		}
 	}
 
 	return nil
@@ -420,6 +443,12 @@ func validateCommonBuildInputs(config Config, ctx *Context) error {
 	}
 	if strings.Contains(dockerfilePath, "\x00") {
 		return fmt.Errorf("dockerfile path contains null byte")
+	}
+
+	// Warning for no-push and digest options
+	if config.NoPush && (config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "") {
+		logger.Warning("--no-push is set along with digest file options.")
+		logger.Warning("A digest file might not contain a registry manifest digest, but rather a local image ID.")
 	}
 
 	return nil
@@ -1147,7 +1176,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	digestMap := make(map[string]string) // Map tag -> digest
 	
-	if !config.NoPush && len(config.Destination) > 0 {
+	if len(config.Destination) > 0 {
 		stderrOutput := stderrBuf.String()
 		stdoutOutput := stdoutBuf.String()
 

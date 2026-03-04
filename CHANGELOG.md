@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Temporary build directories are now cleaned up on failed builds
+- fixed bug where digest file was not being created when --no-push is set
 
 ### Removed
 
