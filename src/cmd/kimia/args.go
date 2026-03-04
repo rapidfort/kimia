@@ -389,7 +389,7 @@ func parseArgs(args []string) *Config {
 			var optStr string
 			if value != "" {
 				optStr = value
-			} else if i+1 < len(args) {
+			} else if i+1 < len(args) {  // no HasPrefix guard — value may start with -
 				i++
 				optStr = args[i]
 			} else {
