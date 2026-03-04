@@ -507,6 +507,19 @@ kimia --context=. \
   --buildkit-opt=platform=linux/amd64,linux/arm64
 ```
 
+### Buildah Options
+
+| Argument | Description | Example |
+|----------|-------------|---------|
+| `--buildah-opt` | Pass options directly to Buildah | `--buildah-opt "--squash"` |
+
+
+```bash
+# Squash all layers into one
+kimia --context=. \
+  --destination=registry.io/myapp:latest \
+  --buildah-opt "--squash"
+
 ### Storage Driver
 
 Kimia supports two storage drivers:
