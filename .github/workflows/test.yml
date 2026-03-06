@@ -6,6 +6,17 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  # required for all workflows
+  security-events: write
+
+  # required to fetch internal or private CodeQL packs
+  packages: read
+
+  # only required for workflows in private repositories
+  actions: read
+  contents: read
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
