@@ -578,6 +578,126 @@ run_rootless_tests() {
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
+
+        # Test 6: Build with digest-file and no-push
+        # This test verifies the behavior when --digest-file and --no-push are used together
+        # Expected: Digest file must be created even with --no-push
+        # Custom implementation to verify digest file before marking test as passed/failed
+        local test_name="digest-file-no-push"
+        local digest_file="/tmp/digest-${BUILDER}-${driver}-${RANDOM}.txt"
+        local digest_dir=$(dirname "${digest_file}")
+        mkdir -p "${digest_dir}"
+
+        # Add volume mount for digest file directory
+        local BASE_CMD_WITH_DIGEST="${BASE_CMD%${KIMIA_IMAGE}} -v ${digest_dir}:${digest_dir} ${KIMIA_IMAGE}"
+
+        TOTAL_TESTS=$((TOTAL_TESTS + 1))
+        print_test_header "$test_name" "rootless" "$driver"
+
+        local log_file="${SUITES_DIR}/test-${test_name}-rootless-${driver}.log"
+        local start_time=$(date +%s)
+
+        local cmd="$BASE_CMD_WITH_DIGEST --context=https://github.com/alpinelinux/docker-alpine.git --dockerfile=Dockerfile --destination=test-${BUILDER}-rootless-digest-nopush-${driver}:latest --digest-file=${digest_file} --storage-driver=${storage_flag} --no-push --verbosity=debug"
+
+        echo "Log: $log_file"
+        echo "Command: $cmd"
+        echo "Digest file path: $digest_file"
+        echo ""
+
+        # Run the build
+        local build_result=0
+        if eval "$cmd" > "$log_file" 2>&1; then
+            # Build succeeded, now check if digest file was created
+            if [ -f "${digest_file}" ]; then
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${GREEN}✓ PASSED${NC} (${duration}s) - Digest file created successfully"
+                echo "Digest content: $(cat ${digest_file})"
+                rm -f "${digest_file}"
+                PASSED_TESTS=$((PASSED_TESTS + 1))
+                TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+            else
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${RED}✗ FAILED${NC} (${duration}s) - Digest file not created"
+                echo -e "${RED}Expected digest file at: ${digest_file}${NC}"
+                echo "Build completed but digest file was not created" >> "$log_file"
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Digest file not created - ${duration}s")
+            fi
+        else
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
+            echo -e "${RED}✗ FAILED${NC} (${duration}s) - Build failed"
+            echo "Check log: $log_file"
+            FAILED_TESTS=$((FAILED_TESTS + 1))
+            TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Build failed - ${duration}s")
+        fi
+
+        # Test 7: Build with --buildah-opt (Buildah only)
+        # This test verifies that --buildah-opt passes options correctly to buildah
+        # and that --squash actually reduces the layer count
+        if [ "$BUILDER" = "buildah" ]; then
+            echo "$BASE_CMD"
+            local test_name="buildah-opt-squash"
+            local test_image="${REGISTRY}/${BUILDER}-rootless-buildah-opt-${driver}:latest"
+
+            TOTAL_TESTS=$((TOTAL_TESTS + 1))
+            print_test_header "$test_name" "rootless" "$driver"
+
+            local log_file="${SUITES_DIR}/test-${test_name}-rootless-${driver}.log"
+            local start_time=$(date +%s)
+            local cmd="$BASE_CMD --context=https://github.com/rapidfort/kimia.git --git-branch=main --dockerfile=tests/examples/Dockerfile --destination=${test_image} --buildah-opt \"--squash\" --storage-driver=${storage_flag} --insecure --verbosity=debug"
+
+            echo "Log: $log_file"
+            echo "Command: $cmd"
+            echo ""
+
+            if eval "$cmd" > "$log_file" 2>&1; then
+                # Build succeeded, now verify the image has squashed layers
+                echo -e "${CYAN}Build successful, verifying layer squashing...${NC}"
+
+                # Pull the image to inspect it locally
+                docker pull ${test_image} >> "$log_file" 2>&1
+
+                # Count layers using docker inspect
+                local layer_count=$(docker inspect ${test_image} --format='{{len .RootFS.Layers}}' 2>/dev/null || echo "0")
+
+                echo "Image: ${test_image}"
+                echo "Layer count: ${layer_count}"
+
+                # Squashed images should have 1-3 layers (base + squashed content)
+                # Non-squashed Dockerfile typically has 5+ layers
+                if [ "$layer_count" -le 3 ] && [ "$layer_count" -gt 0 ]; then
+                    local end_time=$(date +%s)
+                    local duration=$((end_time - start_time))
+                    echo -e "${GREEN}✓ PASSED${NC} (${duration}s) - Image squashed successfully (${layer_count} layers)"
+                    echo "=== Layer Verification Successful ===" >> "$log_file"
+                    echo "Layer count: ${layer_count}" >> "$log_file"
+                    PASSED_TESTS=$((PASSED_TESTS + 1))
+                    TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver}) - ${layer_count} layers - ${duration}s")
+                else
+                    local end_time=$(date +%s)
+                    local duration=$((end_time - start_time))
+                    echo -e "${RED}✗ FAILED${NC} (${duration}s) - Image not squashed (${layer_count} layers, expected ≤3)"
+                    echo "=== Layer Verification Failed ===" >> "$log_file"
+                    echo "Layer count: ${layer_count} (expected ≤3)" >> "$log_file"
+                    docker inspect ${test_image} >> "$log_file" 2>&1
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
+                    TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - Not squashed (${layer_count} layers) - ${duration}s")
+                fi
+
+                # Cleanup
+                docker rmi ${test_image} 2>/dev/null || true
+            else
+                local end_time=$(date +%s)
+                local duration=$((end_time - start_time))
+                echo -e "${RED}✗ FAILED${NC} (${duration}s)"
+                echo "Check log: $log_file"
+                FAILED_TESTS=$((FAILED_TESTS + 1))
+                TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+            fi
+        fi
     fi
 
     # ========================================================================
