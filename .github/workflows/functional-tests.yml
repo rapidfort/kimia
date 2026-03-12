@@ -763,12 +763,12 @@ jobs:
       #     kubectl wait --for=condition=complete --timeout=1800s job/test-envcheck -n ${{ env.NAMESPACE }}
       #     kubectl logs -l job-name=test-envcheck -n ${{ env.NAMESPACE }}
 
-      - name: Test 3 - Git build (no push)
+      - name: Test 3 - Git build (no push) with storage verification
         env:
           NAMESPACE: ${{ env.NAMESPACE }}
           KIMIA_IMAGE: ${{ needs.build-images.outputs.kimia_bud_image }}
         run: |
-          echo "=== K8s Test 3: Git Build (no push) ==="
+          echo "=== K8s Test 3: Git Build (no push) with storage verification ==="
           VOLUMES=""; VOLUME_MOUNTS=""
           if [ "${{ matrix.storage }}" = "overlay" ]; then
             VOLUMES="volumes:
@@ -830,13 +830,124 @@ jobs:
                 ${VOLUMES}
           EOF
 
-          # Wait with error handling
+          # Wait for pod to be created and running
+          echo "Waiting for pod to start..."
+          sleep 5
+
+          # Get pod name
+          POD_NAME=$(kubectl get pods -l job-name=test-git-build -n ${{ env.NAMESPACE }} -o jsonpath='{.items[0].metadata.name}')
+          echo "Pod name: $POD_NAME"
+
+          # Wait for pod to be in running state
+          kubectl wait --for=condition=ready --timeout=60s pod/$POD_NAME -n ${{ env.NAMESPACE }} 2>/dev/null || echo "Pod may not be ready yet, continuing..."
+
+          # Stream logs in background
+          kubectl logs -f $POD_NAME -n ${{ env.NAMESPACE }} &
+          LOGS_PID=$!
+
+          # Wait for buildah to initialize
+          echo ""
+          echo "Waiting for buildah to initialize..."
+          sleep 10
+
+          # Verify storage driver while build is running
+          echo ""
+          echo "=== Storage Driver Verification ==="
+          STORAGE_BASE="/home/kimia/.local/share/containers/storage"
+          EXPECTED_DRIVER="${{ matrix.storage }}"
+          VERIFY_PASSED=false
+
+          # Check if pod is still running
+          POD_STATUS=$(kubectl get pod $POD_NAME -n ${{ env.NAMESPACE }} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+          echo "Pod status: $POD_STATUS"
+
+          if [ "$POD_STATUS" = "Running" ]; then
+            echo "Pod is running, checking storage driver..."
+
+            # List storage directory contents
+            echo "Storage directory contents:"
+            kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- ls -la "$STORAGE_BASE/" 2>/dev/null || echo "  (storage directory not yet created)"
+
+            # Check for expected storage driver directories
+            if [ "$EXPECTED_DRIVER" = "overlay" ]; then
+              if kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*overlay*' 2>/dev/null | grep -q overlay"; then
+                echo "✓ SUCCESS: Found overlay storage directories"
+                VERIFY_PASSED=true
+              else
+                echo "✗ WARNING: Overlay directories not found (build may still be initializing)"
+              fi
+            elif [ "$EXPECTED_DRIVER" = "vfs" ]; then
+              if kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*vfs*' 2>/dev/null | grep -q vfs"; then
+                echo "✓ SUCCESS: Found VFS storage directories"
+                VERIFY_PASSED=true
+              else
+                echo "✗ WARNING: VFS directories not found (build may still be initializing)"
+              fi
+            fi
+
+            # If not found immediately, wait and retry
+            if [ "$VERIFY_PASSED" = "false" ]; then
+              echo "Retrying storage verification after additional wait..."
+              sleep 10
+
+              POD_STATUS=$(kubectl get pod $POD_NAME -n ${{ env.NAMESPACE }} -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+              if [ "$POD_STATUS" = "Running" ]; then
+                echo "Storage directory contents (retry):"
+                kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- ls -la "$STORAGE_BASE/" 2>/dev/null || echo "  (storage directory still not created)"
+
+                if [ "$EXPECTED_DRIVER" = "overlay" ]; then
+                  if kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*overlay*' 2>/dev/null | grep -q overlay"; then
+                    echo "✓ SUCCESS: Found overlay storage directories (on retry)"
+                    VERIFY_PASSED=true
+                  fi
+                elif [ "$EXPECTED_DRIVER" = "vfs" ]; then
+                  if kubectl exec $POD_NAME -n ${{ env.NAMESPACE }} -- sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*vfs*' 2>/dev/null | grep -q vfs"; then
+                    echo "✓ SUCCESS: Found VFS storage directories (on retry)"
+                    VERIFY_PASSED=true
+                  fi
+                fi
+              fi
+            fi
+          else
+            echo "Pod already finished or not running (status: $POD_STATUS)"
+          fi
+
+          echo ""
+          echo "=== Waiting for build to complete ==="
+
+          # Stop log streaming before waiting
+          kill $LOGS_PID 2>/dev/null || true
+
+          # Wait for job completion with error handling
           if kubectl wait --for=condition=complete --timeout=1800s job/test-git-build -n ${{ env.NAMESPACE }}; then
-            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=100
+            echo ""
+            echo "=== Final build status ==="
+            echo "Job completed successfully"
+            kubectl logs $POD_NAME -n ${{ env.NAMESPACE }} --tail=100
+
+            # Report verification result
+            echo ""
+            echo "=== Test Results ==="
+            echo "Build status: SUCCESS"
+            echo "Storage verification: $VERIFY_PASSED"
+            echo "Expected storage driver: $EXPECTED_DRIVER"
+
+            if [ "$VERIFY_PASSED" != "true" ]; then
+              echo "⚠ WARNING: Storage driver verification did not confirm expected driver ($EXPECTED_DRIVER)"
+              echo "  This may be expected if the build completed very quickly"
+            fi
+
+            echo "✓ Test 3 completed successfully"
           else
             echo "Job timed out or failed. Gathering diagnostics..."
             kubectl get pods -l job-name=test-git-build -n ${{ env.NAMESPACE }} -o wide
-            kubectl logs -l job-name=test-git-build -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+            kubectl logs $POD_NAME -n ${{ env.NAMESPACE }} --tail=500 --all-containers=true || echo "Could not retrieve logs"
+
+            echo ""
+            echo "=== Test Results ==="
+            echo "Build status: FAILED"
+            echo "Storage verification: $VERIFY_PASSED"
+            echo "Expected storage driver: $EXPECTED_DRIVER"
             exit 1
           fi
 
