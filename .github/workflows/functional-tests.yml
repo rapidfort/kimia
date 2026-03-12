@@ -242,15 +242,21 @@ jobs:
             check-environment --storage-driver=${{ matrix.storage }} || \
             echo "::warning::Environment check failed with exit code $? - this may be a GitHub Actions limitation"
 
-      - name: Test 3 - Git build (nginx)
+      - name: Test 3 - Git build (nginx) with storage verification
         run: |
-          echo "=== Test 3: Git Build - nginx ==="
+          echo "=== Test 3: Git Build - nginx (with storage verification) ==="
           VOLUME_OPTS=""
           if [ "${{ matrix.storage }}" = "overlay" ]; then
             VOLUME_OPTS="-v /tmp/kimia-buildah-overlay:/home/kimia/.local"
           fi
 
-          docker run --rm \
+          # Create unique container name
+          CONTAINER_NAME="kimia-test-nginx-$$-$RANDOM"
+          echo "Container name: $CONTAINER_NAME"
+
+          # Start build in detached mode
+          docker run -d \
+            --name "$CONTAINER_NAME" \
             --user 1000:1000 \
             --cap-add SETUID \
             --cap-add SETGID \
@@ -268,6 +274,108 @@ jobs:
             --insecure \
             --no-push \
             --verbosity=debug
+
+          # Stream logs in background
+          docker logs -f "$CONTAINER_NAME" &
+          LOGS_PID=$!
+
+          # Wait for container to initialize and buildah to start
+          echo "Waiting for buildah to initialize..."
+          sleep 5
+
+          # Verify storage driver while build is running
+          echo ""
+          echo "=== Storage Driver Verification ==="
+          STORAGE_BASE="/home/kimia/.local/share/containers/storage"
+          EXPECTED_DRIVER="${{ matrix.storage }}"
+          VERIFY_PASSED=false
+
+          # Check if container is still running
+          if docker ps --filter "name=$CONTAINER_NAME" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+            echo "Container is running, checking storage driver..."
+
+            # List storage directory contents
+            echo "Storage directory contents:"
+            docker exec "$CONTAINER_NAME" ls -la "$STORAGE_BASE/" 2>/dev/null || echo "  (storage directory not yet created)"
+
+            # Check for expected storage driver directories
+            if [ "$EXPECTED_DRIVER" = "overlay" ]; then
+              if docker exec "$CONTAINER_NAME" sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*overlay*' 2>/dev/null | grep -q overlay"; then
+                echo "✓ SUCCESS: Found overlay storage directories"
+                VERIFY_PASSED=true
+              else
+                echo "✗ WARNING: Overlay directories not found (build may still be initializing)"
+              fi
+            elif [ "$EXPECTED_DRIVER" = "vfs" ]; then
+              if docker exec "$CONTAINER_NAME" sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*vfs*' 2>/dev/null | grep -q vfs"; then
+                echo "✓ SUCCESS: Found VFS storage directories"
+                VERIFY_PASSED=true
+              else
+                echo "✗ WARNING: VFS directories not found (build may still be initializing)"
+              fi
+            fi
+
+            # If not found immediately, wait and retry
+            if [ "$VERIFY_PASSED" = "false" ]; then
+              echo "Retrying storage verification after additional wait..."
+              sleep 10
+
+              if docker ps --filter "name=$CONTAINER_NAME" --format "{{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
+                echo "Storage directory contents (retry):"
+                docker exec "$CONTAINER_NAME" ls -la "$STORAGE_BASE/" 2>/dev/null || echo "  (storage directory still not created)"
+
+                if [ "$EXPECTED_DRIVER" = "overlay" ]; then
+                  if docker exec "$CONTAINER_NAME" sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*overlay*' 2>/dev/null | grep -q overlay"; then
+                    echo "✓ SUCCESS: Found overlay storage directories (on retry)"
+                    VERIFY_PASSED=true
+                  fi
+                elif [ "$EXPECTED_DRIVER" = "vfs" ]; then
+                  if docker exec "$CONTAINER_NAME" sh -c "find $STORAGE_BASE -maxdepth 2 -type d -name '*vfs*' 2>/dev/null | grep -q vfs"; then
+                    echo "✓ SUCCESS: Found VFS storage directories (on retry)"
+                    VERIFY_PASSED=true
+                  fi
+                fi
+              fi
+            fi
+          else
+            echo "Container already finished (checking exit status)"
+          fi
+
+          echo ""
+          echo "=== Waiting for build to complete ==="
+
+          # Wait for container to finish
+          EXIT_CODE=$(docker wait "$CONTAINER_NAME" 2>/dev/null || echo "1")
+
+          # Stop log streaming
+          kill $LOGS_PID 2>/dev/null || true
+
+          # Show final logs if not already shown
+          echo ""
+          echo "=== Final build status ==="
+          echo "Container exit code: $EXIT_CODE"
+
+          # Cleanup
+          docker rm "$CONTAINER_NAME" 2>/dev/null || true
+
+          # Report verification result
+          echo ""
+          echo "=== Test Results ==="
+          echo "Build exit code: $EXIT_CODE"
+          echo "Storage verification: $VERIFY_PASSED"
+          echo "Expected storage driver: $EXPECTED_DRIVER"
+
+          if [ "$EXIT_CODE" != "0" ]; then
+            echo "✗ FAIL: Build failed with exit code $EXIT_CODE"
+            exit 1
+          fi
+
+          if [ "$VERIFY_PASSED" != "true" ]; then
+            echo "⚠ WARNING: Storage driver verification did not confirm expected driver ($EXPECTED_DRIVER)"
+            echo "  This may be expected if the build completed very quickly"
+          fi
+
+          echo "✓ Test 3 completed successfully"
 
       - name: Test 4 - HTTPS alpine with context sub-path
         run: |
