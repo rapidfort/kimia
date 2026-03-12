@@ -8,7 +8,7 @@ on:
   pull_request:
     branches: []
   push:
-    branches: ['tests-kimia']
+    branches: ['tests-kimia', 'test/verify-storage-driver']
   workflow_dispatch:
     inputs:
       runner:
