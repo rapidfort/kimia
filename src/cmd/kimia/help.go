@@ -33,6 +33,14 @@ func printHelp() {
 	fmt.Println("  --no-push                             Build only, skip push")
 	fmt.Println("  --cache                               Enable layer caching")
 	fmt.Println("  --cache-dir PATH                      Cache directory path")
+	if build.DetectBuilder() == "buildah" {
+			fmt.Println("BUILDAH OPTIONS:")
+			fmt.Println("  --buildah-opt \"FLAG [VALUE]\"          Pass additional flags to buildah bud (Buildah only, repeatable)")
+			fmt.Println("                                        Values cannot contain shell metacharacters")
+			fmt.Println("                                        (;, &, |, etc.).")
+			fmt.Println("                                        Example: --buildah-opt \"--squash\"")
+			fmt.Println()
+		}
 	if build.DetectBuilder() == "buildkit" {
 		fmt.Println("  --export-cache SPEC                   Export build cache (BuildKit only, repeatable)")
 		fmt.Println("                                        Examples:")

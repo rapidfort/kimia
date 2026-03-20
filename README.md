@@ -299,6 +299,7 @@ Kimia supports a comprehensive set of command-line arguments. Key options includ
 | Argument | Description |
 |----------|-------------|
 | `--buildkit-opt` | Pass options directly to BuildKit |
+| `--buildah-opt` | Pass additional flags to Buildah |
 
 **Full reference:** See [CLI Reference](docs/cli-reference.md) for complete documentation.
 

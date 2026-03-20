@@ -71,6 +71,9 @@ type Config struct {
 	Sign              bool   // Enable signing with cosign
 	CosignKeyPath     string // Path to cosign private key
 	CosignPasswordEnv string // Environment variable for cosign password
+
+	// Direct Buildah options
+	BuildahOpts []string
 }
 
 // AttestationConfig represents a single --attest flag
@@ -123,6 +126,11 @@ func executeBuildah(config Config, ctx *Context) error {
 		logger.Warning("For production, use rootless configuration (UID 1000) with SETUID/SETGID capabilities")
 	} else {
 		logger.Debug("Running as non-root (UID %d) - using chroot isolation with user namespaces", os.Getuid())
+	}
+
+	// Warn if --buildkit-opt was passed — these are ignored by Buildah
+	if len(config.BuildKitOpts) > 0 {
+		logger.Warning("--buildkit-opt flags are ignored when using Buildah backend: %v", config.BuildKitOpts)
 	}
 
 	logger.Info("Starting buildah build...")
@@ -262,13 +270,35 @@ func executeBuildah(config Config, ctx *Context) error {
 		args = append(args, "-t", dest)
 	}
 
+	// ========================================
+	// Pass-through args — must be added before ctx.Path
+	// ========================================
+	// Supports both "--flag=value" and "--flag value" (e.g. Buildah's --sbom flags).
+	// Each --buildah-opt is split into at most two tokens; validateBuildahInputs
+	// enforces that the flag name portion contains no dangerous characters.
+	for _, opt := range config.BuildahOpts {
+		parts := strings.SplitN(opt, " ", 2)
+		if len(parts) == 2 {
+			args = append(args, parts[0], parts[1])
+		} else {
+			args = append(args, parts[0])
+		}
+	}
+
 	// Add context path
 	args = append(args, ctx.Path)
 
 	// Log the command
-	logger.Debug("Buildah command: buildah %s", strings.Join(args, " "))
+	logger.Debug("Buildah command: buildah %s", strings.Join(sanitizeCommandArgs(args), " "))
 
 	// Execute buildah
+	// #nosec G204 -- all args validated by validateBuildahInputs:
+	//   - BuildahOpts: flag name validated by ValidateBuildctlArg (null bytes,
+	//     shell metacharacters); value portion checked for null bytes only since
+	//     scanner commands and paths may contain characters the general validator
+	//     would reject; conflict-checked against Kimia-managed flags
+	//   - All other args (dockerfile, build-arg, label, dest) are Kimia-constructed
+	//     from validated inputs
 	cmd := exec.Command("buildah", args...)
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = io.MultiWriter(os.Stdout, &stdoutBuf)
@@ -482,9 +512,83 @@ func validateBuildahInputs(config Config, ctx *Context) error {
 			homeDir = "/home/kimia"
 		}
 		homeDir = filepath.Clean(homeDir)
-		
+
 		if err := validation.ValidatePathWithinBase(config.TarPath, homeDir); err != nil {
 			return fmt.Errorf("invalid tar path: %v", err)
+		}
+	}
+
+	// Flags already managed explicitly by Kimia.
+	// IMPORTANT: If new flags are added to executeBuildah, add them here too.
+	conflictingFlags := map[string]string{
+		"-f":                  "use -f/--dockerfile instead",
+		"--file":              "use -f/--dockerfile instead",
+		"--build-arg":         "use --build-arg instead",
+		"--label":             "use --label instead",
+		"--target":            "use -t/--target instead",
+		"--platform":          "use --custom-platform instead",
+		"--timestamp":         "use --timestamp or --reproducible instead",
+		"--source-date-epoch": "use --timestamp or --reproducible instead",
+		// Don't prevent users from overriding --tls-verify
+		//"--tls-verify":        "use --insecure or --insecure-registry instead",
+		"--retry":             "use --image-download-retry instead",
+		"-t":                  "use -d/--destination instead",
+		"--tag":               "use -d/--destination instead",
+		"--no-cache":          "use --cache=false instead",
+		"--layers":            "use --cache instead",
+		// Security-sensitive flags managed implicitly by Kimia via BUILDAH_ISOLATION=chroot
+		"--isolation":         "isolation is managed by Kimia (chroot)",
+		"--userns":            "user namespace configuration is managed by Kimia",
+		"--userns-uid-map":    "user namespace configuration is managed by Kimia",
+		"--userns-gid-map":    "user namespace configuration is managed by Kimia",
+		"--cap-add":           "capability management is outside Kimia's scope",
+		"--cap-drop":          "capability management is outside Kimia's scope",
+		"--security-opt":      "security options are managed by Kimia",
+		"--privileged":        "privileged mode is not supported by Kimia",
+	}
+
+	for i, opt := range config.BuildahOpts {
+		opt = strings.TrimSpace(opt)
+
+		if opt == "" {
+			return fmt.Errorf("--buildah-opt value %d is empty", i)
+		}
+
+		// Split into at most two tokens: "--flag" and optional "value".
+		// This matches the split logic in executeBuildah and correctly handles
+		// both "--flag=value" and "--flag value" (e.g. Buildah's --sbom flags).
+		parts := strings.SplitN(opt, " ", 2)
+		flagName := parts[0]
+		if idx := strings.Index(flagName, "="); idx != -1 {
+			flagName = flagName[:idx]
+		}
+
+		// Validate the flag name only — not the full opt string.
+		// The old ValidateBuildctlArg(opt) call blocked spaces, which breaks
+		// legitimate "--flag value" opts like "--sbom syft-cyclonedx".
+		if err := validation.ValidateBuildctlArg(flagName); err != nil {
+			return fmt.Errorf("invalid --buildah-opt flag name %d (%q): %v", i, flagName, err)
+		}
+
+		// Validate the value portion for null bytes regardless of form.
+		// Space-separated values (parts[1]) are passed through as-is since
+		// they may be paths or scanner commands that ValidateBuildctlArg
+		// would incorrectly reject.
+		var optValue string
+		if len(parts) == 2 {
+			optValue = parts[1] // "--flag value" form
+		} else if idx := strings.Index(parts[0], "="); idx != -1 {
+			optValue = parts[0][idx+1:] // "--flag=value" form
+		}
+		if strings.Contains(optValue, "\x00") {
+			return fmt.Errorf("--buildah-opt value %d contains null byte", i)
+		}
+
+		if suggestion, conflicts := conflictingFlags[flagName]; conflicts {
+			return fmt.Errorf(
+				"--buildah-opt %q is managed by Kimia: %s",
+				flagName, suggestion,
+			)
 		}
 	}
 
@@ -493,6 +597,11 @@ func validateBuildahInputs(config Config, ctx *Context) error {
 
 func executeBuildKit(config Config, ctx *Context) error {
 	logger.Info("Starting BuildKit build...")
+
+	// Warn if --buildah-opt was passed — these are ignored by BuildKit
+	if len(config.BuildahOpts) > 0 {
+		logger.Warning("--buildah-opt flags are ignored when using BuildKit backend: %v", config.BuildahOpts)
+	}
 
 	// ========================================
 	// SETUP: Environment and paths
@@ -1720,7 +1829,7 @@ func sanitizeCommandArgs(args []string) []string {
 		"SECRET",
 		"CREDENTIALS",
 	}
-	
+
 	sanitized := make([]string, len(args))
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
@@ -1753,8 +1862,17 @@ func sanitizeCommandArgs(args []string) []string {
 				sanitized[i] = arg
 			}
 		} else {
-			// For any other arg that might be a URL
-			sanitized[i] = logger.SanitizeGitURL(arg)
+			// Only sanitize args that look like URLs -- calling SanitizeGitURL
+			// on non-URL values (e.g. --buildah-opt scanner commands) causes
+			// spaces and braces to be URL-encoded in log output.
+			if strings.HasPrefix(arg, "http://") ||
+				strings.HasPrefix(arg, "https://") ||
+				strings.HasPrefix(arg, "git://") ||
+				strings.HasPrefix(arg, "git@") {
+				sanitized[i] = logger.SanitizeGitURL(arg)
+			} else {
+				sanitized[i] = arg
+			}
 		}
 	}
 	return sanitized

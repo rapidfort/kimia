@@ -23,6 +23,7 @@ func parseArgs(args []string) *Config {
 		ImportCache:        []string{},            // BuildKit --import-cache options
 		CosignKeyPath:      "/etc/cosign/cosign.key",
 		CosignPasswordEnv:  "COSIGN_PASSWORD",
+		BuildahOpts:        []string{}, // Direct Buildah bud options
 	}
 
 	// If no arguments provided, show help
@@ -383,6 +384,18 @@ func parseArgs(args []string) *Config {
 			} else {
 				logger.Fatal("--cosign-password-env requires a value")
 			}
+
+		case "--buildah-opt":
+			var optStr string
+			if value != "" {
+				optStr = value
+			} else if i+1 < len(args) {  // no HasPrefix guard — value may start with -
+				i++
+				optStr = args[i]
+			} else {
+				logger.Fatal("--buildah-opt requires a value")
+			}
+			config.BuildahOpts = append(config.BuildahOpts, optStr)
 
 		default:
 			if !strings.HasPrefix(arg, "-") {
