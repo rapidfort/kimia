@@ -22,6 +22,8 @@ jobDefaults:
   backoffLimit: 0
   ttlSecondsAfterFinished: 60
   restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/arch: amd64
   # Pod-level security defaults
   securityContext:
     runAsNonRoot: true
