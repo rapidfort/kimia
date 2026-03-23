@@ -177,6 +177,10 @@ spec:
       restartPolicy: {{ default "Never" $vals.jobDefaults.restartPolicy }}
       securityContext:
 {{ toYaml $vals.jobDefaults.securityContext | indent 8 }}
+      {{- with $vals.jobDefaults.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
       volumes:
         - name: {{ $vals.volumeNames.registriesConf }}
           configMap:
