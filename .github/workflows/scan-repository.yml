@@ -31,7 +31,7 @@ jobs:
       - name: Run Trufflehog on filesystem
         run: |
           docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:3.88.1@sha256:d2f020b7e4c55dec8e1be42c8c4db64f60a4b260a07f96e59f9e7b5e0ad0e9d9 \
+            trufflesecurity/trufflehog:3.94.1@sha256:c6cae63b2ff9254c5f06848d439e31902de625c14f4771d371deff4106688c60 \
             filesystem /repo --json --no-update --only-verified > trufflehog-fs-results.json || true
 
           if [ -s trufflehog-fs-results.json ]; then
@@ -42,7 +42,7 @@ jobs:
       - name: Run Trufflehog on Git history
         run: |
           docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:3.88.1@sha256:d2f020b7e4c55dec8e1be42c8c4db64f60a4b260a07f96e59f9e7b5e0ad0e9d9 \
+            trufflesecurity/trufflehog:3.94.1@sha256:c6cae63b2ff9254c5f06848d439e31902de625c14f4771d371deff4106688c60 \
             git file:///repo --json --no-update --only-verified > trufflehog-git-results.json || true
 
           if [ -s trufflehog-git-results.json ]; then
@@ -106,13 +106,13 @@ jobs:
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:v8.24.3@sha256:5b30ff6b7e95f42a5d9e7e5a0f1e1fceb0a3b6f5e4d2c8a9b7d6e3f2a1c0b4d8 \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             dir -v -f json -r "/output/gitleaks-results.json" /path || GITLEAKS_EXIT=$?
 
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:v8.24.3@sha256:5b30ff6b7e95f42a5d9e7e5a0f1e1fceb0a3b6f5e4d2c8a9b7d6e3f2a1c0b4d8 \
+            zricethezav/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
             dir -v -f sarif -r "/output/gitleaks-results.sarif" /path || true
 
           # Exit 1 means leaks found; anything else is a tool error
@@ -281,7 +281,7 @@ jobs:
           cache: false
 
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
 
       - name: Run govulncheck
         working-directory: src
@@ -325,7 +325,7 @@ jobs:
           cache: false
 
       - name: Install Gosec
-        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.25.0
 
       - name: Run Gosec
         working-directory: src
