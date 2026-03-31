@@ -5,15 +5,18 @@ ARG VERSION="0.0.0-dev"
 ARG BUILD_DATE="0"
 ARG COMMIT="unknown"
 ARG BRANCH="unknown"
-ARG GOLANG_VERSION=1.25.3
 ARG BUILDKIT_VERSION=v0.25.1
 ARG ROOTLESSKIT_VERSION=v2.3.5
 ARG COSIGN_VERSION=v3.0.2
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
-ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
-ARG ALPINE_IMAGE="alpine:latest"
+ARG GO_IMAGE="golang:1.25.3-alpine@sha256:aee43c3ccbf24fdffb7295693b6e33b21e01baec1b2a55acc351fde345e9ec34"
+ARG ALPINE_IMAGE="alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
+
+# Pinned credential helper versions - update intentionally, not silently
+ARG ECR_HELPER_VERSION="0.9.0"
+ARG GCR_HELPER_VERSION="2.1.22"
 
 # =============================================================================
 # Stage 1: Build kimia binary
@@ -26,14 +29,10 @@ ARG BRANCH
 
 WORKDIR /app
 
-# Copy the entire src directory
 COPY src/ .
 
-# The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
-# Build from cmd/kimia
-# Note: ldflags use 'main' because cmd/kimia is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -44,9 +43,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o kimia ./cmd/kimia
 
 # =============================================================================
-# Stage 2: Runtime image with BuildKit + RootlessKit + Crun
+# Stage 2: Download BuildKit, RootlessKit, Cosign
 # =============================================================================
-FROM ${ALPINE_IMAGE} as kimia-deps
+FROM ${ALPINE_IMAGE} AS kimia-deps
 
 ARG TARGETARCH
 ARG BUILDKIT_VERSION
@@ -55,11 +54,11 @@ ARG COSIGN_VERSION
 
 WORKDIR /deps
 
-RUN apk update && apk add --no-cache \
-    bash \
-    curl \
-    ca-certificates \
-    jq
+RUN apk add --no-cache \
+    bash=5.3.3-r1 \
+    curl=8.17.0-r1 \
+    ca-certificates=20251003-r0 \
+    jq=1.8.1-r0
 
 # =============================================================================
 # Install BuildKit
@@ -73,6 +72,7 @@ RUN ARCH=$(case ${TARGETARCH} in \
     curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${ARCH}.provenance.json" -o provenance.json && \
     expected=$(jq -r '.subject[0].digest.sha256' provenance.json) && \
     actual=$(sha256sum buildkit.tar.gz | awk '{print $1}') && \
+    [ -n "${expected}" ] || { echo "ERROR: could not extract BuildKit digest from provenance.json"; exit 1; } && \
     if [ "$expected" = "$actual" ]; then \
         echo "BuildKit SHA256 OK: $actual"; \
     else \
@@ -80,9 +80,9 @@ RUN ARCH=$(case ${TARGETARCH} in \
         echo "Expected: $expected"; \
         echo "Actual:   $actual"; \
         exit 1; \
-    fi
-
-RUN tar -xf buildkit.tar.gz
+    fi && \
+    tar -xf buildkit.tar.gz && \
+    rm buildkit.tar.gz provenance.json
 
 # =============================================================================
 # Install RootlessKit
@@ -94,10 +94,12 @@ RUN ARCH=$(case ${TARGETARCH} in \
     esac) && \
     curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/rootlesskit-${ARCH}.tar.gz" -o "rootlesskit-${ARCH}.tar.gz" && \
     curl -fsSL "https://github.com/rootless-containers/rootlesskit/releases/download/${ROOTLESSKIT_VERSION}/SHA256SUMS" -o SHA256SUMS && \
-    grep "rootlesskit-${ARCH}.tar.gz" SHA256SUMS > SHA256SUMS.single && \
-    sha256sum -c SHA256SUMS.single && \
+    EXPECTED=$(grep "rootlesskit-${ARCH}.tar.gz" SHA256SUMS | awk '{print $1}') && \
+    [ -n "${EXPECTED}" ] || { echo "ERROR: checksum not found for rootlesskit-${ARCH}.tar.gz"; exit 1; } && \
+    echo "${EXPECTED}  rootlesskit-${ARCH}.tar.gz" | sha256sum -c - && \
     mkdir -p bin && \
-    tar -xf "rootlesskit-${ARCH}.tar.gz" -C bin
+    tar -xf "rootlesskit-${ARCH}.tar.gz" -C bin && \
+    rm "rootlesskit-${ARCH}.tar.gz" SHA256SUMS
 
 # =============================================================================
 # Install Cosign (for image signing)
@@ -112,6 +114,7 @@ RUN ARCH=$(case ${TARGETARCH} in \
     curl -fsSL "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-${ARCH}.sigstore.json" -o sigstore.json && \
     expected=$(jq -r '.verificationMaterial.tlogEntries[0].canonicalizedBody' sigstore.json | base64 -d | jq -r '.spec.data.hash.value') && \
     actual=$(sha256sum bin/cosign | awk '{print $1}') && \
+    [ -n "${expected}" ] || { echo "ERROR: could not extract cosign digest from sigstore.json"; exit 1; } && \
     if [ "$expected" = "$actual" ]; then \
         echo "cosign SHA256 OK: $actual"; \
     else \
@@ -119,31 +122,84 @@ RUN ARCH=$(case ${TARGETARCH} in \
         echo "Expected: $expected"; \
         echo "Actual:   $actual"; \
         exit 1; \
-    fi
+    fi && \
+    rm sigstore.json
 
 # =============================================================================
-# Stage 3: Install Credential Helpers and setup final configurations
+# Stage 3: Download credential helpers (isolated from runtime image)
 # =============================================================================
-FROM ${ALPINE_IMAGE}
+FROM ${ALPINE_IMAGE} AS credential-helpers
+ARG TARGETARCH
+ARG ECR_HELPER_VERSION
+ARG GCR_HELPER_VERSION
+
+RUN apk add --no-cache curl=8.17.0-r1
+
+# AWS ECR credential helper
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    BINARY_NAME="docker-credential-ecr-login" && \
+    CHECKSUM_NAME="${BINARY_NAME}.sha256" && \
+    DOWNLOAD_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_HELPER_VERSION}/linux-${ARCH}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${BINARY_NAME}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${CHECKSUM_NAME}" && \
+    sha256sum -c "${CHECKSUM_NAME}" && \
+    mv "${BINARY_NAME}" /usr/local/bin/docker-credential-ecr-login && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login && \
+    rm "${CHECKSUM_NAME}"
+
+# Google GCR/GAR credential helper
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    BINARY_ARCHIVE="docker-credential-gcr_linux_${ARCH}-${GCR_HELPER_VERSION}.tar.gz" && \
+    CHECKSUMS_FILE="checksums.txt" && \
+    RELEASE_URL="https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_HELPER_VERSION}" && \
+    curl -fsSL -O "${RELEASE_URL}/${BINARY_ARCHIVE}" && \
+    curl -fsSL -O "${RELEASE_URL}/${CHECKSUMS_FILE}" && \
+    EXPECTED=$(grep "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}" | awk '{print $1}') && \
+    [ -n "${EXPECTED}" ] || { echo "ERROR: checksum not found for ${BINARY_ARCHIVE}"; exit 1; } && \
+    echo "${EXPECTED}  ${BINARY_ARCHIVE}" | sha256sum -c - && \
+    tar -xzf "${BINARY_ARCHIVE}" -C /usr/local/bin/ docker-credential-gcr && \
+    chmod +x /usr/local/bin/docker-credential-gcr && \
+    rm "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}"
+
+# =============================================================================
+# Stage 4: Runtime image
+# =============================================================================
+FROM ${ALPINE_IMAGE} AS runtime
 ARG KIMIA_UID
 ARG KIMIA_USER
-ARG TARGETARCH
 
-# Install minimal dependencies
+# Install all runtime dependencies in a single layer with pinned versions.
+# To update: docker run --rm --entrypoint sh <image> -c "apk list --installed" | sort
+# Base Alpine version: 3.23.3-r0 (alpine-release)
 RUN apk add --no-cache \
-    bash \
-    curl \
-    ca-certificates \
-    shadow \
-    shadow-uidmap \
-    crun \
-    git
+    bash=5.3.3-r1 \
+    ca-certificates=20251003-r0 \
+    crun=1.27-r0 \
+    git=2.52.0-r0 \
+    libseccomp=2.6.0-r1 \
+    shadow=4.18.0-r0 \
+    shadow-subids=4.18.0-r0 && \
+    update-ca-certificates && \
+    # newuidmap/newgidmap are provided by shadow-subids; setuid is set by the
+    # package installer. This chmod is retained for environments that strip
+    # setuid bits during image pull (e.g. some OCI runtimes). Required for
+    # rootless user namespace mapping - justified for this use case.
+    chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
-# Copy dependencies
+# Copy binaries from download stages
 COPY --from=kimia-deps /deps/bin /usr/local/bin
-
-# Copy kimia binary from builder stage
 COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
+COPY --from=credential-helpers /usr/local/bin/docker-credential-ecr-login /usr/local/bin/docker-credential-ecr-login
+COPY --from=credential-helpers /usr/local/bin/docker-credential-gcr /usr/local/bin/docker-credential-gcr
+
 RUN chmod +x /usr/local/bin/kimia
 
 # Verify all installations
@@ -152,36 +208,6 @@ RUN buildkitd --version && \
     rootlesskit --version && \
     cosign version
 
-
-# =============================================================================
-# Install Cloud Registry Credential Helpers
-# =============================================================================
-
-# AWS ECR credential helper
-RUN ECR_VERSION=$(curl -sL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    curl -fsSL -o /usr/local/bin/docker-credential-ecr-login \
-        "https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}/docker-credential-ecr-login" && \
-    chmod +x /usr/local/bin/docker-credential-ecr-login
-
-# Google GCR/GAR credential helper
-RUN GCR_VERSION=$(curl -sL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}/docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" \
-    | tar xz -C /usr/local/bin/ docker-credential-gcr && \
-    chmod +x /usr/local/bin/docker-credential-gcr
-
-# =============================================================================
-# User and Permission Setup
-# =============================================================================
 # Create kimia user with specified UID
 RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
     adduser -D -G ${KIMIA_USER} -u ${KIMIA_UID} ${KIMIA_USER}
@@ -190,56 +216,45 @@ RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
 RUN echo "${KIMIA_USER}:100000:65536" >> /etc/subuid && \
     echo "${KIMIA_USER}:100000:65536" >> /etc/subgid
 
-# Setup SETUID binaries for user namespaces (required for rootless)
-RUN chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
-
 # Create directories with proper permissions
-RUN mkdir -p /tmp/work /tmp/run && \
+RUN mkdir -p /tmp/work && \
     mkdir -p /run/buildkit /var/lib/buildkit && \
-    chmod 777 /run/buildkit /var/lib/buildkit && \
-    chown -R ${KIMIA_USER}:${KIMIA_USER} /tmp/work /tmp/run
+    chown ${KIMIA_USER}:${KIMIA_USER} /run/buildkit /var/lib/buildkit && \
+    chmod 0700 /run/buildkit /var/lib/buildkit && \
+    chown -R ${KIMIA_USER}:${KIMIA_USER} /tmp/work
 
 # =============================================================================
 # BuildKit Configuration
 # =============================================================================
+RUN mkdir -p /home/${KIMIA_USER}/.config/buildkit && \
+    mkdir -p /home/${KIMIA_USER}/.docker
 
-# Create BuildKit config directory
-RUN mkdir -p /home/kimia/.config/buildkit
+COPY configs/buildkit/buildkitd.toml /home/${KIMIA_USER}/.config/buildkit/buildkitd.toml
 
-# Copy BuildKit configuration file
-# This configures BuildKit to use crun in rootless mode
-COPY configs/buildkit/buildkitd.toml /home/kimia/.config/buildkit/buildkitd.toml
-
-# Create Docker config directory for authentication
-RUN mkdir -p /home/kimia/.docker
-
-# Set ownership
-RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/kimia/.config && \
-    chown -R ${KIMIA_USER}:${KIMIA_USER} /home/kimia/.docker
+RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER}/.config && \
+    chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER}/.docker
 
 # =============================================================================
-# Switch to Non-Root User
+# Runtime directory for rootless operations
 # =============================================================================
+ENV XDG_RUNTIME_DIR=/run/user/${KIMIA_UID}
+
+RUN mkdir -p "${XDG_RUNTIME_DIR}" && \
+    chown ${KIMIA_USER}:${KIMIA_USER} "${XDG_RUNTIME_DIR}" && \
+    chmod 0700 "${XDG_RUNTIME_DIR}"
+
 USER ${KIMIA_UID}:${KIMIA_UID}
-WORKDIR /tmp/work
+WORKDIR /home/${KIMIA_USER}
 
 # =============================================================================
 # Environment Configuration
 # =============================================================================
-
-# Binary paths
 ENV PATH=/usr/local/bin:$PATH
-
-# Runtime directory
-ENV XDG_RUNTIME_DIR=/tmp/run
-
-# User directories
 ENV HOME=/home/kimia
 
 # =============================================================================
 # Container Metadata
 # =============================================================================
-
 LABEL org.opencontainers.image.source="https://github.com/rapidfort/kimia"
 LABEL org.opencontainers.image.description="Kimia - Kubernetes-Native OCI Image Builder (BuildKit)"
 LABEL org.opencontainers.image.documentation="https://github.com/rapidfort/kimia/blob/main/README.md"
@@ -250,9 +265,5 @@ LABEL org.opencontainers.image.builder="buildkit"
 # =============================================================================
 # Entrypoint and Default Command
 # =============================================================================
-
-# Set kimia as the entrypoint
 ENTRYPOINT ["/usr/local/bin/kimia"]
-
-# Default command shows help
 CMD ["--help"]
