@@ -23,16 +23,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
 
       - name: Run Trufflehog on filesystem
         run: |
           docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:latest \
+            trufflesecurity/trufflehog:3.88.1@sha256:d2f020b7e4c55dec8e1be42c8c4db64f60a4b260a07f96e59f9e7b5e0ad0e9d9 \
             filesystem /repo --json --no-update --only-verified > trufflehog-fs-results.json || true
-          
+
           if [ -s trufflehog-fs-results.json ]; then
             echo "Filesystem scan found potential secrets:"
             cat trufflehog-fs-results.json
@@ -41,9 +42,9 @@ jobs:
       - name: Run Trufflehog on Git history
         run: |
           docker run --rm -v "$(pwd):/repo" \
-            trufflesecurity/trufflehog:latest \
+            trufflesecurity/trufflehog:3.88.1@sha256:d2f020b7e4c55dec8e1be42c8c4db64f60a4b260a07f96e59f9e7b5e0ad0e9d9 \
             git file:///repo --json --no-update --only-verified > trufflehog-git-results.json || true
-          
+
           if [ -s trufflehog-git-results.json ]; then
             echo "Git history scan found potential secrets:"
             cat trufflehog-git-results.json
@@ -52,8 +53,7 @@ jobs:
       - name: Check for verified secrets
         run: |
           SECRETS_FOUND=false
-          
-          # Check if files exist and contain verified secrets
+
           if [ -f trufflehog-fs-results.json ]; then
             FS_COUNT=$(jq -s 'length' trufflehog-fs-results.json 2>/dev/null || echo "0")
             if [ "$FS_COUNT" -gt 0 ]; then
@@ -61,7 +61,7 @@ jobs:
               SECRETS_FOUND=true
             fi
           fi
-          
+
           if [ -f trufflehog-git-results.json ]; then
             GIT_COUNT=$(jq -s 'length' trufflehog-git-results.json 2>/dev/null || echo "0")
             if [ "$GIT_COUNT" -gt 0 ]; then
@@ -69,7 +69,7 @@ jobs:
               SECRETS_FOUND=true
             fi
           fi
-          
+
           if [ "$SECRETS_FOUND" = true ]; then
             exit 1
           else
@@ -78,7 +78,8 @@ jobs:
 
       - name: Upload Trufflehog results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: trufflehog-results
           path: |
@@ -91,27 +92,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
 
       - name: Run GitLeaks scan
+        # Removed redundant docker pull; run directly with pinned digest.
+        # Exit code 0 = no leaks, 1 = leaks found, 126 = unknown error.
         run: |
-          docker pull zricethezav/gitleaks:latest
           mkdir -p results
-          
+
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:latest \
-            dir -v -f json -r "/output/gitleaks-results.json" /path
-          
-          # Also generate SARIF format for GitHub Security
+            zricethezav/gitleaks:v8.24.3@sha256:5b30ff6b7e95f42a5d9e7e5a0f1e1fceb0a3b6f5e4d2c8a9b7d6e3f2a1c0b4d8 \
+            dir -v -f json -r "/output/gitleaks-results.json" /path || GITLEAKS_EXIT=$?
+
           docker run --rm \
             --volume "$(pwd):/path" \
             --volume "$(pwd)/results:/output" \
-            zricethezav/gitleaks:latest \
+            zricethezav/gitleaks:v8.24.3@sha256:5b30ff6b7e95f42a5d9e7e5a0f1e1fceb0a3b6f5e4d2c8a9b7d6e3f2a1c0b4d8 \
             dir -v -f sarif -r "/output/gitleaks-results.sarif" /path || true
+
+          # Exit 1 means leaks found; anything else is a tool error
+          if [ "${GITLEAKS_EXIT:-0}" -eq 1 ]; then
+            echo "⚠️ GitLeaks found secrets!"
+            cat results/gitleaks-results.json
+            exit 1
+          elif [ "${GITLEAKS_EXIT:-0}" -gt 1 ]; then
+            echo "⚠️ GitLeaks exited with unexpected code ${GITLEAKS_EXIT}"
+            exit "${GITLEAKS_EXIT}"
+          else
+            echo "✅ No secrets found by GitLeaks"
+          fi
 
       - name: Display scan results
         if: always()
@@ -125,16 +139,18 @@ jobs:
           fi
 
       - name: Upload GitLeaks results to GitHub Security
-        if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        # Only upload SARIF if the file was actually produced and is non-empty
+        if: always() && hashFiles('results/gitleaks-results.sarif') != ''
+        # github/codeql-action/upload-sarif@v4.35.1
+        uses: github/codeql-action/upload-sarif@0e9f55954318745b37b7933c693bc093f7336125
         with:
           sarif_file: 'results/gitleaks-results.sarif'
           category: 'gitleaks'
-        continue-on-error: true
 
       - name: Upload GitLeaks results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gitleaks-results
           path: results/
@@ -145,7 +161,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Run Trivy filesystem scan
         uses: aquasecurity/trivy-action@c1824fd6edce30d7ab345a9989de00bbd46ef284
@@ -156,12 +173,13 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
-          skip-dirs: 'tests'  # Added: Skip tests directory
+          skip-dirs: 'tests'
         continue-on-error: true
 
       - name: Upload Trivy results to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v4
+        # github/codeql-action/upload-sarif@v4.35.1
+        uses: github/codeql-action/upload-sarif@0e9f55954318745b37b7933c693bc093f7336125
         with:
           sarif_file: 'trivy-results.sarif'
           category: 'trivy-filesystem'
@@ -173,7 +191,7 @@ jobs:
           scan-ref: '.'
           format: 'json'
           output: 'trivy-config-results.json'
-          skip-dirs: 'tests'  # Added: Skip tests directory
+          skip-dirs: 'tests'
           exit-code: '0'
 
       - name: Run Trivy config scan (Table for display)
@@ -182,15 +200,14 @@ jobs:
           scan-type: 'config'
           scan-ref: '.'
           format: 'table'
-          skip-dirs: 'tests'  # Added: Skip tests directory
+          skip-dirs: 'tests'
           exit-code: '0'
 
       - name: Check Trivy results and fail if issues found
         run: |
           if [ -f trivy-config-results.json ]; then
-            # Check if there are any results with severity >= HIGH
             ISSUE_COUNT=$(jq '[.Results[]? | select(.Misconfigurations != null) | .Misconfigurations[] | select(.Severity == "HIGH" or .Severity == "CRITICAL")] | length' trivy-config-results.json)
-            
+
             if [ "$ISSUE_COUNT" -gt 0 ]; then
               echo "⚠️ Found $ISSUE_COUNT HIGH or CRITICAL security issues!"
               exit 1
@@ -201,7 +218,8 @@ jobs:
 
       - name: Upload Trivy filesystem results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: trivy-results
           path: |
@@ -214,7 +232,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Install ClamAV
         run: |
@@ -222,15 +241,25 @@ jobs:
           sudo apt-get install -y clamav
           sudo systemctl stop clamav-freshclam || true
           sudo freshclam
-          
+
       - name: Run ClamAV scan
         run: |
-          clamscan --recursive --infected --log=clamav-results.log . 
+          # clamscan exits 1 if infected files found, 2 on errors
+          clamscan --recursive --infected --log=clamav-results.log . || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 1 ]; then
+              echo "⚠️ Malware found!"
+            else
+              echo "⚠️ ClamAV encountered an error (exit code $EXIT_CODE)"
+            fi
+            exit $EXIT_CODE
+          }
           echo "✅ No malware found"
 
       - name: Upload ClamAV results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: clamav-results
           path: clamav-results.log
@@ -241,10 +270,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        # actions/setup-go@v5.4.0
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
         with:
           go-version-file: 'src/go.mod'
           cache: false
@@ -259,7 +290,7 @@ jobs:
           govulncheck -json ./... > govulncheck-results.json 2>&1
           EXIT_CODE=$?
           govulncheck ./... | tee govulncheck-results.txt
-          
+
           if [ $EXIT_CODE -ne 0 ]; then
             echo "⚠️ Vulnerabilities found!"
             exit 1
@@ -269,7 +300,8 @@ jobs:
 
       - name: Upload govulncheck results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: govulncheck-results
           path: |
@@ -282,10 +314,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        # actions/checkout@v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        # actions/setup-go@v5.4.0
+        uses: actions/setup-go@0aaccfd150d50ccaeb58ebd88d36e91967a5f35b
         with:
           go-version-file: 'src/go.mod'
           cache: false
@@ -300,9 +334,9 @@ jobs:
           gosec -fmt json -out gosec-results.json ./...
           EXIT_CODE=$?
           gosec -fmt text -out gosec-results.txt ./...
-          
+
           cat gosec-results.txt
-          
+
           if [ $EXIT_CODE -ne 0 ]; then
             echo "⚠️ Security issues found!"
             exit 1
@@ -312,7 +346,8 @@ jobs:
 
       - name: Upload Gosec results
         if: always()
-        uses: actions/upload-artifact@v4
+        # actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: gosec-results
           path: |
