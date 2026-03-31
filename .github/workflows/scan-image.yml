@@ -94,8 +94,18 @@ jobs:
             jq '.Results[]? | select(.Vulnerabilities != null) | {Target, Vulnerabilities: .Vulnerabilities | length}' "trivy-${{ steps.sanitize.outputs.sanitized }}.json" || true
           fi
 
+      - name: Check for SARIF output
+        id: check-sarif
+        if: always()
+        run: |
+          if [ -f "trivy-${{ steps.sanitize.outputs.sanitized }}.sarif" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Upload Trivy results to GitHub Security
-        if: always() && hashFiles('trivy-${{ steps.sanitize.outputs.sanitized }}.sarif') != ''
+        if: always() && steps.check-sarif.outputs.exists == 'true'
         # github/codeql-action/upload-sarif@v4.35.1
         uses: github/codeql-action/upload-sarif@0e9f55954318745b37b7933c693bc093f7336125
         with:
