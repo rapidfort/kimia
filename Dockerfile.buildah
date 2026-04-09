@@ -6,12 +6,15 @@ ARG BUILD_DATE="0"
 ARG COMMIT="unknown"
 ARG BRANCH="unknown"
 ARG RELEASE="0"
-ARG GOLANG_VERSION=1.25.3
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
-ARG GO_IMAGE="golang:${GOLANG_VERSION}-alpine"
-ARG ALPINE_IMAGE="alpine:latest"
+ARG GO_IMAGE="golang:1.25.3-alpine@sha256:aee43c3ccbf24fdffb7295693b6e33b21e01baec1b2a55acc351fde345e9ec34"
+ARG ALPINE_IMAGE="alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
+
+# Pinned credential helper versions - update intentionally, not silently
+ARG ECR_HELPER_VERSION="0.9.0"
+ARG GCR_HELPER_VERSION="2.1.22"
 
 # =============================================================================
 # Stage 1: Build kimia binary
@@ -24,14 +27,10 @@ ARG BRANCH
 
 WORKDIR /app
 
-# Copy the entire src directory
 COPY src/ .
 
-# The go.mod already exists in src/, so just tidy dependencies
 RUN go mod tidy
 
-# Build from cmd/kimia
-# Note: ldflags use 'main' because cmd/kimia is the main package
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w \
@@ -42,43 +41,92 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o kimia ./cmd/kimia
 
 # =============================================================================
-# Stage 2: Runtime image with Buildah
+# Stage 2: Download credential helpers (isolated from runtime image)
+# =============================================================================
+FROM ${ALPINE_IMAGE} AS credential-helpers
+ARG TARGETARCH
+ARG ECR_HELPER_VERSION
+ARG GCR_HELPER_VERSION
+
+RUN apk add --no-cache curl=8.17.0-r1
+
+# AWS ECR credential helper
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    BINARY_NAME="docker-credential-ecr-login" && \
+    CHECKSUM_NAME="${BINARY_NAME}.sha256" && \
+    DOWNLOAD_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_HELPER_VERSION}/linux-${ARCH}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${BINARY_NAME}" && \
+    curl -fsSL -O "${DOWNLOAD_URL}/${CHECKSUM_NAME}" && \
+    sha256sum -c "${CHECKSUM_NAME}" && \
+    mv "${BINARY_NAME}" /usr/local/bin/docker-credential-ecr-login && \
+    chmod +x /usr/local/bin/docker-credential-ecr-login && \
+    rm "${CHECKSUM_NAME}"
+
+# Google GCR/GAR credential helper
+RUN ARCH=$(case ${TARGETARCH} in \
+        "amd64") echo "amd64" ;; \
+        "arm64") echo "arm64" ;; \
+        *) echo "amd64" ;; \
+    esac) && \
+    BINARY_ARCHIVE="docker-credential-gcr_linux_${ARCH}-${GCR_HELPER_VERSION}.tar.gz" && \
+    CHECKSUMS_FILE="checksums.txt" && \
+    RELEASE_URL="https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_HELPER_VERSION}" && \
+    curl -fsSL -O "${RELEASE_URL}/${BINARY_ARCHIVE}" && \
+    curl -fsSL -O "${RELEASE_URL}/${CHECKSUMS_FILE}" && \
+    EXPECTED=$(grep "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}" | awk '{print $1}') && \
+    [ -n "${EXPECTED}" ] || { echo "ERROR: checksum not found for ${BINARY_ARCHIVE}"; exit 1; } && \
+    echo "${EXPECTED}  ${BINARY_ARCHIVE}" | sha256sum -c - && \
+    tar -xzf "${BINARY_ARCHIVE}" -C /usr/local/bin/ docker-credential-gcr && \
+    chmod +x /usr/local/bin/docker-credential-gcr && \
+    rm "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}"
+
+# =============================================================================
+# Stage 3: Runtime image with Buildah
 # =============================================================================
 FROM ${ALPINE_IMAGE} AS run-prep-image
 ARG KIMIA_UID
 ARG KIMIA_USER
-ARG TARGETARCH
 
-# Install system dependencies
-RUN apk update && apk add --no-cache gnutls
-
-# Install runtime dependencies for Buildah
+# Install all runtime dependencies in a single layer with pinned versions.
+# To update: docker run --rm --entrypoint sh <image> -c "apk list --installed" | sort
+# Base Alpine version: 3.23.3-r0 (alpine-release)
 RUN apk add --no-cache \
-    aardvark-dns \
-    bash \
-    buildah \
-    ca-certificates \
-    crun \
-    curl \
-    device-mapper-libs \
-    git \
-    gpgme \
-    iptables \
-    ip6tables \
-    jq \
-    libseccomp \
-    netavark \
-    ostree \
-    shadow \
-    shadow-uidmap \
-    slirp4netns \
-    xz && \
+    aardvark-dns=1.16.0-r0 \
+    bash=5.3.3-r1 \
+    buildah=1.42.1-r4 \
+    ca-certificates=20251003-r0 \
+    crun=1.27-r0 \
+    device-mapper-libs=2.03.35-r0 \
+    git=2.52.0-r0 \
+    gnutls=3.8.12-r0 \
+    gpgme=1.24.2-r3 \
+    iptables=1.8.11-r1 \
+    jq=1.8.1-r0 \
+    libseccomp=2.6.0-r1 \
+    netavark=1.16.1-r0 \
+    ostree=2025.7-r0 \
+    shadow=4.18.0-r0 \
+    shadow-subids=4.18.0-r0 \
+    slirp4netns=1.3.3-r0 \
+    xz=5.8.2-r0 && \
     update-ca-certificates && \
+    # newuidmap/newgidmap are provided by shadow-subids; setuid is set by the
+    # package installer. This chmod is retained for environments that strip
+    # setuid bits during image pull (e.g. some OCI runtimes). Required for
+    # rootless user namespace mapping - justified for this use case.
     chmod u+s /usr/bin/newuidmap /usr/bin/newgidmap
 
 # Copy kimia binary from builder stage
 COPY --from=kimia-builder /app/kimia /usr/local/bin/kimia
 RUN chmod +x /usr/local/bin/kimia
+
+# Copy credential helpers from isolated download stage (curl not present at runtime)
+COPY --from=credential-helpers /usr/local/bin/docker-credential-ecr-login /usr/local/bin/docker-credential-ecr-login
+COPY --from=credential-helpers /usr/local/bin/docker-credential-gcr /usr/local/bin/docker-credential-gcr
 
 # Create kimia user with specified UID
 RUN addgroup -g ${KIMIA_UID} ${KIMIA_USER} && \
@@ -92,112 +140,43 @@ RUN echo "${KIMIA_USER}:100000:65536" >> /etc/subuid && \
 # Rootless Configuration (UID 1000)
 # =============================================================================
 
-# Create user directories
 RUN mkdir -p /home/${KIMIA_USER}/.local/share/containers/storage && \
     mkdir -p /home/${KIMIA_USER}/.config/containers && \
     mkdir -p /home/${KIMIA_USER}/.docker && \
     mkdir -p /tmp/lock
 
-# Copy Buildah configuration files
-# These files configure storage, registries, policies, and container runtime
 COPY configs/buildah/storage.conf /home/${KIMIA_USER}/.config/containers/storage.conf
 COPY configs/buildah/registries.conf /home/${KIMIA_USER}/.config/containers/registries.conf
 COPY configs/buildah/policy.json /home/${KIMIA_USER}/.config/containers/policy.json
 COPY configs/buildah/containers.conf /home/${KIMIA_USER}/.config/containers/containers.conf
 
 # =============================================================================
-# Install Cloud Registry Credential Helpers
-# =============================================================================
-
-# AWS ECR credential helper
-RUN ECR_VERSION=$(curl -fsSL https://api.github.com/repos/awslabs/amazon-ecr-credential-helper/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    # Define file names and URLs
-    BINARY_NAME="docker-credential-ecr-login" && \
-    CHECKSUM_NAME="${BINARY_NAME}.sha256" && \
-    DOWNLOAD_URL="https://amazon-ecr-credential-helper-releases.s3.us-east-2.amazonaws.com/${ECR_VERSION}/linux-${ARCH}" && \
-    \
-    # Download binary and checksum to current directory
-    curl -fsSL -O "${DOWNLOAD_URL}/${BINARY_NAME}" && \
-    curl -fsSL -O "${DOWNLOAD_URL}/${CHECKSUM_NAME}" && \
-    \
-    # Verify Integrity directly using the provided file
-    sha256sum -c "${CHECKSUM_NAME}" && \
-    \
-    # Install
-    mv "${BINARY_NAME}" /usr/local/bin/docker-credential-ecr-login && \
-    chmod +x /usr/local/bin/docker-credential-ecr-login && \
-    \
-    # Cleanup
-    rm "${CHECKSUM_NAME}"
-
-# Google GCR/GAR credential helper
-RUN GCR_VERSION=$(curl -fsSL https://api.github.com/repos/GoogleCloudPlatform/docker-credential-gcr/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//') && \
-    ARCH=$(case ${TARGETARCH} in \
-        "amd64") echo "amd64" ;; \
-        "arm64") echo "arm64" ;; \
-        *) echo "amd64" ;; \
-    esac) && \
-    # Define file names and URLs
-    BINARY_ARCHIVE="docker-credential-gcr_linux_${ARCH}-${GCR_VERSION}.tar.gz" && \
-    CHECKSUMS_FILE="checksums.txt" && \
-    RELEASE_URL="https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v${GCR_VERSION}" && \
-    \
-    # Download binary and checksums
-    curl -fsSL -O "${RELEASE_URL}/${BINARY_ARCHIVE}" && \
-    curl -fsSL -O "${RELEASE_URL}/${CHECKSUMS_FILE}" && \
-    \
-    # Verify Integrity: Grep the specific file hash and pipe to sha256sum
-    # Using '-c -' reads the hash/filename pair from standard input
-    grep "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}" | sha256sum -c - && \
-    \
-    # Extract and Install
-    tar -xzf "${BINARY_ARCHIVE}" -C /usr/local/bin/ docker-credential-gcr && \
-    chmod +x /usr/local/bin/docker-credential-gcr && \
-    \
-    # Cleanup artifacts to keep layer minimal
-    rm "${BINARY_ARCHIVE}" "${CHECKSUMS_FILE}"
-
-# =============================================================================
 # Environment Configuration
 # =============================================================================
 
-# Buildah settings
-ENV BUILDAH_LOG_LEVEL=error
-
-# User directories
+ENV BUILDAH_LOG_LEVEL=warn
 ENV HOME=/home/kimia
-
-# Docker config location for authentication
 # Mount your Docker config.json here: /home/kimia/.docker/config.json
 # Example: -v ~/.docker/config.json:/home/kimia/.docker/config.json:ro
 ENV DOCKER_CONFIG=/home/kimia/.docker
-
-# Runtime directory for rootless operations
 ENV XDG_RUNTIME_DIR=/run/user/${KIMIA_UID}
-
-# Network locking
 ENV NETAVARK_LOCK_PATH=/tmp/lock/netavark.lock
 
 # =============================================================================
 # Finalize Permissions
 # =============================================================================
 
-# Set ownership for kimia user directories
 RUN chown -R ${KIMIA_USER}:${KIMIA_USER} /home/${KIMIA_USER} && \
     mkdir -p "${XDG_RUNTIME_DIR}" && \
     chown -R ${KIMIA_USER}:${KIMIA_USER} "${XDG_RUNTIME_DIR}" && \
-    chmod 1777 /tmp/lock
+    # /tmp/lock: kimia-owned rather than world-writable; netavark lock file
+    # only needs to be accessible to the kimia user in rootless mode.
+    chown ${KIMIA_USER}:${KIMIA_USER} /tmp/lock && \
+    chmod 0700 /tmp/lock
 
-# Run as non-root user (rootless mode)
 USER ${KIMIA_UID}:${KIMIA_UID}
 WORKDIR /home/${KIMIA_USER}
 
-# Add rapidfort directory to PATH (for potential extensions)
 ENV PATH="/home/${KIMIA_USER}/rapidfort:${PATH}"
 
 # =============================================================================
@@ -214,8 +193,5 @@ LABEL org.opencontainers.image.licenses="Apache-2.0"
 # Entrypoint and Default Command
 # =============================================================================
 
-# Set kimia as the entrypoint
 ENTRYPOINT ["/usr/local/bin/kimia"]
-
-# Default command shows help
 CMD ["--help"]
