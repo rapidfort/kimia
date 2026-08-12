@@ -9,12 +9,12 @@ ARG RELEASE="0"
 ARG KIMIA_UID=1000
 ARG KIMIA_USER=kimia
 ARG TARGETARCH
-ARG GO_IMAGE="golang:1.25.3-alpine@sha256:aee43c3ccbf24fdffb7295693b6e33b21e01baec1b2a55acc351fde345e9ec34"
-ARG ALPINE_IMAGE="alpine:3.23.3@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659"
+ARG GO_IMAGE="golang:1.26.5-alpine3.24@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2"
+ARG ALPINE_IMAGE="alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 
 # Pinned credential helper versions - update intentionally, not silently
-ARG ECR_HELPER_VERSION="0.9.0"
-ARG GCR_HELPER_VERSION="2.1.22"
+ARG ECR_HELPER_VERSION="0.12.0"
+ARG GCR_HELPER_VERSION="2.2.1"
 
 # =============================================================================
 # Stage 1: Build kimia binary
@@ -48,7 +48,7 @@ ARG TARGETARCH
 ARG ECR_HELPER_VERSION
 ARG GCR_HELPER_VERSION
 
-RUN apk add --no-cache curl=8.17.0-r1
+RUN apk add --no-cache curl=8.21.0-r0
 
 # AWS ECR credential helper
 RUN ARCH=$(case ${TARGETARCH} in \
@@ -93,26 +93,26 @@ ARG KIMIA_USER
 
 # Install all runtime dependencies in a single layer with pinned versions.
 # To update: docker run --rm --entrypoint sh <image> -c "apk list --installed" | sort
-# Base Alpine version: 3.23.3-r0 (alpine-release)
+# Base Alpine version: 3.24.1 (alpine-release)
 RUN apk add --no-cache \
-    aardvark-dns=1.16.0-r0 \
-    bash=5.3.3-r1 \
-    buildah=1.42.1-r4 \
-    ca-certificates=20251003-r0 \
-    crun=1.27-r0 \
-    device-mapper-libs=2.03.35-r0 \
-    git=2.52.0-r0 \
-    gnutls=3.8.12-r0 \
-    gpgme=1.24.2-r3 \
-    iptables=1.8.11-r1 \
+    aardvark-dns=1.17.1-r0 \
+    bash=5.3.9-r1 \
+    buildah=1.44.0-r0 \
+    ca-certificates=20260611-r0 \
+    crun=1.28-r0 \
+    device-mapper-libs=2.03.35-r3 \
+    git=2.54.0-r0 \
+    gnutls=3.8.13-r0 \
+    gpgme=2.0.1-r1 \
+    iptables=1.8.13-r0 \
     jq=1.8.1-r0 \
-    libseccomp=2.6.0-r1 \
-    netavark=1.16.1-r0 \
-    ostree=2025.7-r0 \
-    shadow=4.18.0-r0 \
-    shadow-subids=4.18.0-r0 \
+    libseccomp=2.6.0-r2 \
+    netavark=1.17.2-r0 \
+    ostree=2025.7-r1 \
+    shadow=4.18.0-r1 \
+    shadow-subids=4.18.0-r1 \
     slirp4netns=1.3.3-r0 \
-    xz=5.8.2-r0 && \
+    xz=5.8.3-r0 && \
     update-ca-certificates && \
     # newuidmap/newgidmap are provided by shadow-subids; setuid is set by the
     # package installer. This chmod is retained for environments that strip

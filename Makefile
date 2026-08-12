@@ -6,6 +6,15 @@ RELEASE ?= 0
 
 SHELL := /bin/bash
 
+# Optional flags for dependency audit targets (make apk / go-deps / tools)
+APPLY ?=
+CHECK ?=
+ALPINE_TAG ?=
+GO_TAG ?=
+MODULES ?=
+APPLY_MODULES ?=
+BUMP_ALPINE_PATCH ?= 1
+
 # Git version management
 GIT_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
 VERSION_BASE := $(patsubst v%,%,$(GIT_TAG))
@@ -94,6 +103,16 @@ help:
 	@echo "  make test-all           - Test BOTH images"
 	@echo "  make test-clean         - Clean up test resources"
 	@echo ""
+	@echo "━━━ Dependency Bumps ━━━"
+	@echo "  make apk                - Audit Alpine OS package pins vs latest"
+	@echo "  make apk APPLY=1        - Rewrite apk pins + ALPINE_IMAGE digests"
+	@echo "  make go-deps            - Audit Go toolchain (GO_IMAGE) digests"
+	@echo "  make go-deps APPLY=1    - Rewrite GO_IMAGE digests"
+	@echo "  make go-deps MODULES=1  - Also check Go module updates"
+	@echo "  make tools              - Audit BuildKit/Cosign/credential helpers"
+	@echo "  make tools APPLY=1      - Rewrite external tool version ARGs"
+	@echo "  make deps               - Run apk + go-deps + tools audits"
+	@echo ""
 	@echo "━━━ Utilities ━━━"
 	@echo "  make run                - Run kimia container locally"
 	@echo "  make version            - Show current versions"
@@ -102,6 +121,12 @@ help:
 	@echo ""
 	@echo "Environment Variables:"
 	@echo "  REGISTRY                - Docker registry (default: based on RF_APP_HOST)"
+	@echo "  APPLY=1                 - Apply pin rewrites (apk/go-deps/tools)"
+	@echo "  ALPINE_TAG=3.24.1       - Override Alpine used for apk lookup"
+	@echo "  GO_TAG=1.26-alpine3.24  - Override golang tag family for go-deps"
+	@echo "  MODULES=1               - Include Go module check in go-deps"
+	@echo "  CHECK=1                 - Exit non-zero if pins are stale (CI)"
+	@echo "  BUMP_ALPINE_PATCH=0     - Keep exact Alpine patch (default: bump within minor)"
 	@echo ""
 
 # Version info
@@ -392,6 +417,43 @@ clean:
 	@rm -rf $(DOCKERBUILD_TEMP)
 	@rm -rf build buildtmp
 	@echo "[CLEAN] Done"
+
+
+# =============================================================================
+# DEPENDENCY / PIN AUDIT TARGETS
+# =============================================================================
+# Three independent version planes:
+#   1) Alpine OS packages (apk)     → make apk
+#   2) Go toolchain image          → make go-deps   (app is stdlib-only today)
+#   3) External binaries           → make tools     (BuildKit, cosign, helpers)
+#
+# Default mode is report-only. Pass APPLY=1 to rewrite Dockerfiles / go.mod.
+
+APK_SCRIPT := scripts/make-apk.sh
+GO_SCRIPT  := scripts/make-go.sh
+TOOLS_SCRIPT := scripts/make-tools.sh
+
+.PHONY: apk
+apk:
+	@if [ ! -x $(APK_SCRIPT) ]; then chmod +x $(APK_SCRIPT); fi
+	@APPLY=$(APPLY) CHECK=$(CHECK) ALPINE_TAG=$(ALPINE_TAG) BUMP_ALPINE_PATCH=$(BUMP_ALPINE_PATCH) $(APK_SCRIPT) $(if $(filter 1,$(APPLY)),--apply,)
+
+.PHONY: go-deps
+go-deps:
+	@if [ ! -x $(GO_SCRIPT) ]; then chmod +x $(GO_SCRIPT); fi
+	@APPLY=$(APPLY) CHECK=$(CHECK) GO_TAG=$(GO_TAG) $(GO_SCRIPT) \
+		$(if $(filter 1,$(APPLY)),--apply,) \
+		$(if $(filter 1,$(MODULES)),--modules,) \
+		$(if $(filter 1,$(APPLY_MODULES)),--apply-modules,)
+
+.PHONY: tools
+tools:
+	@if [ ! -x $(TOOLS_SCRIPT) ]; then chmod +x $(TOOLS_SCRIPT); fi
+	@APPLY=$(APPLY) $(TOOLS_SCRIPT) $(if $(filter 1,$(APPLY)),--apply,)
+
+.PHONY: deps
+deps: apk go-deps tools
+	@echo "[SUCCESS] Dependency audit complete (apk + go + tools)"
 
 # =============================================================================
 # SHORTCUTS
