@@ -8,16 +8,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added `--buildah-opt` to pass arguments directly to Buildah
-- Added `--export-cache` and `--import-cache` flags for BuildKit advanced caching.
 
 ### Changed
 
 ### Fixed
-- Temporary build directories are now cleaned up on failed builds
-- fixed bug where digest file was not being created when --no-push is set
 
 ### Removed
+
+## [1.0.26] - 2026-08-12
+
+### Added
+- Dependency audit tooling for intentional pin updates:
+  - `make apk` / `scripts/make-apk.sh` — Alpine OS package pins vs latest
+  - `make go-deps` / `scripts/make-go.sh` — Go toolchain (`GO_IMAGE`) digests
+  - `make tools` / `scripts/make-tools.sh` — BuildKit, Cosign, credential helper versions
+  - `make deps` — run all three audits
+
+### Changed
+- Bumped runtime base to Alpine **3.24.1** (digest-pinned) for both BuildKit and Buildah images.
+- Bumped Go builder image to **golang:1.26.5-alpine3.24** (digest-pinned) for both Dockerfiles.
+- Refreshed pinned `apk` package versions for Alpine 3.24 (e.g. bash, git, crun, shadow, ca-certificates; Buildah stack including buildah 1.44.x, netavark, aardvark-dns).
+- Updated AWS ECR credential helper to **0.12.0** and Google docker-credential-gcr to **2.2.1**.
+- Pin base images and OS/application packages by digest/version in Dockerfiles (reproducible, intentional upgrades).
+- Pin GitHub Actions and security scanner action versions in CI workflows (`scan-image.yml`, `scan-repository.yml`, CodeQL-related fixes).
+
+### Fixed
+- CI workflow pinning issues for repository/image scanners and CodeQL configuration.
+
+### Removed
+
+## [1.0.25] - 2026-02-18
+
+### Added
+- Added `--buildah-opt` to pass arguments directly to Buildah.
+- Added `--export-cache` and `--import-cache` flags for BuildKit advanced caching.
+
+### Fixed
+- Temporary build directories are now cleaned up on failed builds.
+- Fixed bug where digest file was not created when `--no-push` is set.
+
+## [1.0.24] - 2026-02-18
+
+### Changed
+- Updated RapidFort CI/CD workflow configuration and permissions.
+
+### Fixed
+- Trivy Action version pinning in CI.
 
 ## [1.0.23] - 2026-02-18
 
