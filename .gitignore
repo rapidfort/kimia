@@ -112,3 +112,5 @@ docker-compose.override.yml
 
 # CI/CD
 .gitlab-ci-local/
+rfrebase-report.json
+rfrebase-report.md
