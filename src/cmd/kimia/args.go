@@ -37,10 +37,9 @@ func parseArgs(args []string) *Config {
 
 		// Handle both --flag=value and --flag value formats
 		var key, value string
-		if strings.Contains(arg, "=") {
-			parts := strings.SplitN(arg, "=", 2)
-			key = parts[0]
-			value = parts[1]
+		if k, v, ok := strings.Cut(arg, "="); ok {
+			key = k
+			value = v
 		} else {
 			key = arg
 		}
@@ -467,19 +466,17 @@ func parseInt(value string) int {
 }
 
 func parseBuildArg(arg string, config *Config) {
-	parts := strings.SplitN(arg, "=", 2)
-	if len(parts) == 2 {
-		config.BuildArgs[parts[0]] = parts[1]
+	if key, value, ok := strings.Cut(arg, "="); ok {
+		config.BuildArgs[key] = value
 	} else {
 		// Allow just key without value (will use environment variable)
-		config.BuildArgs[parts[0]] = ""
+		config.BuildArgs[arg] = ""
 	}
 }
 
 func parseLabel(label string, config *Config) {
-	parts := strings.SplitN(label, "=", 2)
-	if len(parts) == 2 {
-		config.Labels[parts[0]] = parts[1]
+	if key, value, ok := strings.Cut(label, "="); ok {
+		config.Labels[key] = value
 	} else {
 		logger.Fatal("Invalid label format: %s", label)
 	}
@@ -496,13 +493,13 @@ func parseAttestationConfig(s string) AttestationConfig {
 	
 	for _, part := range parts {
 		// Split by = (first occurrence only)
-		kv := strings.SplitN(part, "=", 2)
-		if len(kv) != 2 {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
 			logger.Fatal("Invalid attestation parameter: %s (expected key=value)", part)
 		}
-		
-		key := strings.TrimSpace(kv[0])
-		value := strings.TrimSpace(kv[1])
+
+		key := strings.TrimSpace(k)
+		value := strings.TrimSpace(v)
 		
 		if key == "type" {
 			config.Type = value

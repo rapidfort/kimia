@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Git reference validation patterns
+// Pre-compiled regex patterns — compiled once at package init, not per-call.
 var (
 	// gitRefPattern matches valid git branch/tag/ref names
 	// Allows: alphanumeric, dash, underscore, dot, forward slash
@@ -20,6 +20,51 @@ var (
 
 	// Docker tag pattern
 	tagPattern = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
+
+	// Build arg key pattern: uppercase letters/underscores
+	buildArgKeyPattern = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
+
+	// Registry host pattern (DNS hostname)
+	registryHostPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`)
+
+	// Registry port pattern
+	registryPortPattern = regexp.MustCompile(`^[0-9]{1,5}$`)
+
+	// Platform variant pattern
+	platformVariantPattern = regexp.MustCompile(`^v[0-9]+$`)
+
+	// Secret ID pattern
+	secretIDPattern = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+
+	// Label key pattern (allows dots, slashes for namespacing)
+	labelKeyPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9._/-]*[a-z0-9])?$`)
+
+	// Digest pattern
+	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
+	// Platform validation lookups — allocated once, read-only after init
+	validPlatformOS = map[string]bool{
+		"linux": true, "darwin": true, "windows": true,
+		"freebsd": true, "netbsd": true, "openbsd": true,
+		"solaris": true, "aix": true,
+	}
+	validPlatformArch = map[string]bool{
+		"amd64": true, "arm64": true, "arm": true, "386": true,
+		"ppc64le": true, "ppc64": true, "s390x": true,
+		"mips64le": true, "mips64": true, "riscv64": true,
+	}
+
+	// Export type validation lookup
+	validExportTypes = map[string]bool{
+		"image": true, "oci": true, "docker": true,
+		"local": true, "tar": true, "registry": true,
+	}
+
+	// Cache type validation lookup
+	validCacheTypes = map[string]bool{
+		"registry": true, "inline": true, "local": true,
+		"s3": true, "azblob": true, "gha": true,
+	}
 )
 
 // ValidateGitRef validates a git reference (branch, tag, or commit SHA)
@@ -240,12 +285,7 @@ func ValidateBuildArg(key string) error {
 	}
 
 	// Build arg keys should be simple identifiers
-	matched, err := regexp.MatchString(`^[A-Z_][A-Z0-9_]*$`, key)
-	if err != nil {
-		return fmt.Errorf("failed to validate build arg key: %v", err)
-	}
-
-	if !matched {
+	if !buildArgKeyPattern.MatchString(key) {
 		return fmt.Errorf("invalid build arg key format: %s (must be uppercase with underscores)", key)
 	}
 
@@ -297,24 +337,19 @@ func ValidateRegistryHost(host string) error {
 		return fmt.Errorf("registry host contains null byte")
 	}
 
-	// Basic hostname validation (simplified)
-	// Full DNS validation is complex; this catches obvious issues
-	hostPattern := regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`)
-
 	// Check for port
 	hostOnly := host
 	if idx := strings.LastIndex(host, ":"); idx != -1 {
 		hostOnly = host[:idx]
 		port := host[idx+1:]
-		
+
 		// Validate port is numeric and in valid range
-		portPattern := regexp.MustCompile(`^[0-9]{1,5}$`)
-		if !portPattern.MatchString(port) {
+		if !registryPortPattern.MatchString(port) {
 			return fmt.Errorf("invalid port in registry host: %s", port)
 		}
 	}
 
-	if !hostPattern.MatchString(hostOnly) {
+	if !registryHostPattern.MatchString(hostOnly) {
 		return fmt.Errorf("invalid registry host format: %s", hostOnly)
 	}
 
@@ -345,13 +380,10 @@ func ValidateBuildctlArg(arg string) error {
 // Validates both the key and checks the value for dangerous characters
 func ValidateBuildArgKeyValue(buildArg string) error {
 	// Must be in key=value format
-	if !strings.Contains(buildArg, "=") {
+	key, value, ok := strings.Cut(buildArg, "=")
+	if !ok {
 		return fmt.Errorf("build arg must be in key=value format")
 	}
-
-	parts := strings.SplitN(buildArg, "=", 2)
-	key := parts[0]
-	value := parts[1]
 
 	// Validate key using existing function
 	if err := ValidateBuildArg(key); err != nil {
@@ -368,17 +400,7 @@ func ValidateBuildArgKeyValue(buildArg string) error {
 
 // ValidateExportType validates buildctl export type
 func ValidateExportType(exportType string) error {
-	// Allowlist of valid export types for buildctl
-	validTypes := map[string]bool{
-		"image":    true,
-		"oci":      true,
-		"docker":   true,
-		"local":    true,
-		"tar":      true,
-		"registry": true,
-	}
-
-	if !validTypes[exportType] {
+	if !validExportTypes[exportType] {
 		return fmt.Errorf("invalid export type: %s (must be one of: image, oci, docker, local, tar, registry)", exportType)
 	}
 
@@ -426,49 +448,41 @@ func ValidatePlatform(platform string) error {
 		return fmt.Errorf("invalid platform: %v", err)
 	}
 
-	// Must contain at least os/arch
-	parts := strings.Split(platform, "/")
-	if len(parts) < 2 || len(parts) > 3 {
+	// Must contain at least os/arch — parse without allocating a []string
+	first := strings.IndexByte(platform, '/')
+	if first < 0 {
 		return fmt.Errorf("platform must be in format os/arch[/variant], got: %s", platform)
 	}
+	osStr := platform[:first]
+	rest := platform[first+1:]
 
-	// Validate OS (allowlist)
-	validOS := map[string]bool{
-		"linux":   true,
-		"darwin":  true,
-		"windows": true,
-		"freebsd": true,
-		"netbsd":  true,
-		"openbsd": true,
-		"solaris": true,
-		"aix":     true,
-	}
-	if !validOS[parts[0]] {
-		return fmt.Errorf("invalid OS in platform: %s", parts[0])
+	second := strings.IndexByte(rest, '/')
+	var archStr, variantStr string
+	if second < 0 {
+		archStr = rest
+	} else {
+		archStr = rest[:second]
+		variantStr = rest[second+1:]
+		// Check there's no fourth component
+		if strings.IndexByte(variantStr, '/') >= 0 {
+			return fmt.Errorf("platform must be in format os/arch[/variant], got: %s", platform)
+		}
 	}
 
-	// Validate architecture (allowlist)
-	validArch := map[string]bool{
-		"amd64":    true,
-		"arm64":    true,
-		"arm":      true,
-		"386":      true,
-		"ppc64le":  true,
-		"ppc64":    true,
-		"s390x":    true,
-		"mips64le": true,
-		"mips64":   true,
-		"riscv64":  true,
+	// Validate OS (allowlist — package-level map, no allocation)
+	if !validPlatformOS[osStr] {
+		return fmt.Errorf("invalid OS in platform: %s", osStr)
 	}
-	if !validArch[parts[1]] {
-		return fmt.Errorf("invalid architecture in platform: %s", parts[1])
+
+	// Validate architecture (allowlist — package-level map, no allocation)
+	if !validPlatformArch[archStr] {
+		return fmt.Errorf("invalid architecture in platform: %s", archStr)
 	}
 
 	// Variant validation if present
-	if len(parts) == 3 {
-		variantPattern := regexp.MustCompile(`^v[0-9]+$`)
-		if !variantPattern.MatchString(parts[2]) {
-			return fmt.Errorf("invalid variant in platform: %s (must be v<number>)", parts[2])
+	if variantStr != "" {
+		if !platformVariantPattern.MatchString(variantStr) {
+			return fmt.Errorf("invalid variant in platform: %s (must be v<number>)", variantStr)
 		}
 	}
 
@@ -508,30 +522,21 @@ func ValidateBuildKitCacheSpec(spec string) error {
 	}
 
 	// First pair must specify a valid type
-	first := strings.SplitN(pairs[0], "=", 2)
-	if len(first) != 2 || first[0] != "type" {
+	typeKey, typeVal, ok := strings.Cut(pairs[0], "=")
+	if !ok || typeKey != "type" {
 		return fmt.Errorf("cache spec must begin with type=<value> (e.g., type=registry)")
 	}
-	validTypes := map[string]bool{
-		"registry": true,
-		"inline":   true,
-		"local":    true,
-		"s3":       true,
-		"azblob":   true,
-		"gha":      true,
-	}
-	cacheType := first[1]
-	if !validTypes[cacheType] {
-		return fmt.Errorf("invalid cache type: %q (must be one of: registry, inline, local, s3, azblob, gha)", cacheType)
+	if !validCacheTypes[typeVal] {
+		return fmt.Errorf("invalid cache type: %q (must be one of: registry, inline, local, s3, azblob, gha)", typeVal)
 	}
 
 	// Validate each key=value pair format
 	for _, pair := range pairs[1:] {
-		kv := strings.SplitN(pair, "=", 2)
-		if len(kv) != 2 {
+		k, _, ok := strings.Cut(pair, "=")
+		if !ok {
 			return fmt.Errorf("cache spec pair %q is not in key=value format", pair)
 		}
-		if kv[0] == "" {
+		if k == "" {
 			return fmt.Errorf("cache spec has empty key in pair %q", pair)
 		}
 	}
@@ -555,8 +560,7 @@ func ValidateSecretID(secretID string) error {
 	}
 
 	// Secret IDs should be simple alphanumeric identifiers
-	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
-	if !pattern.MatchString(secretID) {
+	if !secretIDPattern.MatchString(secretID) {
 		return fmt.Errorf("invalid secret ID: %s (must start with letter, contain only alphanumeric/underscore/hyphen)", secretID)
 	}
 
@@ -649,13 +653,10 @@ func ValidateGitURL(url string) error {
 // Similar to build args but with different key requirements
 func ValidateLabelKeyValue(label string) error {
 	// Must be in key=value format
-	if !strings.Contains(label, "=") {
+	key, value, ok := strings.Cut(label, "=")
+	if !ok {
 		return fmt.Errorf("label must be in key=value format")
 	}
-
-	parts := strings.SplitN(label, "=", 2)
-	key := parts[0]
-	value := parts[1]
 
 	// Check for null bytes
 	if strings.Contains(key, "\x00") || strings.Contains(value, "\x00") {
@@ -664,8 +665,7 @@ func ValidateLabelKeyValue(label string) error {
 
 	// Label keys can contain dots, slashes (for namespacing)
 	// Format: [prefix/]name where prefix is often a reverse domain
-	labelPattern := regexp.MustCompile(`^[a-z0-9]([a-z0-9._/-]*[a-z0-9])?$`)
-	if !labelPattern.MatchString(key) {
+	if !labelKeyPattern.MatchString(key) {
 		return fmt.Errorf("invalid label key format: %s", key)
 	}
 
@@ -744,7 +744,6 @@ func ValidateImageReference(ref string) error {
 	// Validate digest if present
 	if digestIdx != -1 {
 		digest := ref[digestIdx+1:]
-		digestPattern := regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 		if !digestPattern.MatchString(digest) {
 			return fmt.Errorf("invalid digest format: %s", digest)
 		}

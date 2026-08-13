@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"github.com/rapidfort/kimia/internal/auth"
@@ -186,7 +187,7 @@ func executeBuildah(config Config, ctx *Context) error {
 	for _, key := range buildArgKeys {
 		value := config.BuildArgs[key]
 		if value != "" {
-			args = append(args, "--build-arg", fmt.Sprintf("%s=%s", key, value))
+			args = append(args, "--build-arg", key+"="+value)
 		} else {
 			// Use environment variable
 			args = append(args, "--build-arg", key)
@@ -204,7 +205,7 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	for _, key := range labelKeys {
 		value := config.Labels[key]
-		args = append(args, "--label", fmt.Sprintf("%s=%s", key, value))
+		args = append(args, "--label", key+"="+value)
 	}
 
 	// Add target if specified
@@ -232,7 +233,7 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	// Add retry option for image downloads
 	if config.ImageDownloadRetry > 0 {
-		args = append(args, "--retry", fmt.Sprintf("%d", config.ImageDownloadRetry))
+		args = append(args, "--retry", strconv.Itoa(config.ImageDownloadRetry))
 		logger.Info("Image download retry set to %d attempts", config.ImageDownloadRetry)
 	}
 
@@ -914,20 +915,20 @@ func executeBuildKit(config Config, ctx *Context) error {
 		}
 	}
 
-	args = append(args, "--opt", fmt.Sprintf("filename=%s", dockerfilePath))
+	args = append(args, "--opt", "filename="+dockerfilePath)
 
 	// Add context: Git URL or local path
 	if isGitContext {
 		// Use Git URL for BuildKit native Git support
 		// BuildKit requires Git URLs to be passed as --opt context=
 		logger.Debug("Using Git context: %s", logger.SanitizeGitURL(buildContext))
-		args = append(args, "--opt", fmt.Sprintf("context=%s", buildContext))
-		args = append(args, "--opt", fmt.Sprintf("dockerfile=%s", buildContext))
+		args = append(args, "--opt", "context="+buildContext)
+		args = append(args, "--opt", "dockerfile="+buildContext)
 	} else {
 		// Use local context
 		logger.Debug("Using local context: %s", buildContext)
-		args = append(args, "--local", fmt.Sprintf("context=%s", buildContext))
-		args = append(args, "--local", fmt.Sprintf("dockerfile=%s", buildContext))
+		args = append(args, "--local", "context="+buildContext)
+		args = append(args, "--local", "dockerfile="+buildContext)
 	}
 
 	// ========================================
@@ -942,9 +943,9 @@ func executeBuildKit(config Config, ctx *Context) error {
 	for _, key := range buildArgKeys {
 		value := config.BuildArgs[key]
 		if value != "" {
-			args = append(args, "--opt", fmt.Sprintf("build-arg:%s=%s", key, value))
+			args = append(args, "--opt", "build-arg:"+key+"="+value)
 		} else {
-			args = append(args, "--opt", fmt.Sprintf("build-arg:%s", key))
+			args = append(args, "--opt", "build-arg:"+key)
 		}
 	}
 
@@ -959,17 +960,17 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 	for _, key := range labelKeys {
 		value := config.Labels[key]
-		args = append(args, "--opt", fmt.Sprintf("label:%s=%s", key, value))
+		args = append(args, "--opt", "label:"+key+"="+value)
 	}
 
 	// Add target if specified
 	if config.Target != "" {
-		args = append(args, "--opt", fmt.Sprintf("target=%s", config.Target))
+		args = append(args, "--opt", "target="+config.Target)
 	}
 
 	// Add platform if specified
 	if config.CustomPlatform != "" {
-		args = append(args, "--opt", fmt.Sprintf("platform=%s", config.CustomPlatform))
+		args = append(args, "--opt", "platform="+config.CustomPlatform)
 	}
 
 	// ========================================
@@ -981,8 +982,8 @@ func executeBuildKit(config Config, ctx *Context) error {
 	var sourceEpoch string
 	if config.Reproducible && config.Timestamp != "" {
 		sourceEpoch = config.Timestamp
-		args = append(args, "--opt", fmt.Sprintf("source-date-epoch=%s", sourceEpoch))
-		args = append(args, "--opt", fmt.Sprintf("build-arg:SOURCE_DATE_EPOCH=%s", sourceEpoch))
+		args = append(args, "--opt", "source-date-epoch="+sourceEpoch)
+		args = append(args, "--opt", "build-arg:SOURCE_DATE_EPOCH="+sourceEpoch)
 		logger.Debug("Using timestamp=%s for reproducible build", sourceEpoch)
 	}
 
@@ -1036,7 +1037,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	if config.TarPath != "" {
 		// Export to tar
-		outputOpts := fmt.Sprintf("type=docker,dest=%s", config.TarPath)
+		outputOpts := "type=docker,dest=" + config.TarPath
 		if config.Reproducible && sourceEpoch != "" {
 			outputOpts += ",rewrite-timestamp=true"
 			logger.Debug("Added rewrite-timestamp=true for reproducible tar export")
@@ -1045,7 +1046,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else if !config.NoPush {
 		// Push to registries
 		for _, dest := range sortedDests {
-			outputOpts := fmt.Sprintf("type=image,name=%s,push=true", dest)
+			outputOpts := "type=image,name=" + dest + ",push=true"
 			if config.Reproducible && sourceEpoch != "" {
 				outputOpts += ",rewrite-timestamp=true"
 				logger.Debug("Added rewrite-timestamp=true for reproducible push: %s", dest)
@@ -1055,7 +1056,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else {
 		// Build only, no push
 		for _, dest := range sortedDests {
-			outputOpts := fmt.Sprintf("type=image,name=%s,push=false", dest)
+			outputOpts := "type=image,name=" + dest + ",push=false"
 			if config.Reproducible && sourceEpoch != "" {
 				outputOpts += ",rewrite-timestamp=true"
 				logger.Debug("Added rewrite-timestamp=true for reproducible build: %s", dest)
@@ -1834,17 +1835,15 @@ func sanitizeCommandArgs(args []string) []string {
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "context=") || strings.HasPrefix(arg, "dockerfile=") {
 			// Handle --opt context=URL or --opt dockerfile=URL format
-			parts := strings.SplitN(arg, "=", 2)
-			if len(parts) == 2 {
-				sanitized[i] = parts[0] + "=" + logger.SanitizeGitURL(parts[1])
+			if key, val, ok := strings.Cut(arg, "="); ok {
+				sanitized[i] = key + "=" + logger.SanitizeGitURL(val)
 			} else {
 				sanitized[i] = arg
 			}
 		} else if strings.HasPrefix(arg, "build-arg:") {
 			// Handle --opt build-arg:KEY=VALUE format
-			parts := strings.SplitN(arg, "=", 2)
-			if len(parts) == 2 {
-				argName := strings.TrimPrefix(parts[0], "build-arg:")
+			if key, _, ok := strings.Cut(arg, "="); ok {
+				argName := strings.TrimPrefix(key, "build-arg:")
 				// Check if this is a sensitive build arg
 				isSensitive := false
 				for _, sensitive := range sensitiveArgs {
@@ -1854,7 +1853,7 @@ func sanitizeCommandArgs(args []string) []string {
 					}
 				}
 				if isSensitive {
-					sanitized[i] = parts[0] + "=***REDACTED***"
+					sanitized[i] = key + "=***REDACTED***"
 				} else {
 					sanitized[i] = arg
 				}
