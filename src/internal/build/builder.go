@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/rapidfort/kimia/internal/auth"
+	"github.com/rapidfort/kimia/internal/validation"
+	"github.com/rapidfort/kimia/pkg/logger"
 	"io"
 	"os"
 	"os/exec"
@@ -11,9 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"github.com/rapidfort/kimia/internal/auth"
-	"github.com/rapidfort/kimia/internal/validation"
-	"github.com/rapidfort/kimia/pkg/logger"
 )
 
 // Config holds build configuration
@@ -53,6 +53,10 @@ type Config struct {
 	ImageNameWithDigestFile    string
 	ImageNameTagWithDigestFile string
 
+	// Scan: export the merged final rootfs and run rfscan after the build
+	Scan       bool
+	ScanRootfs string // directory for BuildKit type=local export
+
 	// Reproducible builds
 	Reproducible bool
 	Timestamp    string
@@ -60,13 +64,13 @@ type Config struct {
 	// Attestation and signing (BuildKit only)
 	// Level 1: Simple mode (backward compatible)
 	Attestation string // "off", "min" or "max"
-	
+
 	// Level 2: Docker-style attestations (advanced)
 	AttestationConfigs []AttestationConfig
-	
+
 	// Level 3: Direct BuildKit options (escape hatch)
 	BuildKitOpts []string
-	
+
 	// Signing
 	Sign              bool   // Enable signing with cosign
 	CosignKeyPath     string // Path to cosign private key
@@ -245,13 +249,13 @@ func executeBuildah(config Config, ctx *Context) error {
 	var sourceEpoch string
 	if config.Reproducible && config.Timestamp != "" {
 		sourceEpoch = config.Timestamp
-    
-    	// 1. Set timestamp for image metadata
-    	args = append(args, "--timestamp", sourceEpoch)
-    
-    	// 2. Pass as build arg so Dockerfile can use it
-    	//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
-    
+
+		// 1. Set timestamp for image metadata
+		args = append(args, "--timestamp", sourceEpoch)
+
+		// 2. Pass as build arg so Dockerfile can use it
+		//args = append(args, "--build-arg", fmt.Sprintf("SOURCE_DATE_EPOCH=%s", sourceEpoch))
+
 	}
 
 	// Add insecure registry options for build
@@ -353,7 +357,7 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	if config.NoPush {
 		logger.Info("No push requested, skipping image push to registries")
-		
+
 		// If digest files are requested, we need to extract the local Image ID
 		// since we aren't pushing to a registry to get a manifest digest.
 		if config.DigestFile != "" || config.ImageNameWithDigestFile != "" || config.ImageNameTagWithDigestFile != "" {
@@ -531,20 +535,20 @@ func validateBuildahInputs(config Config, ctx *Context) error {
 		"--source-date-epoch": "use --timestamp or --reproducible instead",
 		// Don't prevent users from overriding --tls-verify
 		//"--tls-verify":        "use --insecure or --insecure-registry instead",
-		"--retry":             "use --image-download-retry instead",
-		"-t":                  "use -d/--destination instead",
-		"--tag":               "use -d/--destination instead",
-		"--no-cache":          "use --cache=false instead",
-		"--layers":            "use --cache instead",
+		"--retry":    "use --image-download-retry instead",
+		"-t":         "use -d/--destination instead",
+		"--tag":      "use -d/--destination instead",
+		"--no-cache": "use --cache=false instead",
+		"--layers":   "use --cache instead",
 		// Security-sensitive flags managed implicitly by Kimia via BUILDAH_ISOLATION=chroot
-		"--isolation":         "isolation is managed by Kimia (chroot)",
-		"--userns":            "user namespace configuration is managed by Kimia",
-		"--userns-uid-map":    "user namespace configuration is managed by Kimia",
-		"--userns-gid-map":    "user namespace configuration is managed by Kimia",
-		"--cap-add":           "capability management is outside Kimia's scope",
-		"--cap-drop":          "capability management is outside Kimia's scope",
-		"--security-opt":      "security options are managed by Kimia",
-		"--privileged":        "privileged mode is not supported by Kimia",
+		"--isolation":      "isolation is managed by Kimia (chroot)",
+		"--userns":         "user namespace configuration is managed by Kimia",
+		"--userns-uid-map": "user namespace configuration is managed by Kimia",
+		"--userns-gid-map": "user namespace configuration is managed by Kimia",
+		"--cap-add":        "capability management is outside Kimia's scope",
+		"--cap-drop":       "capability management is outside Kimia's scope",
+		"--security-opt":   "security options are managed by Kimia",
+		"--privileged":     "privileged mode is not supported by Kimia",
 	}
 
 	for i, opt := range config.BuildahOpts {
@@ -636,6 +640,9 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 	// Sanitize XDG_RUNTIME_DIR
 	xdgRuntimeDir = filepath.Clean(xdgRuntimeDir)
+	if err := os.MkdirAll(xdgRuntimeDir, 0o700); err != nil {
+		return fmt.Errorf("failed to create XDG_RUNTIME_DIR %s: %v", xdgRuntimeDir, err)
+	}
 
 	// Check for null bytes in XDG_RUNTIME_DIR
 	if strings.Contains(xdgRuntimeDir, "\x00") {
@@ -663,7 +670,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if ctx.IsGitRepo && ctx.GitURL != "" {
 		logger.Info("Using BuildKit native Git context (no local clone)")
 		isGitContext = true
-		
+
 		// Format Git URL with authentication, branch/revision, and subcontext
 		formattedURL, err := FormatGitURLForBuildKit(ctx.GitURL, ctx.GitConfig, ctx.SubContext)
 		if err != nil {
@@ -673,7 +680,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	} else {
 		// Local context handling
 		buildContext = ctx.Path
-		
+
 		// Only copy if it's a bind mount, not a git clone
 		isBindMount := (ctx.Path == workspaceMount || ctx.Path == "/workspace") && !ctx.IsGitRepo
 		if isBindMount {
@@ -740,7 +747,7 @@ func executeBuildKit(config Config, ctx *Context) error {
   noProcessSandbox = true
 `
 			logger.Debug("Config file not found, using default (matches Dockerfile)")
-			
+
 			// Create config directory if it doesn't exist
 			configDir := filepath.Dir(buildkitConfig)
 			// #nosec G301,G703 -- 0755 for config directory (contains TOML, not credentials); configDir from sanitized homeDir
@@ -751,7 +758,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 
 		// Collect all registries that need insecure config
 		registries := make(map[string]bool)
-		
+
 		// If --insecure is set, add all destination registries
 		if config.Insecure {
 			for _, dest := range config.Destination {
@@ -761,7 +768,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				}
 			}
 		}
-		
+
 		// Add specific insecure registries from --insecure-registry
 		for _, registry := range config.InsecureRegistry {
 			registries[registry] = true
@@ -820,7 +827,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 		"rootlesskit",
 		"--state-dir="+filepath.Join(xdgRuntimeDir, "rk-buildkit"),
 		"--net=host",
-		"--copy-up=/home",  // <-- rootlesskit creates new mount namespaces.
+		"--copy-up=/home", // <-- rootlesskit creates new mount namespaces.
 		"--disable-host-loopback",
 		"buildkitd",
 		"--config="+cleanConfig,
@@ -830,7 +837,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	daemonCmd.Env = append(os.Environ(),
 		"HOME=/home/kimia",
 		"DOCKER_CONFIG=/home/kimia/.docker",
-		"XDG_RUNTIME_DIR=/tmp/run",
+		"XDG_RUNTIME_DIR="+xdgRuntimeDir,
 	)
 
 	daemonCmd.Stdout = os.Stdout
@@ -1064,13 +1071,19 @@ func executeBuildKit(config Config, ctx *Context) error {
 		}
 	}
 
+	// Extra output: merged final rootfs for --scan (no docker/podman).
+	if config.Scan && config.ScanRootfs != "" {
+		args = append(args, "--output", fmt.Sprintf("type=local,dest=%s", config.ScanRootfs))
+		logger.Info("Scan rootfs export: type=local,dest=%s", config.ScanRootfs)
+	}
+
 	// ========================================
 	// ATTESTATION: Configure attestations for BuildKit
 	// ========================================
-	
+
 	// Determine which attestation mode to use
 	var attestOpts []string
-	
+
 	if len(config.AttestationConfigs) > 0 {
 		// Level 2: Docker-style attestations
 		attestOpts = buildAttestationOptsFromConfigs(config.AttestationConfigs, &args, config.Reproducible)
@@ -1083,7 +1096,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 		// No attestations
 		logger.Debug("Attestations disabled")
 	}
-	
+
 	// Add attestation options to args
 	for _, opt := range attestOpts {
 		args = append(args, "--opt", opt)
@@ -1093,7 +1106,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	if config.Reproducible && len(attestOpts) > 0 {
 		logger.Warning("Reproducible build with attestations enabled. Attestation payloads include timestamps/IDs, so the image index digest will vary across runs. Compare the platform manifest digest or disable attestations if you need a stable digest.")
 	}
-	
+
 	// Level 3: Direct BuildKit options (pass-through)
 	for _, opt := range config.BuildKitOpts {
 		args = append(args, "--opt", opt)
@@ -1110,7 +1123,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 			return fmt.Errorf("validation failed for buildctl argument %d (%q): %v", i, arg, err)
 		}
 	}
-	
+
 	// Specifically validate critical arguments
 	for _, arg := range args {
 		// Validate Git URLs in context
@@ -1122,7 +1135,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				}
 			}
 		}
-		
+
 		// Validate image names in output
 		if strings.HasPrefix(arg, "type=image,name=") {
 			// Extract image name from output parameter
@@ -1136,7 +1149,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				}
 			}
 		}
-		
+
 		// Validate platform strings
 		if strings.HasPrefix(arg, "platform=") {
 			platform := strings.TrimPrefix(arg, "platform=")
@@ -1144,7 +1157,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				return fmt.Errorf("invalid platform: %v", err)
 			}
 		}
-		
+
 		// Validate build args for proper format
 		if strings.HasPrefix(arg, "build-arg:") {
 			buildArg := strings.TrimPrefix(arg, "build-arg:")
@@ -1152,7 +1165,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				return fmt.Errorf("invalid build argument: %v", err)
 			}
 		}
-		
+
 		// Validate labels
 		if strings.HasPrefix(arg, "label:") {
 			label := strings.TrimPrefix(arg, "label:")
@@ -1168,7 +1181,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// ========================================
 	// Create command with output capture for digest extraction
 	var stdoutBuf, stderrBuf bytes.Buffer
-	
+
 	// Log the command being executed (with credentials sanitized)
 	logger.Info("Executing: buildctl %s", strings.Join(sanitizeCommandArgs(args), " "))
 
@@ -1225,7 +1238,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	// REPRODUCIBLE BUILDS: Extract digest from output
 	// ========================================
 	digestMap := make(map[string]string) // Map tag -> digest
-	
+
 	if len(config.Destination) > 0 {
 		stderrOutput := stderrBuf.String()
 		stdoutOutput := stdoutBuf.String()
@@ -1306,7 +1319,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 			logger.Warning("Signing requested but no cosign key provided (--cosign-key), skipping signature")
 		} else {
 			logger.Info("Signing images with cosign...")
-			
+
 			for _, dest := range config.Destination {
 				// Use digest-based reference if available
 				imageToSign := dest
@@ -1331,7 +1344,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 				} else {
 					logger.Warning("No digest found for %s, signing with tag (not recommended)", dest)
 				}
-				
+
 				if err := signImageWithCosign(imageToSign, config); err != nil {
 					return fmt.Errorf("failed to sign image %s: %v", imageToSign, err)
 				}
@@ -1382,7 +1395,6 @@ func exportToTar(config Config) error {
 	// #nosec G204 -- image and tarPath validated by validateBuildahInputs
 	cmd := exec.Command("buildah", "push", image, fmt.Sprintf("docker-archive:%s", config.TarPath))
 
-	
 	var stderr strings.Builder
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = &stderr
@@ -1617,14 +1629,14 @@ func copyFile(src, dst string) error {
 // buildAttestationOptsFromSimpleMode converts simple mode to BuildKit opts
 func buildAttestationOptsFromSimpleMode(mode string, reproducible bool) []string {
 	var opts []string
-	
+
 	// Build reproducible suffix for provenance
 	reproducibleSuffix := ""
 	if reproducible {
 		reproducibleSuffix = ",reproducible=true"
 		logger.Debug("Adding reproducible=true to provenance attestation")
 	}
-	
+
 	switch mode {
 	case "min":
 		// Provenance only, minimal info
@@ -1632,17 +1644,17 @@ func buildAttestationOptsFromSimpleMode(mode string, reproducible bool) []string
 		opts = append(opts, "attest:sbom=false")
 		opts = append(opts, "attest:provenance=mode=min"+reproducibleSuffix)
 		logger.Debug("Simple mode 'min': provenance only (SBOM explicitly disabled)")
-		
+
 	case "max":
 		// SBOM + Provenance, maximum info
 		opts = append(opts, "attest:sbom=true")
 		opts = append(opts, "attest:provenance=mode=max"+reproducibleSuffix)
 		logger.Debug("Simple mode 'max': SBOM + provenance")
-		
+
 	default:
 		logger.Fatal("Invalid attestation mode: %s", mode)
 	}
-	
+
 	return opts
 }
 
@@ -1650,13 +1662,13 @@ func buildAttestationOptsFromSimpleMode(mode string, reproducible bool) []string
 func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string, reproducible bool) []string {
 	var opts []string
 	hasProvenance := false
-	
+
 	for _, config := range configs {
 		switch config.Type {
 		case "sbom":
 			opt := buildSBOMOpt(config)
 			opts = append(opts, opt)
-			
+
 			// Handle scan options as build args
 			if config.Params["scan-context"] == "true" {
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_CONTEXT=1")
@@ -1666,7 +1678,7 @@ func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string
 				*args = append(*args, "--opt", "build-arg:BUILDKIT_SBOM_SCAN_STAGE=1")
 				logger.Debug("Added SBOM scan build arg: BUILDKIT_SBOM_SCAN_STAGE=1")
 			}
-			
+
 		case "provenance":
 			opts = append(opts, buildProvenanceOpt(config, reproducible))
 			hasProvenance = true
@@ -1674,14 +1686,14 @@ func buildAttestationOptsFromConfigs(configs []AttestationConfig, args *[]string
 			logger.Fatal("Unknown attestation type: %s", config.Type)
 		}
 	}
-	
+
 	// If reproducible is set and no explicit provenance config was provided,
 	// BuildKit may still generate default provenance. Add reproducible flag.
 	if reproducible && !hasProvenance {
 		opts = append(opts, "attest:provenance=mode=min,reproducible=true")
 		logger.Debug("Auto-added reproducible provenance attestation")
 	}
-	
+
 	return opts
 }
 
@@ -1691,17 +1703,17 @@ func buildSBOMOpt(config AttestationConfig) string {
 	if len(config.Params) == 0 {
 		return "attest:sbom=true"
 	}
-	
+
 	// Build comma-separated params
 	var parts []string
-	
+
 	// Special handling for generator param
 	if generator, ok := config.Params["generator"]; ok {
 		parts = append(parts, fmt.Sprintf("generator=%s", generator))
 	} else {
 		parts = append(parts, "true") // Enable with default generator
 	}
-	
+
 	// Add any other params as-is (except scan-context and scan-stage which are handled separately)
 	// Sort keys for reproducible output
 	sbomKeys := make([]string, 0, len(config.Params))
@@ -1714,21 +1726,21 @@ func buildSBOMOpt(config AttestationConfig) string {
 	for _, key := range sbomKeys {
 		parts = append(parts, fmt.Sprintf("%s=%s", key, config.Params[key]))
 	}
-	
+
 	return fmt.Sprintf("attest:sbom=%s", strings.Join(parts, ","))
 }
 
 // buildProvenanceOpt builds a single provenance attestation opt
 func buildProvenanceOpt(config AttestationConfig, reproducible bool) string {
 	var parts []string
-	
+
 	// Mode (default to max if not specified)
 	mode := config.Params["mode"]
 	if mode == "" {
 		mode = "max"
 	}
 	parts = append(parts, fmt.Sprintf("mode=%s", mode))
-	
+
 	// Force reproducible=true for reproducible builds if not already set
 	if reproducible {
 		if _, ok := config.Params["reproducible"]; !ok {
@@ -1736,7 +1748,7 @@ func buildProvenanceOpt(config AttestationConfig, reproducible bool) string {
 			logger.Debug("Auto-injected reproducible=true into provenance attestation")
 		}
 	}
-	
+
 	// Add all other parameters in a consistent order
 	paramOrder := []string{"builder-id", "reproducible", "inline-only", "version", "filename"}
 	for _, key := range paramOrder {
@@ -1744,7 +1756,7 @@ func buildProvenanceOpt(config AttestationConfig, reproducible bool) string {
 			parts = append(parts, fmt.Sprintf("%s=%s", key, value))
 		}
 	}
-	
+
 	// Add any remaining params not in the order list (sorted for reproducibility)
 	remainingKeys := make([]string, 0)
 	for key := range config.Params {
@@ -1756,7 +1768,7 @@ func buildProvenanceOpt(config AttestationConfig, reproducible bool) string {
 	for _, key := range remainingKeys {
 		parts = append(parts, fmt.Sprintf("%s=%s", key, config.Params[key]))
 	}
-	
+
 	return fmt.Sprintf("attest:provenance=%s", strings.Join(parts, ","))
 }
 
@@ -1792,7 +1804,7 @@ func signImageWithCosign(image string, config Config) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
-	
+
 	cmd.Env = append(cmd.Env, "COSIGN_EXPERIMENTAL=1")
 
 	// Set cosign password from environment variable if specified

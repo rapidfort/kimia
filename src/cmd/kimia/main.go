@@ -87,12 +87,6 @@ func main() {
 	}
 
 	// Check for enterprise-only flags
-	if config.Scan {
-		fmt.Fprintf(os.Stderr, "Error: --scan is an enterprise-only feature\n")
-		fmt.Fprintf(os.Stderr, "This is the OSS version which supports build-only operations.\n")
-		os.Exit(1)
-	}
-
 	if config.Harden {
 		fmt.Fprintf(os.Stderr, "Error: --harden is an enterprise-only feature\n")
 		fmt.Fprintf(os.Stderr, "This is the OSS version which supports build-only operations.\n")
@@ -195,6 +189,16 @@ func run(config *Config, builder string) error {
 		return fmt.Errorf("failed to setup authentication: %v", err)
 	}
 
+	var scanRootfs string
+	if config.Scan {
+		var scanErr error
+		scanRootfs, scanErr = prepareScanRootfs()
+		if scanErr != nil {
+			return fmt.Errorf("prepare scan rootfs: %v", scanErr)
+		}
+		logger.Info("Scan enabled: will export merged rootfs and run rfscan after build")
+	}
+
 	// Execute build based on detected builder
 	buildConfig := build.Config{
 		Dockerfile:                 config.Dockerfile,
@@ -227,6 +231,8 @@ func run(config *Config, builder string) error {
 		CosignKeyPath:              config.CosignKeyPath,
 		CosignPasswordEnv:          config.CosignPasswordEnv,
 		BuildahOpts:                config.BuildahOpts,
+		Scan:                       config.Scan,
+		ScanRootfs:                 scanRootfs,
 	}
 
 	// Execute build
@@ -253,6 +259,12 @@ func run(config *Config, builder string) error {
 		// Save digest information after successful push
 		if err := build.SaveDigestInfo(buildConfig, digestMap); err != nil {
 			logger.Warning("Failed to save digest information: %v", err)
+		}
+	}
+
+	if config.Scan {
+		if err := runRapidFortScan(config, builder, scanRootfs); err != nil {
+			return fmt.Errorf("scan failed: %v", err)
 		}
 	}
 

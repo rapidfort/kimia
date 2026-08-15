@@ -53,6 +53,31 @@ BUILD_ARGS := \
               --build-arg KIMIA_USER=$(KIMIA_USER) \
               --build-arg KIMIA_UID=$(KIMIA_UID)
 
+# Optional RapidFort CLI baked into the BuildKit image.
+#   make build RF_APP_HOST=us01.rapidfort.com
+#
+# Local TLS trust matches platform/play.sh: copy the ingress cert into
+# /usr/local/share/ca-certificates/ and run update-ca-certificates. Never -k.
+RF_CA_CERT ?= /usr/local/share/ca-certificates/rapidfort-tls.crt
+RF_REGISTRY_CERT ?= /usr/local/share/ca-certificates/registry.crt
+CLI_BUILD_ARGS :=
+ifneq ($(strip $(RF_APP_HOST)),)
+CLI_BUILD_ARGS += --build-arg RF_APP_HOST=$(RF_APP_HOST)
+endif
+
+.PHONY: _stage-certs
+_stage-certs:
+	@rm -f certs/*.crt
+	@mkdir -p certs
+	@if [ -f "$(RF_CA_CERT)" ]; then \
+		cp -f "$(RF_CA_CERT)" certs/rapidfort-tls.crt; \
+		echo "[CERT] Staged $(RF_CA_CERT) -> certs/rapidfort-tls.crt"; \
+	fi
+	@if [ -f "$(RF_REGISTRY_CERT)" ]; then \
+		cp -f "$(RF_REGISTRY_CERT)" certs/registry.crt; \
+		echo "[CERT] Staged $(RF_REGISTRY_CERT) -> certs/registry.crt"; \
+	fi
+
 # Default target
 .PHONY: all
 all: build-all push-all
@@ -121,6 +146,8 @@ help:
 	@echo ""
 	@echo "Environment Variables:"
 	@echo "  REGISTRY                - Docker registry (default: based on RF_APP_HOST)"
+	@echo "  RF_APP_HOST             - If set, install RapidFort CLI from https://<RF_APP_HOST>/cli"
+	@echo "  RF_CA_CERT              - Local TLS cert to trust (default: /usr/local/share/ca-certificates/rapidfort-tls.crt)"
 	@echo "  APPLY=1                 - Apply pin rewrites (apk/go-deps/tools)"
 	@echo "  ALPINE_TAG=3.24.1       - Override Alpine used for apk lookup"
 	@echo "  GO_TAG=1.26-alpine3.24  - Override golang tag family for go-deps"
@@ -149,7 +176,7 @@ version:
 
 # Internal build target for BuildKit (doesn't increment version)
 .PHONY: _build-buildkit
-_build-buildkit:
+_build-buildkit: _stage-certs
 	@if [ -f $(VERSION_FILE) ]; then \
 		VERSION=$(VERSION_BASE)-dev`cat $(VERSION_FILE)`; \
 	else \
@@ -160,7 +187,7 @@ _build-buildkit:
 	echo "Version: $$VERSION"; \
 	BUILD_DATE=`date +%s` && \
 	echo "Building $(IMAGE_NAME_BUILDKIT) Image: $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION ..." && \
-	docker build -t $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) -f Dockerfile.buildkit . && \
+	docker build -t $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION --build-arg VERSION=$$VERSION $(BUILD_ARGS) $(CLI_BUILD_ARGS) -f Dockerfile.buildkit . && \
 	docker tag $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):$$VERSION $(REGISTRY)/$(IMAGE_NAME_BUILDKIT):latest && \
 	echo "[SUCCESS] BuildKit image complete! Version: $$VERSION" && \
 	echo "[SUCCESS] Tagged as: latest"

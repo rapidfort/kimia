@@ -114,3 +114,8 @@ docker-compose.override.yml
 .gitlab-ci-local/
 rfrebase-report.json
 rfrebase-report.md
+certs/
+
+
+# Staged local TLS certs from the build host (platform/play.sh)
+certs/*.crt

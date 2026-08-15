@@ -20,6 +20,7 @@ spec:
           - --dockerfile=mainline/alpine/Dockerfile
           - --destination=mynginx
           - --no-push
+          - --scan
         securityContext:
           allowPrivilegeEscalation: true
           capabilities:
