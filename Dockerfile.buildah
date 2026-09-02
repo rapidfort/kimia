@@ -48,7 +48,7 @@ ARG TARGETARCH
 ARG ECR_HELPER_VERSION
 ARG GCR_HELPER_VERSION
 
-RUN apk add --no-cache curl=8.21.0-r0
+RUN apk add --no-cache curl=8.22.0-r0
 
 # AWS ECR credential helper
 RUN ARCH=$(case ${TARGETARCH} in \
@@ -105,7 +105,7 @@ RUN apk add --no-cache \
     gnutls=3.8.13-r0 \
     gpgme=2.0.1-r1 \
     iptables=1.8.13-r0 \
-    jq=1.8.1-r0 \
+    jq=1.8.2-r0 \
     libseccomp=2.6.0-r2 \
     netavark=1.17.2-r0 \
     ostree=2025.7-r1 \
