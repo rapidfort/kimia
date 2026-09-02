@@ -36,6 +36,11 @@ type Config struct {
 	ExportCache []string // BuildKit --export-cache options (e.g. "type=registry,ref=...,mode=max")
 	ImportCache []string // BuildKit --import-cache options (e.g. "type=registry,ref=...")
 
+	// Build-time secret mounts (e.g. "id=npmrc,src=/run/secrets/npmrc").
+	// Consumed by Dockerfiles via RUN --mount=type=secret,id=...
+	// Values never enter image layers, build history, or the cache.
+	Secrets []string
+
 	// Storage driver
 	StorageDriver string
 
@@ -268,6 +273,19 @@ func executeBuildah(config Config, ctx *Context) error {
 
 	for _, dest := range sortedDests {
 		args = append(args, "-t", dest)
+	}
+
+	// ========================================
+	// BUILD-TIME SECRETS
+	// ========================================
+	// buildah bud accepts the same id=/src=/env= spec as buildctl, so the same
+	// Dockerfile RUN --mount=type=secret,id=... works on both backends.
+	for _, sec := range config.Secrets {
+		if err := validation.ValidateBuildSecretSpec(sec); err != nil {
+			return fmt.Errorf("invalid --secret value %q: %v", sec, err)
+		}
+		args = append(args, "--secret", sec)
+		logger.Debug("Added build secret: %s", sec)
 	}
 
 	// ========================================
@@ -535,6 +553,7 @@ func validateBuildahInputs(config Config, ctx *Context) error {
 		"-t":                  "use -d/--destination instead",
 		"--tag":               "use -d/--destination instead",
 		"--no-cache":          "use --cache=false instead",
+		"--secret":            "use --secret instead",
 		"--layers":            "use --cache instead",
 		// Security-sensitive flags managed implicitly by Kimia via BUILDAH_ISOLATION=chroot
 		"--isolation":         "isolation is managed by Kimia (chroot)",
@@ -1022,6 +1041,20 @@ func executeBuildKit(config Config, ctx *Context) error {
 			args = append(args, "--export-cache", ec)
 			logger.Debug("Added export-cache: %s", ec)
 		}
+	}
+
+	// ========================================
+	// BUILD-TIME SECRETS
+	// ========================================
+	// Passed to buildctl as --secret, consumed by RUN --mount=type=secret,id=...
+	// BuildKit streams the value over the build session, so it never lands in an
+	// image layer, in build history, or in an exported cache.
+	for _, sec := range config.Secrets {
+		if err := validation.ValidateBuildSecretSpec(sec); err != nil {
+			return fmt.Errorf("invalid --secret value %q: %v", sec, err)
+		}
+		args = append(args, "--secret", sec)
+		logger.Debug("Added build secret: %s", sec)
 	}
 
 	// ========================================

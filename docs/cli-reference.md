@@ -9,6 +9,8 @@ Complete command-line reference for Kimia container image builder.
 - [Registry Authentication](#registry-authentication)
 - [Registry Options](#registry-options)
 - [Output Options](#output-options)
+- [Build Cache](#build-cache)
+- [Build-Time Secrets](#build-time-secrets)
 - [Attestation & Signing](#attestation--signing)
 - [Git Options](#git-options)
 - [Reproducible Builds](#reproducible-builds)
@@ -55,6 +57,9 @@ kimia --context=. \
 | `--build-arg` | Build-time variables (repeatable) | - | `--build-arg VERSION=1.0` |
 | `--cache` | Enable layer caching | `false` | `--cache` |
 | `--cache-dir` | Custom cache directory | - | `--cache-dir=/cache` |
+| `--export-cache` | Export build cache (BuildKit, repeatable) | - | `--export-cache type=inline` |
+| `--import-cache` | Import build cache (BuildKit, repeatable) | - | `--import-cache type=registry,ref=...` |
+| `--secret` | Mount a build-time secret (repeatable) | - | `--secret id=npmrc,src=/run/secrets/npmrc` |
 | `--storage-driver` | Storage backend (native\|overlay) | `native` | `--storage-driver=overlay` |
 | `--label` | Image labels (repeatable) | - | `--label version=1.0` |
 
@@ -331,6 +336,95 @@ kimia --context=. \
   --destination=myregistry.io/myapp:latest \
   --image-name-with-digest-file=/workspace/image-ref.txt
 ```
+
+---
+
+## Build Cache
+
+`--import-cache` and `--export-cache` are BuildKit-only and repeatable. Both take a
+comma-separated spec beginning with `type=`.
+
+| Backend | Spec | Notes |
+|---------|------|-------|
+| `registry` | `type=registry,ref=registry.io/cache:latest,mode=max` | Recommended for CI/CD |
+| `inline` | `type=inline` | Export only; embeds cache in the pushed image |
+| `local` | `type=local,dest=/mnt/cache` / `type=local,src=/mnt/cache` | Needs a mounted volume |
+| `s3` | `type=s3,region=us-east-1,bucket=my-cache` | Optional `prefix=`, `endpoint_url=` |
+| `azblob` | `type=azblob,account_url=https://x.blob.core.windows.net,name=cache` | |
+| `gha` | `type=gha` | GitHub Actions cache |
+
+`mode=max` exports intermediate layers as well as the final ones. Cache flags are
+silently ignored when `--reproducible` is set.
+
+### Cloud credentials
+
+The `s3`, `azblob` and `gha` backends resolve credentials from the build pod's
+environment using each cloud's standard chain. Kimia passes the pod environment
+through to the BuildKit daemon, so **workload identity works with no explicit
+credentials** — on EKS, annotate the service account for IRSA and pass no keys.
+
+```bash
+# S3 cache, credentials from IRSA
+kimia --context=. \
+  --destination=registry.io/myapp:v1 \
+  --cache \
+  --import-cache type=s3,region=us-east-1,bucket=my-build-cache \
+  --export-cache type=s3,region=us-east-1,bucket=my-build-cache,mode=max
+```
+
+---
+
+## Build-Time Secrets
+
+`--secret` mounts a credential for the duration of a single `RUN` instruction. The
+value is streamed over the build session and never written to an image layer, to
+build history, or to an exported cache — unlike `--build-arg`, which does persist.
+
+> This mounts a secret **into** a build. It is unrelated to `rfscan --secrets`,
+> which scans a **built image** for leaked credentials.
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `id` | Yes | Identifier matched against `--mount=type=secret,id=...` |
+| `src` | One of | Path to a file containing the secret value |
+| `env` | One of | Name of an environment variable containing the value |
+| `type` | No | `file` (default) or `env` |
+
+`--secret` is repeatable and works on both the BuildKit and Buildah backends.
+
+### Examples
+
+```dockerfile
+# Dockerfile — file-backed secret mounted at a path
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci
+
+# Dockerfile — secret exposed as an environment variable
+RUN --mount=type=secret,id=npm_token,env=NPM_TOKEN npm ci
+```
+
+```bash
+# From a file (e.g. a mounted Kubernetes secret)
+kimia --context=. \
+  --destination=registry.io/myapp:v1 \
+  --secret id=npmrc,src=/run/secrets/artifactory/.npmrc
+
+# From an environment variable
+kimia --context=. \
+  --destination=registry.io/myapp:v1 \
+  --secret id=npm_token,env=NPM_TOKEN
+
+# Multiple secrets
+kimia --context=. \
+  --destination=registry.io/myapp:v1 \
+  --secret id=npmrc,src=/run/secrets/.npmrc \
+  --secret id=pip_index,env=PIP_INDEX_URL
+```
+
+### Validation
+
+Specs are validated before any build work begins. Rejected: missing `id`, unknown
+keys, `src` and `env` together, path traversal in `src`, shell metacharacters, and
+lowercase environment variable names.
 
 ---
 

@@ -82,6 +82,7 @@ show_help() {
     echo "                           - Combined: both attestations, pass-through"
     echo "    signing                 Signing tests (1 test, ~3 min, BuildKit only)"
     echo "    caching                 Cache export/import tests (6 tests, ~10 min, BuildKit only)"
+    echo "    secrets                 Build-time secret mount tests (2 tests, ~4 min)"
     echo "                           - Attestation with cosign signing"
     echo ""
     echo -e "${YELLOW}EXAMPLES:${NC}"
@@ -155,7 +156,7 @@ if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
 fi
 
 # Validate test suite
-if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching)$ ]]; then
+if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching|secrets)$ ]]; then
     echo -e "${RED}Error: Invalid test suite '$TEST_SUITE'.${NC}"
     echo -e "${RED}Must be: all, simple, reproducible, attestation, or signing${NC}"
     exit 1
@@ -296,6 +297,75 @@ run_test() {
     fi
 }
 
+# Pulls a built image and asserts the secret value is absent from every layer
+# and from the build history. This is the check that actually matters: --secret
+# is only worth anything if the credential does not survive the build.
+run_secret_leak_check() {
+    local test_name=$1
+    local driver=$2
+    local image=$3
+    local canary=$4
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_test_header "$test_name" "rootless" "$driver"
+
+    local log_file="${SUITES_DIR}/test-${test_name}-rootless-${driver}.log"
+    local start_time=$(date +%s)
+    local tarball="/tmp/kimia-secret-scan-${driver}.tar"
+    echo "Log: $log_file"
+    echo "Checking image for secret material: $image"
+    echo ""
+
+    local failed=0
+    {
+        echo "=== docker pull ${image} ==="
+        docker pull "${image}" || exit 1
+
+        echo "=== build history ==="
+        docker history --no-trunc "${image}"
+        if docker history --no-trunc "${image}" | grep -q "${canary}"; then
+            echo "LEAK: secret value found in build history"
+            failed=1
+        fi
+
+        echo "=== image config / env ==="
+        docker inspect "${image}"
+        if docker inspect "${image}" | grep -q "${canary}"; then
+            echo "LEAK: secret value found in image config"
+            failed=1
+        fi
+
+        echo "=== filesystem layers ==="
+        docker save "${image}" -o "${tarball}"
+        if tar -xOf "${tarball}" 2>/dev/null | grep -aq "${canary}"; then
+            echo "LEAK: secret value found in image layers"
+            failed=1
+        fi
+        rm -f "${tarball}"
+
+        echo "=== build markers (proves the secret was actually readable) ==="
+        docker run --rm --entrypoint sh "${image}" -c \
+            'cat /app/file-secret.txt /app/env-secret.txt /app/no-leak.txt' || exit 1
+
+        exit $failed
+    } > "$log_file" 2>&1
+
+    local rc=$?
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+
+    if [ $rc -eq 0 ]; then
+        echo -e "${GREEN}✓ PASSED${NC} (${duration}s) - no secret material in image"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+    else
+        echo -e "${RED}✗ FAILED${NC} (${duration}s)"
+        echo "Check log: $log_file"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+    fi
+}
+
 print_test_summary() {
     echo ""
     print_section "TEST SUMMARY"
@@ -342,6 +412,11 @@ should_run_signing() {
 
 should_run_caching() {
     [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "caching" ]] && [ "$BUILDER" = "buildkit" ]
+}
+
+# Build-time secrets work on both backends (buildctl --secret / buildah bud --secret)
+should_run_secrets() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "secrets" ]]
 }
 
 run_rootless_tests() {
@@ -826,6 +901,47 @@ run_rootless_tests() {
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
+    fi
+
+    # ========================================================================
+    # BUILD-TIME SECRET TESTS
+    # ========================================================================
+    # Verifies --secret mounts a credential into the build AND that the value
+    # does not survive into the image layers or the build history.
+
+    if should_run_secrets; then
+        local secret_dir="/tmp/kimia-secret-${driver}"
+        local secret_file="${secret_dir}/testsecret"
+        local canary="kimia-secret-canary-${driver}"
+        mkdir -p "${secret_dir}"
+        echo "${canary}" > "${secret_file}"
+        chmod 0400 "${secret_file}"
+        chown 1000:1000 "${secret_dir}" "${secret_file}"
+
+        local secret_image="${REGISTRY}/${BUILDER}-rootless-secret-${driver}:latest"
+        local BASE_CMD_NOVOL_SEC="${BASE_CMD%${KIMIA_IMAGE}}"
+        local BASE_CMD_SECRET="${BASE_CMD_NOVOL_SEC} -v ${secret_dir}:${secret_dir}:ro -e TEST_ENV_SECRET=${canary}-env ${KIMIA_IMAGE}"
+
+        # Test: build consuming both a file-backed and an env-backed secret
+        run_test \
+            "secret-mount" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD_SECRET \
+            --context=https://github.com/rapidfort/kimia.git \
+            --git-branch=main \
+            --dockerfile=tests/examples/Dockerfile.secret \
+            --destination=${secret_image} \
+            --secret "id=testsecret,src=${secret_file}" \
+            --secret "id=testenv,env=TEST_ENV_SECRET" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: the secret value must not appear in layers or build history
+        run_secret_leak_check "secret-no-leak" "$driver" "${secret_image}" "${canary}"
+
+        rm -rf "${secret_dir}"
     fi
 
     # ========================================================================

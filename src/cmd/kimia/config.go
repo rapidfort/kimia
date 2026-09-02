@@ -14,6 +14,10 @@ type Config struct {
 	ExportCache  []string // BuildKit --export-cache options (e.g. "type=registry,ref=...,mode=max")
 	ImportCache  []string // BuildKit --import-cache options (e.g. "type=registry,ref=...")
 
+	// Build-time secrets (e.g. "id=npmrc,src=/run/secrets/npmrc")
+	// Consumed by Dockerfiles via RUN --mount=type=secret,id=...
+	Secrets []string
+
 	// Build arguments
 	BuildArgs map[string]string
 

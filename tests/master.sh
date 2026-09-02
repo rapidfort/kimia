@@ -38,7 +38,7 @@ NC='\033[0m'
 TEST_MODE=""
 CLEANUP_AFTER=false
 STORAGE_DRIVER="both"
-TEST_SUITE="all"  # all, simple, reproducible, attestation, signing
+TEST_SUITE="all"  # all, simple, reproducible, attestation, signing, caching, secrets
 
 # Test counters
 TOTAL_TESTS=0
@@ -62,7 +62,8 @@ usage() {
     echo "    -r, --registry URL          Registry URL (default: ${REGISTRY})"
     echo "    -i, --image IMAGE           Kimia image to test"
     echo "    -b, --builder BUILDER       Builder: buildkit (default), buildah"
-    echo "    -t, --tests SUITE           Test suite: all (default), simple, reproducible, attestation, signing"
+    echo "    -t, --tests SUITE           Test suite: all (default), simple, reproducible, attestation,"
+    echo "                                signing, caching, secrets"
     echo "    -s, --storage DRIVER        Storage driver: vfs, overlay, native, both (default: both)"
     echo "    -c, --cleanup               Clean up resources after tests"
     echo "    --namespace NAMESPACE       Kubernetes namespace (default: ${NAMESPACE})"
@@ -222,13 +223,13 @@ parse_args() {
     fi
 
     # Validate test suite
-    if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing)$ ]]; then
+    if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching|secrets)$ ]]; then
         echo -e "${RED}Error: Invalid test suite. Must be: all, simple, reproducible, attestation, or signing${NC}"
         usage
     fi
 
     # Validate attestation/signing tests require BuildKit
-    if [[ "$TEST_SUITE" =~ ^(attestation|signing)$ ]] && [ "$BUILDER" != "buildkit" ]; then
+    if [[ "$TEST_SUITE" =~ ^(attestation|signing|caching)$ ]] && [ "$BUILDER" != "buildkit" ]; then
         echo -e "${RED}Error: ${TEST_SUITE} tests require BuildKit builder${NC}"
         echo -e "${YELLOW}Please use: --builder buildkit${NC}"
         usage
