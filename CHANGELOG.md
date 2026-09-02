@@ -8,10 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `--secret` for build-time secret mounts (repeatable, BuildKit and Buildah).
+  Consumed by `RUN --mount=type=secret,id=...`; the value is streamed over the
+  build session and never enters an image layer, build history, or an exported
+  cache. Supports `id=`, `src=`, `env=` and `type=`.
+  Note: this mounts a secret *into* a build and is unrelated to `rfscan --secrets`,
+  which scans a built image for leaked credentials.
+- `secrets` test suite (`tests/docker-tests.sh --tests secrets`) covering both
+  file- and env-backed secrets, plus a leak check asserting the value is absent
+  from image layers, config, and build history.
+- Unit tests for cache and secret spec validation.
 
 ### Changed
+- Documented the `s3`, `azblob` and `gha` cache backends in `--help`, the README
+  and the CLI reference. These were already accepted by `--import-cache` /
+  `--export-cache` but only `registry`, `inline` and `local` were documented.
+- Documented that cloud cache backends resolve credentials from the pod
+  environment, so EKS IRSA works without explicit keys.
+- Secret IDs may now contain dots (e.g. `artifactory.npmrc`).
 
 ### Fixed
+- `tests/master.sh` rejected `--tests caching`, making the caching suite in
+  `tests/docker-tests.sh` unreachable through the main orchestrator.
 
 ### Removed
 

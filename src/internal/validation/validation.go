@@ -554,10 +554,129 @@ func ValidateSecretID(secretID string) error {
 		return fmt.Errorf("secret ID contains null byte")
 	}
 
-	// Secret IDs should be simple alphanumeric identifiers
-	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_-]*$`)
+	// Secret IDs should be simple identifiers. Dots are permitted because
+	// BuildKit users commonly namespace IDs (e.g. "artifactory.npmrc").
+	pattern := regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.-]*$`)
 	if !pattern.MatchString(secretID) {
-		return fmt.Errorf("invalid secret ID: %s (must start with letter, contain only alphanumeric/underscore/hyphen)", secretID)
+		return fmt.Errorf("invalid secret ID: %s (must start with letter, contain only alphanumeric/underscore/hyphen/dot)", secretID)
+	}
+
+	return nil
+}
+
+// BuildSecretID returns the id from a --secret spec. The spec must already have
+// passed ValidateBuildSecretSpec; an unrecognised spec yields an empty string.
+// Callers use this to reject the same id being supplied twice, which the
+// builders would otherwise fail on with a much less obvious message.
+func BuildSecretID(spec string) string {
+	for _, pair := range strings.Split(spec, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 1 {
+			// Shorthand: a bare token is the id.
+			return kv[0]
+		}
+		if kv[0] == "id" {
+			return kv[1]
+		}
+	}
+	return ""
+}
+
+// ValidateBuildSecretSpec validates a --secret value for buildctl or buildah bud.
+// The spec mirrors BuildKit/Buildah syntax so existing Dockerfiles using
+// RUN --mount=type=secret,id=... work without modification.
+//
+// Valid examples:
+//   id=npmrc,src=/run/secrets/npmrc
+//   id=npm_token,env=NPM_TOKEN
+//   id=NPM_TOKEN                     (shorthand: reads the env var of the same name)
+//
+// Note: this is a build-time secret *mount*. It is unrelated to `rfscan --secrets`,
+// which scans a built image for leaked credentials.
+func ValidateBuildSecretSpec(spec string) error {
+	if spec == "" {
+		return fmt.Errorf("secret spec cannot be empty")
+	}
+	if len(spec) > 1024 {
+		return fmt.Errorf("secret spec too long: %d characters (max 1024)", len(spec))
+	}
+
+	// Check for null bytes and shell metacharacters
+	if strings.ContainsAny(spec, "\x00;|&`$(){}[]<>\n\r\t") {
+		return fmt.Errorf("secret spec contains invalid characters")
+	}
+
+	validKeys := map[string]bool{
+		"id":   true,
+		"src":  true,
+		"env":  true,
+		"type": true,
+	}
+
+	seen := make(map[string]string)
+	for _, pair := range strings.Split(spec, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+
+		// Shorthand: a bare token is treated as the secret ID (and, for BuildKit,
+		// as the name of the environment variable holding the value).
+		if len(kv) == 1 {
+			if len(seen) > 0 {
+				return fmt.Errorf("secret spec pair %q is not in key=value format", pair)
+			}
+			if err := ValidateSecretID(kv[0]); err != nil {
+				return err
+			}
+			seen["id"] = kv[0]
+			continue
+		}
+
+		key, value := kv[0], kv[1]
+		if !validKeys[key] {
+			return fmt.Errorf("invalid secret spec key: %q (must be one of: id, src, env, type)", key)
+		}
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("duplicate key %q in secret spec", key)
+		}
+		if value == "" {
+			return fmt.Errorf("secret spec key %q has an empty value", key)
+		}
+		seen[key] = value
+	}
+
+	id, hasID := seen["id"]
+	if !hasID {
+		return fmt.Errorf("secret spec must include id=<value> (e.g., id=npmrc,src=/run/secrets/npmrc)")
+	}
+	if err := ValidateSecretID(id); err != nil {
+		return err
+	}
+
+	src, hasSrc := seen["src"]
+	env, hasEnv := seen["env"]
+	if hasSrc && hasEnv {
+		return fmt.Errorf("secret spec cannot set both src= and env= (choose a file or an environment variable)")
+	}
+	if hasSrc {
+		if err := ValidateOutputPath(src); err != nil {
+			return fmt.Errorf("invalid secret src path: %v", err)
+		}
+	}
+	if hasEnv {
+		if err := ValidateBuildArg(env); err != nil {
+			return fmt.Errorf("invalid secret env var name: %v", err)
+		}
+	}
+
+	if secretType, ok := seen["type"]; ok {
+		if secretType != "file" && secretType != "env" {
+			return fmt.Errorf("invalid secret type: %q (must be file or env)", secretType)
+		}
+		if secretType == "env" && hasSrc {
+			return fmt.Errorf("secret type=env cannot be combined with src=")
+		}
+		if secretType == "file" && hasEnv {
+			return fmt.Errorf("secret type=file cannot be combined with env=")
+		}
 	}
 
 	return nil

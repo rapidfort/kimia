@@ -81,8 +81,10 @@ show_help() {
     echo "                           - Docker-style: sbom, provenance, scan options"
     echo "                           - Combined: both attestations, pass-through"
     echo "    signing                 Signing tests (1 test, ~3 min, BuildKit only)"
-    echo "    caching                 Cache export/import tests (6 tests, ~10 min, BuildKit only)"
     echo "                           - Attestation with cosign signing"
+    echo "    caching                 Cache export/import tests (6 tests, ~10 min, BuildKit only)"
+    echo "    secrets                 Build-time secret mount tests (2 tests, ~4 min)"
+    echo "                           - File- and env-backed secrets, plus leak check"
     echo ""
     echo -e "${YELLOW}EXAMPLES:${NC}"
     echo "    # Run all tests"
@@ -155,7 +157,7 @@ if [[ ! "$BUILDER" =~ ^(buildkit|buildah)$ ]]; then
 fi
 
 # Validate test suite
-if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching)$ ]]; then
+if [[ ! "$TEST_SUITE" =~ ^(all|simple|reproducible|attestation|signing|caching|secrets)$ ]]; then
     echo -e "${RED}Error: Invalid test suite '$TEST_SUITE'.${NC}"
     echo -e "${RED}Must be: all, simple, reproducible, attestation, or signing${NC}"
     exit 1
@@ -296,6 +298,116 @@ run_test() {
     fi
 }
 
+# Pulls a built image and asserts the secret value is absent from every layer
+# and from the build history. This is the check that actually matters: --secret
+# is only worth anything if the credential does not survive the build.
+run_secret_leak_check() {
+    local test_name=$1
+    local driver=$2
+    local image=$3
+    local canary=$4
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    print_test_header "$test_name" "rootless" "$driver"
+
+    local log_file="${SUITES_DIR}/test-${test_name}-rootless-${driver}.log"
+    local start_time=$(date +%s)
+    local scan_dir="${RF_KIMIA_TMPDIR}/kimia-secret-scan-${driver}"
+    echo "Log: $log_file"
+    echo "Checking image for secret material: $image"
+    echo ""
+
+    # Runs in a subshell so this check can fail without taking the whole suite
+    # down. The `|| rc=$?` below is required: the script runs under `set -e`,
+    # which would otherwise abort the run before the result is recorded.
+    local rc=0
+    (
+        failed=0
+        rm -rf "${scan_dir}" && mkdir -p "${scan_dir}/unpacked"
+
+        echo "=== docker pull ${image} ==="
+        docker pull "${image}" || exit 2
+
+        echo "=== build history ==="
+        docker history --no-trunc "${image}" > "${scan_dir}/history.txt" 2>&1 || exit 2
+        cat "${scan_dir}/history.txt"
+        if grep -aq -- "${canary}" "${scan_dir}/history.txt"; then
+            echo "LEAK: secret value found in build history"
+            failed=1
+        fi
+
+        echo "=== image config / env ==="
+        docker inspect "${image}" > "${scan_dir}/inspect.json" 2>&1 || exit 2
+        cat "${scan_dir}/inspect.json"
+        if grep -aq -- "${canary}" "${scan_dir}/inspect.json"; then
+            echo "LEAK: secret value found in image config"
+            failed=1
+        fi
+
+        echo "=== filesystem layers ==="
+        docker save "${image}" -o "${scan_dir}/image.tar" || exit 2
+        tar -xf "${scan_dir}/image.tar" -C "${scan_dir}/unpacked" || exit 2
+        # Layer blobs are usually compressed. Grepping the compressed bytes would
+        # quietly miss a leaked value, so every blob is decompressed first.
+        while IFS= read -r -d '' blob; do
+            case "$(head -c4 "$blob" | od -An -tx1 | tr -d ' \n')" in
+                1f8b*)
+                    gzip -dc "$blob" 2>/dev/null
+                    ;;
+                28b52ffd)
+                    if command -v zstd >/dev/null 2>&1; then
+                        zstd -dc "$blob" 2>/dev/null
+                    else
+                        echo "WARN: zstd blob found but zstd is not installed: $blob" >&2
+                    fi
+                    ;;
+                *)
+                    cat "$blob"
+                    ;;
+            esac
+        done < <(find "${scan_dir}/unpacked" -type f -print0) > "${scan_dir}/layers.raw"
+        # Self-test: the scan must be able to see layer content it is known to
+        # contain. Without this, an empty or unreadable export (docker save can
+        # silently omit layer blobs) would make the layer scan pass vacuously.
+        if ! grep -aq -- "file-secret-ok" "${scan_dir}/layers.raw"; then
+            echo "SCAN UNRELIABLE: could not find the expected build marker in the"
+            echo "exported layers, so their contents were never actually scanned."
+            echo "Refusing to report this image as clean."
+            exit 2
+        fi
+
+        if grep -aq -- "${canary}" "${scan_dir}/layers.raw"; then
+            echo "LEAK: secret value found in image layers"
+            failed=1
+        fi
+
+        echo "=== build markers (proves the secret was actually readable) ==="
+        docker run --rm --entrypoint sh "${image}" -c \
+            'cat /app/file-secret.txt /app/env-secret.txt /app/no-leak.txt' || exit 2
+
+        exit $failed
+    ) > "$log_file" 2>&1 || rc=$?
+
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    rm -rf "${scan_dir}"
+
+    if [ $rc -eq 0 ]; then
+        echo -e "${GREEN}✓ PASSED${NC} (${duration}s) - no secret material in image"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+        TEST_RESULTS+=("PASS: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+    else
+        if [ $rc -eq 1 ]; then
+            echo -e "${RED}✗ FAILED${NC} (${duration}s) - secret material found in image"
+        else
+            echo -e "${RED}✗ FAILED${NC} (${duration}s) - could not complete the leak check"
+        fi
+        echo "Check log: $log_file"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+        TEST_RESULTS+=("FAIL: ${test_name} (${BUILDER}, rootless, ${driver}) - ${duration}s")
+    fi
+}
+
 print_test_summary() {
     echo ""
     print_section "TEST SUMMARY"
@@ -342,6 +454,11 @@ should_run_signing() {
 
 should_run_caching() {
     [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "caching" ]] && [ "$BUILDER" = "buildkit" ]
+}
+
+# Build-time secrets work on both backends (buildctl --secret / buildah bud --secret)
+should_run_secrets() {
+    [[ "$TEST_SUITE" == "all" || "$TEST_SUITE" == "secrets" ]]
 }
 
 run_rootless_tests() {
@@ -826,6 +943,53 @@ run_rootless_tests() {
             --storage-driver=${storage_flag} \
             --insecure \
             --verbosity=debug
+    fi
+
+    # ========================================================================
+    # BUILD-TIME SECRET TESTS
+    # ========================================================================
+    # Verifies --secret mounts a credential into the build AND that the value
+    # does not survive into the image layers or the build history.
+
+    if should_run_secrets; then
+        local secret_dir="/tmp/kimia-secret-${driver}"
+        local secret_file="${secret_dir}/testsecret"
+        local canary="kimia-secret-canary-${driver}"
+        # Start clean: the secret file is written 0400, so a leftover from an
+        # earlier run cannot be overwritten in place.
+        rm -rf "${secret_dir}"
+        mkdir -p "${secret_dir}"
+        echo "${canary}" > "${secret_file}"
+        chmod 0400 "${secret_file}"
+        chown 1000:1000 "${secret_dir}" "${secret_file}"
+
+        local secret_image="${REGISTRY}/${BUILDER}-rootless-secret-${driver}:latest"
+        local BASE_CMD_NOVOL_SEC="${BASE_CMD%${KIMIA_IMAGE}}"
+        # The fixture lives in this working tree, so the build uses a local
+        # directory context. A git context would test whatever is on the remote
+        # branch instead of the code under test.
+        local REPO_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
+        local BASE_CMD_SECRET="${BASE_CMD_NOVOL_SEC} -v ${secret_dir}:${secret_dir}:ro -v ${REPO_ROOT}:/workspace:ro -e TEST_ENV_SECRET=${canary}-env ${KIMIA_IMAGE}"
+
+        # Test: build consuming both a file-backed and an env-backed secret
+        run_test \
+            "secret-mount" \
+            "rootless" \
+            "$driver" \
+            $BASE_CMD_SECRET \
+            --context=/workspace \
+            --dockerfile=tests/examples/Dockerfile.secret \
+            --destination=${secret_image} \
+            --secret "id=testsecret,src=${secret_file}" \
+            --secret "id=testenv,env=TEST_ENV_SECRET" \
+            --storage-driver=${storage_flag} \
+            --insecure \
+            --verbosity=debug
+
+        # Test: the secret value must not appear in layers or build history
+        run_secret_leak_check "secret-no-leak" "$driver" "${secret_image}" "${canary}"
+
+        rm -rf "${secret_dir}"
     fi
 
     # ========================================================================

@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/rapidfort/kimia/internal/validation"
 	"github.com/rapidfort/kimia/pkg/logger"
 )
 
@@ -21,6 +22,7 @@ func parseArgs(args []string) *Config {
 		BuildKitOpts:       []string{},            // Direct BuildKit options
 		ExportCache:        []string{},            // BuildKit --export-cache options
 		ImportCache:        []string{},            // BuildKit --import-cache options
+		Secrets:            []string{},            // Build-time secret mounts
 		CosignKeyPath:      "/etc/cosign/cosign.key",
 		CosignPasswordEnv:  "COSIGN_PASSWORD",
 		BuildahOpts:        []string{}, // Direct Buildah bud options
@@ -140,6 +142,33 @@ func parseArgs(args []string) *Config {
 				logger.Fatal("--import-cache requires a value (e.g., type=registry,ref=registry.io/cache:latest)")
 			}
 			config.ImportCache = append(config.ImportCache, importStr)
+
+		case "--secret":
+			// Build-time secret mount (repeatable)
+			// e.g. --secret id=npmrc,src=/run/secrets/npmrc
+			// Consumed by RUN --mount=type=secret,id=npmrc in the Dockerfile.
+			var secretStr string
+			if value != "" {
+				secretStr = value
+			} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				secretStr = args[i]
+			} else {
+				logger.Fatal("--secret requires a value (e.g., id=npmrc,src=/run/secrets/npmrc)")
+			}
+			// Validate at parse time so bad specs fail before any build work starts.
+			if err := validation.ValidateBuildSecretSpec(secretStr); err != nil {
+				logger.Fatal("invalid --secret value %q: %v", secretStr, err)
+			}
+			// Reject a repeated id here: the builders fail on it too, but with an
+			// error that gives no hint the id was supplied twice.
+			secretID := validation.BuildSecretID(secretStr)
+			for _, existing := range config.Secrets {
+				if validation.BuildSecretID(existing) == secretID {
+					logger.Fatal("duplicate --secret id %q (already provided as %q)", secretID, existing)
+				}
+			}
+			config.Secrets = append(config.Secrets, secretStr)
 
 		case "--storage-driver":
 			if value != "" {

@@ -237,6 +237,7 @@ Kimia supports a comprehensive set of command-line arguments. Key options includ
 | `--cache-dir` | Custom cache directory | - |
 | `--export-cache` | Export build cache (BuildKit, repeatable) | `type=registry,ref=...` |
 | `--import-cache` | Import build cache (BuildKit, repeatable) | `type=registry,ref=...` |
+| `--secret` | Mount a build-time secret (repeatable) | `id=npmrc,src=/run/secrets/npmrc` |
 | `--storage-driver` | Storage backend (native\|overlay) | `native` |
 | `--label` | Image labels (repeatable) | - |
 
@@ -451,7 +452,39 @@ kimia --context=. --destination=registry.io/myapp:v1 \
   --cache \
   --import-cache type=local,src=/mnt/cache \
   --export-cache type=local,dest=/mnt/cache,mode=max
+
+# S3 cache
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --cache \
+  --import-cache type=s3,region=us-east-1,bucket=my-build-cache \
+  --export-cache type=s3,region=us-east-1,bucket=my-build-cache,mode=max
 ```
+
+#### S3 credentials
+
+The S3 backend resolves credentials through the standard AWS chain, evaluated
+inside the build pod. Environment variables are inherited by the BuildKit daemon,
+so **IRSA works with no explicit credentials**: give the pod's service account the
+IAM role and pass no keys.
+
+```yaml
+spec:
+  serviceAccountName: kimia-builder   # annotated with eks.amazonaws.com/role-arn
+  containers:
+    - name: kimia
+      image: ghcr.io/rapidfort/kimia:latest
+      args:
+        - --context=.
+        - --destination=registry.io/myapp:v1
+        - --cache
+        - --import-cache
+        - type=s3,region=us-east-1,bucket=my-build-cache
+        - --export-cache
+        - type=s3,region=us-east-1,bucket=my-build-cache,mode=max
+```
+
+Static keys (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`) and `azblob`/`gha`
+backends are resolved the same way, from the pod environment.
 
 ### Kubernetes Example
 
@@ -483,6 +516,87 @@ spec:
 ```
 
 > **Note:** `--export-cache` and `--import-cache` are repeatable and BuildKit-only. Cache flags are automatically ignored when `--reproducible` is set.
+
+---
+
+## Build-Time Secrets
+
+Some builds need a credential — an Artifactory token for `npm install`, a private
+package index password — that must **not** end up in the image. `--secret` mounts
+the value for the duration of a single `RUN`, streamed over the build session, so
+it never lands in a layer, in build history, or in an exported cache.
+
+This is the correct alternative to `--build-arg`, which does bake the value into
+build history and the cache.
+
+> `--secret` mounts a credential **into** a build. It is unrelated to
+> `rfscan --secrets`, which scans a **built image** for leaked credentials.
+> The two pair well: build with `--secret`, then scan to prove nothing leaked.
+
+### Usage
+
+```dockerfile
+# Dockerfile
+FROM node:22-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc npm ci
+```
+
+```bash
+# File-backed secret
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --secret id=npmrc,src=/run/secrets/npmrc
+
+# Environment-backed secret
+kimia --context=. --destination=registry.io/myapp:v1 \
+  --secret id=npm_token,env=NPM_TOKEN
+```
+
+### Spec Format
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `id` | Yes | Secret identifier, matched against `--mount=type=secret,id=...` |
+| `src` | One of | Path to a file holding the secret value |
+| `env` | One of | Name of an environment variable holding the secret value |
+| `type` | No | `file` (default) or `env` |
+
+`--secret` is repeatable and works on both the BuildKit and Buildah backends.
+
+### Kubernetes Example
+
+```yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kimia-build-secret
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: kimia
+          image: ghcr.io/rapidfort/kimia:latest
+          args:
+            - --context=https://github.com/myorg/myapp.git
+            - --destination=registry.io/myapp:v1
+            - --secret
+            - id=npmrc,src=/run/secrets/artifactory/.npmrc
+          volumeMounts:
+            - name: artifactory
+              mountPath: /run/secrets/artifactory
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: true
+            capabilities:
+              drop: [ALL]
+              add: [SETUID, SETGID]
+      volumes:
+        - name: artifactory
+          secret:
+            secretName: artifactory-npmrc
+```
 
 ---
 

@@ -207,6 +207,7 @@ func run(config *Config, builder string) error {
 		CacheDir:                   config.CacheDir,
 		ExportCache:                config.ExportCache,
 		ImportCache:                config.ImportCache,
+		Secrets:                    config.Secrets,
 		StorageDriver:              config.StorageDriver,
 		Insecure:                   config.Insecure,
 		InsecurePull:               config.InsecurePull,
