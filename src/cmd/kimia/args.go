@@ -160,6 +160,14 @@ func parseArgs(args []string) *Config {
 			if err := validation.ValidateBuildSecretSpec(secretStr); err != nil {
 				logger.Fatal("invalid --secret value %q: %v", secretStr, err)
 			}
+			// Reject a repeated id here: the builders fail on it too, but with an
+			// error that gives no hint the id was supplied twice.
+			secretID := validation.BuildSecretID(secretStr)
+			for _, existing := range config.Secrets {
+				if validation.BuildSecretID(existing) == secretID {
+					logger.Fatal("duplicate --secret id %q (already provided as %q)", secretID, existing)
+				}
+			}
 			config.Secrets = append(config.Secrets, secretStr)
 
 		case "--storage-driver":

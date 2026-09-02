@@ -564,6 +564,24 @@ func ValidateSecretID(secretID string) error {
 	return nil
 }
 
+// BuildSecretID returns the id from a --secret spec. The spec must already have
+// passed ValidateBuildSecretSpec; an unrecognised spec yields an empty string.
+// Callers use this to reject the same id being supplied twice, which the
+// builders would otherwise fail on with a much less obvious message.
+func BuildSecretID(spec string) string {
+	for _, pair := range strings.Split(spec, ",") {
+		kv := strings.SplitN(pair, "=", 2)
+		if len(kv) == 1 {
+			// Shorthand: a bare token is the id.
+			return kv[0]
+		}
+		if kv[0] == "id" {
+			return kv[1]
+		}
+	}
+	return ""
+}
+
 // ValidateBuildSecretSpec validates a --secret value for buildctl or buildah bud.
 // The spec mirrors BuildKit/Buildah syntax so existing Dockerfiles using
 // RUN --mount=type=secret,id=... work without modification.

@@ -1,6 +1,9 @@
 package validation
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestValidateBuildSecretSpec(t *testing.T) {
 	tests := []struct {
@@ -28,6 +31,7 @@ func TestValidateBuildSecretSpec(t *testing.T) {
 		{"empty value", "id=npmrc,src=", true},
 		{"id starts with digit", "id=1npmrc,src=/run/secrets/npmrc", true},
 		{"path traversal in src", "id=npmrc,src=/run/secrets/../../etc/shadow", true},
+		{"spec over length limit", "id=npmrc,src=/run/secrets/" + strings.Repeat("a", 1024), true},
 		{"command substitution", "id=npmrc,src=$(whoami)", true},
 		{"shell metacharacter", "id=npmrc,src=/tmp/x;rm -rf /", true},
 		{"null byte", "id=npmrc,src=/tmp/\x00", true},
@@ -73,5 +77,38 @@ func TestValidateBuildKitCacheSpecBackends(t *testing.T) {
 				t.Errorf("ValidateBuildKitCacheSpec(%q) error = %v, wantErr %v", tt.spec, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestBuildSecretID(t *testing.T) {
+	tests := []struct {
+		name string
+		spec string
+		want string
+	}{
+		{"id first", "id=npmrc,src=/run/secrets/npmrc", "npmrc"},
+		{"id last", "src=/run/secrets/npmrc,id=npmrc", "npmrc"},
+		{"env source", "id=npm_token,env=NPM_TOKEN", "npm_token"},
+		{"shorthand", "NPM_TOKEN", "NPM_TOKEN"},
+		{"dotted id", "id=artifactory.npmrc,src=/run/secrets/npmrc", "artifactory.npmrc"},
+		{"no id present", "src=/run/secrets/npmrc", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := BuildSecretID(tt.spec); got != tt.want {
+				t.Errorf("BuildSecretID(%q) = %q, want %q", tt.spec, got, tt.want)
+			}
+		})
+	}
+}
+
+// Two --secret flags sharing an id are rejected by the caller, which compares
+// the ids this function returns. Guard the property that makes that work.
+func TestBuildSecretIDDetectsDuplicates(t *testing.T) {
+	specs := []string{"id=npmrc,src=/run/secrets/npmrc", "id=npmrc,env=NPM_TOKEN"}
+	if BuildSecretID(specs[0]) != BuildSecretID(specs[1]) {
+		t.Errorf("expected both specs to yield the same id, got %q and %q",
+			BuildSecretID(specs[0]), BuildSecretID(specs[1]))
 	}
 }
