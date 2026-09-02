@@ -830,7 +830,7 @@ func executeBuildKit(config Config, ctx *Context) error {
 	daemonCmd.Env = append(os.Environ(),
 		"HOME=/home/kimia",
 		"DOCKER_CONFIG=/home/kimia/.docker",
-		"XDG_RUNTIME_DIR=/tmp/run",
+		"XDG_RUNTIME_DIR="+xdgRuntimeDir,
 	)
 
 	daemonCmd.Stdout = os.Stdout
